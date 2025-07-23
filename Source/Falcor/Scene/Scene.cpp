@@ -2093,6 +2093,7 @@ namespace Falcor
             }
         }
 
+        //REMARK load envmap button
         if (auto envMapGroup = widget.group("EnvMap"))
         {
             if (envMapGroup.button("Load"))

@@ -56,7 +56,8 @@ struct VSIn
 #define INTERPOLATION_MODE linear
 #endif
 
-struct VSOut
+[open]
+ struct VSOut 
 {
     INTERPOLATION_MODE float3 normalW    : NORMAL;      ///< Shading normal in world space (not normalized!).
     INTERPOLATION_MODE float4 tangentW   : TANGENT;     ///< Shading tangent in world space (not normalized!).
