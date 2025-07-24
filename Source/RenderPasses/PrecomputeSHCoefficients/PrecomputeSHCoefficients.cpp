@@ -27,10 +27,12 @@
  **************************************************************************/
 #include "PrecomputeSHCoefficients.h"
 #include "envMap_SH.h"
+#include "Core/Pass/FullScreenPass.h"
 
 namespace
 {
 const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
+const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 } // namespace
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -45,6 +47,7 @@ PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Pr
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
 
     mpLinearSampler = mpDevice->createSampler(samplerDesc);
+   
 }
 
 Properties PrecomputeSHCoefficients::getProperties() const
@@ -84,10 +87,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
     if (mpScene)
     {
-        auto var = mpVars->getRootVar();
-        var["gLinearSampler"] = mpLinearSampler;
-        var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
-        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+        mpEnvMap->bindShaderData(mpFullScreenPass->getRootVar()["gScene"]);
+        mpScene->bindShaderData(mpFullScreenPass->getRootVar()["gScene"]);
+        mpFullScreenPass->execute(pRenderContext, mpFbo);
+        
+        //auto var = mpVars->getRootVar();
+        //var["gLinearSampler"] = mpLinearSampler;
+        //var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
+        //mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
 
@@ -104,9 +111,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             mpEnvMap = mpScene->getEnvMap();
             initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
             decomposeSH(shCoeffs, mpEnvMap);
-            int x = 0;
-        }
 
+             mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines());
+        }
          // program
         ProgramDesc desc;
         desc.addShaderModules(mpScene->getShaderModules());
@@ -133,5 +140,6 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
         mpGraphicsState->setRasterizerState(mpRasterState);
         mpGraphicsState->setFbo(mpFbo);
         mpGraphicsState->setDepthStencilState(pDsState);
+        
     }
 }

@@ -9,6 +9,7 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     envMap_SH.h
 	envMap_SH.cpp
     SHShader.slang
+	EnvMapShader.slang
 )
 
 target_copy_shaders(PrecomputeSHCoefficients RenderPasses/PrecomputeSHCoefficients)

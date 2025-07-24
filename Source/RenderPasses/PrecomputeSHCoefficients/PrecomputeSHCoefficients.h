@@ -27,6 +27,7 @@
  **************************************************************************/
 #pragma once
 #include "Falcor.h"
+#include "Core/Pass/FullScreenPass.h"
 #include "RenderGraph/RenderPass.h"
 #include "RenderGraph/RenderPassHelpers.h"
 
@@ -67,6 +68,7 @@ private:
     /// Output size in pixels when 'Fixed' size is selected.
     uint2 mFixedOutputSize = {512, 512};
 
+    ref<FullScreenPass> mpFullScreenPass;
     ref<EnvMap> mpEnvMap;
     std::vector<float4> shCoeffs;
 };
