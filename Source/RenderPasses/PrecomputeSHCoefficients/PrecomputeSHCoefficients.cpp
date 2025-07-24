@@ -86,7 +86,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
     {
         auto var = mpVars->getRootVar();
         var["gLinearSampler"] = mpLinearSampler;
-        var["PerFrameCB"]["shCoeffs"] = shCoeffs[0];
+        var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
