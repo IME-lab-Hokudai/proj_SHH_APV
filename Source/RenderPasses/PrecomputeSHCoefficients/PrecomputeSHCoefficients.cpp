@@ -80,21 +80,23 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
     auto pDepth = renderData.getTexture("depth");
 
     //  Clear depth buffer.
-    pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+    //pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
     mpFbo->attachDepthStencilTarget(pDepth);
 
     pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::Color);
 
     if (mpScene)
     {
-        mpEnvMap->bindShaderData(mpFullScreenPass->getRootVar()["gScene"]);
-        mpScene->bindShaderData(mpFullScreenPass->getRootVar()["gScene"]);
+        auto var = mpFullScreenPass->getRootVar()["gScene"]["envMap"];
+        mpEnvMap->bindShaderData(var);
         mpFullScreenPass->execute(pRenderContext, mpFbo);
-        
-        //auto var = mpVars->getRootVar();
-        //var["gLinearSampler"] = mpLinearSampler;
-        //var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
-        //mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+
+        pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+
+        var = mpVars->getRootVar();
+        var["gLinearSampler"] = mpLinearSampler;
+        var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
+        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
 
