@@ -87,8 +87,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
     if (mpScene)
     {
-        auto var = mpFullScreenPass->getRootVar()["gScene"]["envMap"];
-        mpEnvMap->bindShaderData(var);
+        auto var = mpFullScreenPass->getRootVar()["gScene"];
+        mpEnvMap->bindShaderData(var["envMap"]);
+        mpScene->getCamera()->bindShaderData(var["camera"]);
         mpFullScreenPass->execute(pRenderContext, mpFbo);
 
         pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
