@@ -48,6 +48,19 @@ float4 evaluateIrradiance(float3 n)
     float y = n.y;
     float z = n.z;
 
+    // SH basis function indexing and formulas:
+    // Index | l (band) | m (order) | SH function          | Formula (Cartesian coords)
+    // -------------------------------------------------------------------------------------
+    // 0     | 0        |  0        | Y_0^0                | 0.282095
+    // 1     | 1        | -1        | Y_1^-1               | 0.488603 * y       // ~ sqrt(3/(4π)) * y/r * sin(φ)
+    // 2     | 1        |  0        | Y_1^0                | 0.488603 * z       // ~ sqrt(3/(4π)) * z/r
+    // 3     | 1        |  1        | Y_1^1                | 0.488603 * x       // ~ sqrt(3/(4π)) * x/r * cos(φ)
+    // 4     | 2        | -2        | Y_2^-2               | 1.092548 * x * y   // ~ sqrt(15/(4π)) * xy/r² * sin(2φ)
+    // 5     | 2        | -1        | Y_2^-1               | 1.092548 * y * z   // ~ sqrt(15/(4π)) * yz/r² * sin(φ)
+    // 6     | 2        |  0        | Y_2^0                | 0.315392 * (-x*x - y*y + 2*z*z) // ~ 0.315392 * (3z² - 1)
+    // 7     | 2        |  1        | Y_2^1                | 1.092548 * x * z   // ~ sqrt(15/(4π)) * xz/r² * cos(φ)
+    // 8     | 2        |  2        | Y_2^2                | 0.546274 * (x*x - y*y)  // ~ 0.546274 * (x² - y²)/r² * cos(2φ)
+
     // Band 0
     float Y0 = 0.282095;
 
@@ -116,7 +129,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
     // diffuse calculation
     float ndotl = max(dot(toLightDir, normalSampleW), 0.0f);
     //float3 diffuseColor = ndotl * baseColorSample.rgb * light.intensity;
-   float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.xyz;
+   float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
 
     // specular calculation
     const float shininess = specularSample.r*256.0f;

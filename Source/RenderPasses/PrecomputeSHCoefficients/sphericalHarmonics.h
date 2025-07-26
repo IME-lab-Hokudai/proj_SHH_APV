@@ -29,7 +29,7 @@ void calcNormalizationCoeff(
 	const int degree
 );
 void sphericalHarmonics(
-	vector<double>& sh,
+	vector<double>& shBasis,
 	const vector<double>& normalizedCoeffs,
 	const int degree,
 	const double ct,
@@ -47,13 +47,13 @@ class SphericalHarmonics {
 protected:
 	int		degree;
 	int		numBasis;
-	vector<double> coeff;
+	vector<double> normalizedCoeffs;
 public:
 
 	SphericalHarmonics(int _degree = 8) {
 		degree = _degree;
 		numBasis = (_degree+1)*(_degree+1);
-		calcNormalizationCoeff(coeff, degree);
+		calcNormalizationCoeff(normalizedCoeffs, degree);
 	}
 	~SphericalHarmonics() {}
 
@@ -72,6 +72,6 @@ public:
 	) {
             if (out.size() != numBasis)
                 out.resize(numBasis);
-            sphericalHarmonics(out, coeff, degree, ct, phi);
+            sphericalHarmonics(out, normalizedCoeffs, degree, ct, phi);
 	}
 };

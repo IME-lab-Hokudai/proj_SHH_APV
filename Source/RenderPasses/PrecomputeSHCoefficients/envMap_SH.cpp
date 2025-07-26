@@ -91,6 +91,13 @@ void calcDeltaFormFactorEquirect(int width, int height)
             dOmega[y * width + x] = (float)sinTheta * dTheta * dPhi;
         }
     }
+
+    //double sum = 0.0;
+    //for (int y = 0; y < height; ++y)
+    //    for (int x = 0; x < width; ++x)
+    //        sum += dOmega[y * width + x];
+
+    //std::cout << "Total Omega = " << sum << std::endl; // Should be ≈ 4π
 }
 
 //this function precalculate value of all SH basis in all direction and store in SHTableLookup 
@@ -124,17 +131,19 @@ void initSHTable(int sh_order, int width, int height)
             //storing all Ylm for this direction (i.e 9 Y if l = 2)
             for (int i = 0; i < num_basis; ++i)
             {
-                envSHTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, num_basis , width)] = y[i];
+                envSHTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, width , height)] = y[i];
             }
         }
     }
+    //float Y00 = envSHTable[THREE_D_TO_ONE_D(0, width / 2, height / 2, width, height)];
+    //std::cout << "Y00 = " << Y00 << std::endl;
 }
 
 void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
 {
     if (shOrder == -1)
     {
-        fprintf(stderr, "call initSHTable before decompositionSHEnvMap!\n");
+        logError( "call initSHTable before decompositionSHEnvMap!");
         return;
     }
 
@@ -146,8 +155,8 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
 
     //read texture data into an array
     float4* data = new float4[width*height];
-    envMapTex->getSubresourceBlob(0, &data[0][0], sizeof(float4) * width * height);
-
+    envMapTex->getSubresourceBlob(0, &data[0], sizeof(float4) * width * height);
+    
     for (int l = 0; l < num_basis; ++l)
     {
         double r = 0.0;
@@ -160,10 +169,11 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
             for (int x = 0; x < width; ++x)
             {
                 //read value from env map
-                float4 envMapValue = data[y * width + x];
+                //float4 envMapValue = data[y * width + x]; //REMARK this is for row major
+                float4 envMapValue = data[x * height + y]; //REMARK I think Hdr env map is column major
 
                 // Lookup SH basis value at (l, x, y)
-                float yd = envSHTable[THREE_D_TO_ONE_D(l, x, y, num_basis, width)]; 
+                float yd = envSHTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
 
                //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
                 float delta = dOmega[y * width + x]; 

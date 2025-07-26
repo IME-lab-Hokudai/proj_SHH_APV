@@ -20,7 +20,8 @@
 
 #define IX3(i, j, k, nx, ny) ((k) * (nx) * (ny) + (j) * (nx) + (i))
 
-#define THREE_D_TO_ONE_D(x, y, z, xMax, yMax)(((z * xMax * yMax) + (y * xMax) + x))
+//#define THREE_D_TO_ONE_D(x, y, z, xMax, yMax)(((z * xMax * yMax) + (y * xMax) + x))
+#define THREE_D_TO_ONE_D(b, x, y, width, height) ((b) * (width) * (height) + (y) * (width) + (x))
 
 //radius theta phi in polar coord to x,y,z in cartesian coord
 #define RTP2XYZ(r, t, p, x, y, z) \

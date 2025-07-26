@@ -90,7 +90,7 @@ void calcNormalizationCoeff(
 //N is normalization factor
 //P is alegendre
 void sphericalHarmonics(
-	vector<double>& sh,
+	vector<double>& shBasis,
 	const vector<double>& normalizedCoeffs,
 	const int degree,
 	const double ct,
@@ -98,15 +98,15 @@ void sphericalHarmonics(
 )
 {
 	vector<double> alegendreCoeffs;
-    alegendre(alegendreCoeffs, ct, degree, degree); // calculate P | since m = [-l;l] we pass degree to both param
-	for (int i = 0; i <= degree; i++) {
-		int ii = i*(i+1);
-		for(int j=-i; j<=i; j++) {
-			int jj = abs(j);
-			if(j >= 0) {
-                            sh[ii + j] = normalizedCoeffs[ii + j] * alegendreCoeffs[ii + jj] * cos(jj * phi); // coeff is N | tmp is P 
+        alegendre(alegendreCoeffs, ct, degree, degree); // calculate P | since m = [-l;l] we pass degree to both param
+	for (int L = 0; L <= degree; L++) {
+		int ii = L*(L+1);
+		for(int M=-L; M<=L; M++) {
+			int absM = abs(M);
+			if(M >= 0) {
+                            shBasis[ii + M] = normalizedCoeffs[ii + M] * alegendreCoeffs[ii + absM] * cos(absM * phi); // coeff is N | tmp is P 
 			} else {
-                            sh[ii + j] = normalizedCoeffs[ii + j] * alegendreCoeffs[ii + jj] * sin(jj * phi);
+                            shBasis[ii + M] = normalizedCoeffs[ii + M] * alegendreCoeffs[ii + absM] * sin(absM * phi);
 			}
 		}
 	}
