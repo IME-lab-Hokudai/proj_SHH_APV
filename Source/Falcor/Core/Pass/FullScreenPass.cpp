@@ -110,11 +110,17 @@ ref<FullScreenPass> FullScreenPass::create(
     ref<Device> pDevice,
     const std::filesystem::path& path,
     const DefineList& defines,
-    uint32_t viewportMask
+    uint32_t viewportMask,
+    const std::string vsEntry
 )
 {
     ProgramDesc desc;
     desc.addShaderLibrary(path).psEntry("main");
+
+    if (!vsEntry.empty())
+    {
+        desc.vsEntry(vsEntry);
+    }
     return create(pDevice, desc, defines, viewportMask);
 }
 

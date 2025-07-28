@@ -47,13 +47,15 @@ public:
      * @param[in] path Pixel shader file path. This method expects a pixel shader named "main()" in the file.
      * @param[in] defines Optional list of macro definitions to set into the program.
      * @param[in] viewportMask Optional value to initialize viewport mask with. Useful for multi-projection passes.
+     * @param vsEntry Custom vs shader, assume vs and ps is defined in the same file
      * @return A new object, or throws an exception if creation failed.
      */
     static ref<FullScreenPass> create(
         ref<Device> pDevice,
         const std::filesystem::path& path,
         const DefineList& defines = DefineList(),
-        uint32_t viewportMask = 0
+        uint32_t viewportMask = 0,
+        const std::string vsEntry = ""
     );
 
     /**

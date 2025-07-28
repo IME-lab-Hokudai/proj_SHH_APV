@@ -9,7 +9,7 @@ cbuffer PerFrameCB
 
 struct MyVSOut : VSOut
 {
-    linear float4 irradiance : IRRADIANCE; // Choose any free TEXCOORD semantic
+    linear float4 irradiance : IRRADIANCE; 
 };
 
 MyVSOut vsMain(VSIn vIn)
@@ -116,29 +116,29 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
         normalSampleW = normalSample;
   }
 
-    LightData light = gScene.getLight(0);
+   // LightData light = gScene.getLight(0);
 
     // The light vector aims opposite the direction the light rays travel.
-    float3 lightPos = mul(light.transMat, float4(0, 0, 0, 1.f)).xyz;
+    //float3 lightPos = mul(light.transMat, float4(0, 0, 0, 1.f)).xyz;
     // float3 toLightDir = normalize(lightPos - vsOut.posW); //this is for area light source
-    float3 toLightDir = -light.dirW; //directional light source
+   // float3 toLightDir = -light.dirW; //directional light source
 
     // ambient
-    float3 ambientColor = float3(0.01f, 0.01f, 0.01f) * light.intensity;
+   // float3 ambientColor = float3(0.01f, 0.01f, 0.01f) * light.intensity;
 
     // diffuse calculation
-    float ndotl = max(dot(toLightDir, normalSampleW), 0.0f);
+    //float ndotl = max(dot(toLightDir, normalSampleW), 0.0f);
     //float3 diffuseColor = ndotl * baseColorSample.rgb * light.intensity;
    float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
 
     // specular calculation
-    const float shininess = specularSample.r*256.0f;
-    float3 halfVec = normalize(viewDir + toLightDir);
-    float ndoth = max(dot(halfVec, normalSampleW), 0.0f);
-    float3 specular = pow(ndoth, shininess) * specularSample.rgb * light.intensity;
+    //const float shininess = specularSample.r*256.0f;
+    //float3 halfVec = normalize(viewDir + toLightDir);
+    //float ndoth = max(dot(halfVec, normalSampleW), 0.0f);
+    //float3 specular = pow(ndoth, shininess) * specularSample.rgb * light.intensity;
     // Our spec formula goes outside [0,1] range, but we are
     // doing LDR rendering.  So scale it down a bit.
-    specular = specular / (specular + 1.0f);
+    //specular = specular / (specular + 1.0f);
 
     // float3 litColor = (diffuseColor + specColor) * light.intensity  + emissiveSample.rgb;
     // float3 litColor =  diffuseColor   + emissiveSample.rgb;

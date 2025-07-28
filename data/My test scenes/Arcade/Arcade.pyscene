@@ -34,8 +34,8 @@ m = sceneBuilder.getMaterial('Cabinet')
 m.emissiveFactor = 150.0
 
 # Add environment map
-#envMap = EnvMap('20050806-03_hd.hdr')
-envMap = EnvMap('grace_probe_latlong.hdr')
+envMap = EnvMap('20050806-03_hd.hdr')
+#envMap = EnvMap('grace_probe_latlong.hdr')
 envMap.intensity = 1.0
 sceneBuilder.envMap = envMap
 

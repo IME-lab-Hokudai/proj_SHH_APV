@@ -33,6 +33,8 @@ namespace
 {
 const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
+const char kShowReconstructedEnvMap[] = "Show environment map";
+
 } // namespace
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -42,6 +44,13 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 
 PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
+
+    for (const auto& [key, value] : props)
+    {
+        if (key == kShowReconstructedEnvMap)
+            mbShowReconstructedEnvMap = value;
+    }
+
     mpFbo = Fbo::create(mpDevice);
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
@@ -52,7 +61,9 @@ PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Pr
 
 Properties PrecomputeSHCoefficients::getProperties() const
 {
-    return {};
+    Properties props;
+    props[kShowReconstructedEnvMap] = mbShowReconstructedEnvMap;
+    return props;
 }
 
 RenderPassReflection PrecomputeSHCoefficients::reflect(const CompileData& compileData)
@@ -87,21 +98,28 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
     if (mpScene)
     {
-        auto var = mpFullScreenPass->getRootVar()["gScene"];
-        mpEnvMap->bindShaderData(var["envMap"]);
-        mpScene->getCamera()->bindShaderData(var["camera"]);
+        auto envMapShaderRootVar = mpFullScreenPass->getRootVar();
+
+        mpEnvMap->bindShaderData(envMapShaderRootVar["gScene"]["envMap"]);
+        mpScene->getCamera()->bindShaderData(envMapShaderRootVar["gScene"]["camera"]);
+        envMapShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
+        envMapShaderRootVar["PerFrameCB"]["showReconstructedEnvMap"] = mbShowReconstructedEnvMap;
         mpFullScreenPass->execute(pRenderContext, mpFbo);
 
         pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
-        var = mpVars->getRootVar();
-        var["gLinearSampler"] = mpLinearSampler;
-        var["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); //bind sh coeffs to cbuffer
+        auto shShaderRootVar = mpVars->getRootVar();
+        shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+        shShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
 
-void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget) {}
+void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
+{
+    if (widget.checkbox("Show Reconstructed Env Map", mbShowReconstructedEnvMap))
+        requestRecompile();
+}
 
 void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
@@ -115,7 +133,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
             decomposeSH(shCoeffs, mpEnvMap);
 
-             mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines());
+            mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
         }
          // program
         ProgramDesc desc;
@@ -143,6 +161,5 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
         mpGraphicsState->setRasterizerState(mpRasterState);
         mpGraphicsState->setFbo(mpFbo);
         mpGraphicsState->setDepthStencilState(pDsState);
-        
     }
 }

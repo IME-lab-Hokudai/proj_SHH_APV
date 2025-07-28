@@ -71,4 +71,5 @@ private:
     ref<FullScreenPass> mpFullScreenPass;
     ref<EnvMap> mpEnvMap;
     std::vector<float4> shCoeffs;
+    bool mbShowReconstructedEnvMap = false;
 };
