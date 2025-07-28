@@ -1,10 +1,11 @@
-#include "cubeMap_SH.h"
 #include "sphericalHarmonics.h"
 #include "CommonDefines.h"
 #include "envMap_SH.h"
+
 float*  dOmega;
 float*  envSHTable;
 int shOrder = -1;
+
 //-----------------------------------------------------------------------
 //void sphericalHarmonics16( const float x, const float y, const float z, float sh[ 16 ] )
 //{
@@ -88,7 +89,7 @@ void calcDeltaFormFactorEquirect(int width, int height)
 
         for (int x = 0; x < width; ++x)
         {
-            dOmega[y * width + x] = (float)sinTheta * dTheta * dPhi;
+            dOmega[TWO_D_TO_ONE_D(x,y,width)] = (float)sinTheta * dTheta * dPhi;
         }
     }
 
@@ -156,7 +157,9 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
     //read texture data into an array
     float4* data = new float4[width*height];
     envMapTex->getSubresourceBlob(0, &data[0], sizeof(float4) * width * height);
-    
+
+   // float4* tranposedData = TranposeData(data, width, height);
+
     for (int l = 0; l < num_basis; ++l)
     {
         double r = 0.0;
@@ -169,14 +172,13 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
             for (int x = 0; x < width; ++x)
             {
                 //read value from env map
-                //float4 envMapValue = data[y * width + x]; //REMARK this is for row major
-                float4 envMapValue = data[x * height + y]; //REMARK I think Hdr env map is column major
+                float4 envMapValue = data[TWO_D_TO_ONE_D(x,y,width)]; 
 
                 // Lookup SH basis value at (l, x, y)
                 float yd = envSHTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
 
                //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
-                float delta = dOmega[y * width + x]; 
+                float delta = dOmega[TWO_D_TO_ONE_D(x, y, width)]; 
 
                 double weight = (double)yd * (double)delta;
 
@@ -189,32 +191,55 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
         float4 tmp(r, g, b, a);
         out[l] = tmp;
     }
+    delete [] data;
 }
 
-//-----------------------------------------------------------------------
-//void reconstructSH(vector<Tcolor4<float>>& sh_coeff, TcubeMapTexturef& cubemap) {
-//	if(shOrder == -1) {
-//		fprintf(stderr, "call initSHTable before reconstructionSH!\n");
-//		return;
-//	}
-//
-//	int num_basis = (shOrder+1)*(shOrder+1);
-//	int size = cubemap.getSize();
-//
-//	for(int s = 0; s<6; s++) {
-//		cubemap.getFaceTex(s).clear();
-//		for(int j=0; j<size; j++) {
-//			for(int i=0; i<size; i++) {
-//				Tcolor4<float> c(0., 0., 0., 0.);
-//				for(int l=0; l<num_basis; l++) {
-//					c += sh_coeff[l] * cubeSHTable[s][IX3(l, i, j, num_basis, size)];
-//				}
-//				cubemap.getFaceTex(s).set(i, j, c);
-//
-//			}
-//		}
-//	}
-//}
-//-----------------------------------------------------------------------
+void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice)
+{
+    int num_basis = (shOrder + 1) * (shOrder + 1);
+    const Falcor::ref<Texture> envMapTex = envMap->getEnvMap();
+    int width = envMapTex->getWidth();
+    int height = envMapTex->getHeight();
+
+   float3* reconstructedData = new float3[width * height];
+
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            float4 tmp = float4 (0,0,0,0);
+            for (int i = 0; i < num_basis; ++i)
+            {
+                tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
+            }
+            float3 color = float3(tmp[0], tmp[1], tmp[2]);
+            reconstructedData[TWO_D_TO_ONE_D(x, y, width)] = color;
+        }
+    }
+
+    Falcor::ref<Texture> outTex =
+        pDevice->createTexture2D(width, height, ResourceFormat::RGB32Float, 1, 1, reconstructedData, ResourceBindFlags::ShaderResource);
+
+    outTex->captureToFile(0, 0, "reconstructed.pfm", Bitmap::FileFormat::PfmFile, Bitmap::ExportFlags::None, false);
+    delete[] reconstructedData;
+}
+
+float4* TranposeData(float4* data, int width, int height)
+{
+    // tranpose data because input hdr file is column major
+    float4* tranposedData = new float4[width * height];
+
+    for (int y = 0; y < height; ++y)
+    {
+        for (int x = 0; x < width; ++x)
+        {
+            int srcIdx = (x * height + y); // column-major
+            int dstIdx = (y * width + x);  // row-major
+
+            tranposedData[dstIdx + 0] = data[srcIdx + 0];
+        }
+    }
+    return tranposedData;
+}
 
 

@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include "PrecomputeSHCoefficients.h"
+
 #include "envMap_SH.h"
 #include "Core/Pass/FullScreenPass.h"
 
@@ -132,6 +133,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             mpEnvMap = mpScene->getEnvMap();
             initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
             decomposeSH(shCoeffs, mpEnvMap);
+            reconstructSH(shCoeffs, mpEnvMap, mpDevice);
 
             mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
         }
