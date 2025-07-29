@@ -5,7 +5,11 @@
 float*  dOmega;
 float*  envSHTable;
 int shOrder = -1;
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 
+#include "stb_image.h"
+#include "stb_image_write.h"
 //-----------------------------------------------------------------------
 //void sphericalHarmonics16( const float x, const float y, const float z, float sh[ 16 ] )
 //{
@@ -201,7 +205,23 @@ void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& env
     int width = envMapTex->getWidth();
     int height = envMapTex->getHeight();
 
-   float3* reconstructedData = new float3[width * height];
+  // float3* reconstructedData = new float3[width * height];
+
+    //for (int y = 0; y < height; ++y)
+    //{
+    //    for (int x = 0; x < width; ++x)
+    //    {
+    //        float4 tmp = float4 (0,0,0,0);
+    //        for (int i = 0; i < num_basis; ++i)
+    //        {
+    //            tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
+    //        }
+    //        float3 color = float3(tmp[0], tmp[1], tmp[2]);
+    //        reconstructedData[TWO_D_TO_ONE_D(x, y, width)] = color;
+    //    }
+    //}
+
+   float* reconstructedData = new float[width * height*3];
 
     for (int y = 0; y < height; ++y)
     {
@@ -213,14 +233,25 @@ void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& env
                 tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
             }
             float3 color = float3(tmp[0], tmp[1], tmp[2]);
-            reconstructedData[TWO_D_TO_ONE_D(x, y, width)] = color;
+            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 0] = color[0];
+            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 1] = color[1];
+            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 2] = color[2];
         }
     }
 
-    Falcor::ref<Texture> outTex =
-        pDevice->createTexture2D(width, height, ResourceFormat::RGB32Float, 1, 1, reconstructedData, ResourceBindFlags::ShaderResource);
+    //Falcor::ref<Texture> outTex =
+    //    pDevice->createTexture2D(width, height, ResourceFormat::RGB32Float, 1, 1, reconstructedData, ResourceBindFlags::ShaderResource);
 
-    outTex->captureToFile(0, 0, "reconstructed.pfm", Bitmap::FileFormat::PfmFile, Bitmap::ExportFlags::None, false);
+    //outTex->captureToFile(0, 0, "reconstructed.pfm", Bitmap::FileFormat::PfmFile, Bitmap::ExportFlags::None, false);
+    //cout << "First 3" << endl;
+    //for (int i = 0; i < 9 ; i+=3)
+    //{
+    //    cout << reconstructedData[i] << " " << reconstructedData[i + 1] << " " << reconstructedData[i + 2] << endl;
+    //}
+    //cout << "end first 3" << endl;
+
+    stbi_write_hdr("reconstructed_env.hdr", width, height, 3, reconstructedData);
+
     delete[] reconstructedData;
 }
 
