@@ -130,11 +130,18 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     {
         if (mpScene->getEnvMap() != nullptr)
         {
-            mpEnvMap = mpScene->getEnvMap();
+           /* mpEnvMap = mpScene->getEnvMap();
             initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
             decomposeSH(shCoeffs, mpEnvMap);
             reconstructSH(shCoeffs, mpEnvMap, mpDevice);
 
+            mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
+            mProbeGrid.resolution = int3(3, 3, 3);
+            mProbeGrid.spacing = float3(0.5f, 0.5f, 0.5f);
+
+            createProbeGrid(mProbeGrid, shCoeffs);
+            saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");*/
+            loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
             mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
         }
          // program

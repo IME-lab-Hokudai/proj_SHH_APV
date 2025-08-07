@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #pragma once
+#include "envMap_SH.h"
 #include "Falcor.h"
 #include "Core/Pass/FullScreenPass.h"
 #include "RenderGraph/RenderPass.h"
@@ -72,4 +73,5 @@ private:
     ref<EnvMap> mpEnvMap;
     std::vector<float4> shCoeffs;
     bool mbShowReconstructedEnvMap = false;
+    ProbeGrid mProbeGrid;
 };

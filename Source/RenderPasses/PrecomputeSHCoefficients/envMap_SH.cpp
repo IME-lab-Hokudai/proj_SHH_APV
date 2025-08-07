@@ -2,6 +2,8 @@
 #include "CommonDefines.h"
 #include "envMap_SH.h"
 
+#include <fstream>
+
 float*  dOmega;
 float*  envSHTable;
 int shOrder = -1;
@@ -106,7 +108,7 @@ void calcDeltaFormFactorEquirect(int width, int height)
 }
 
 //this function precalculate value of all SH basis in all direction and store in SHTableLookup 
-//then when we precompute coefficients we look up from SHTableLookup to calculate Coeff = env_map dot Y
+//then when we precompute coefficients we look up from SHTableLookup to calculate Coeff = dOmega * env_map * Y
 void initSHTable(int sh_order, int width, int height)
 {
     calcDeltaFormFactorEquirect(width, height);
@@ -272,5 +274,127 @@ float4* TranposeData(float4* data, int width, int height)
     }
     return tranposedData;
 }
+
+void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
+{
+    const int3 res = grid.resolution;
+    const float3 origin = grid.origin;
+    const float3 spacing = grid.spacing;
+
+    grid.probes.resize(res.x * res.y * res.z);
+
+    int width = res.x;
+    int height = res.y;
+    int depth = res.z;
+
+    int num_basis = (shOrder + 1) * (shOrder + 1);
+
+    for (int probeZ = 0; probeZ < depth; ++probeZ)
+    {
+        for (int probeY = 0; probeY < height; ++probeY)
+        {
+            for (int probeX = 0; probeX < width; ++probeX)
+            {
+                int index = probeX + probeY * width + probeZ * width * height;
+
+                //float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
+
+                grid.probes[index].shCoeffs = sh_coeff;
+            }
+        }
+    }
+}
+
+void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path)
+{
+    std::ofstream file(path, std::ios::binary);
+    if (!file)
+        return;
+
+    // Set high precision for floating point values
+    file << std::fixed << std::setprecision(6);
+    int numBasis = static_cast<int>(grid.probes[0].shCoeffs.size());
+    file << "# Probe Grid Info\n";
+    file << "Resolution: " << grid.resolution.x << " " << grid.resolution.y << " " << grid.resolution.z << "\n";
+    file << "Origin: " << grid.origin.x << " " << grid.origin.y << " " << grid.origin.z << "\n";
+    file << "Spacing: " << grid.spacing.x << " " << grid.spacing.y << " " << grid.spacing.z << "\n";
+    file << "NumBasis: " << numBasis << "\n";
+
+    file << "# Probes (SH Coefficients per Probe)\n";
+    int probeCount = 0;
+    for (const auto& probe : grid.probes)
+    {
+        file << "Probe " << probeCount++ << ":\n";
+        for (const auto& coeff : probe.shCoeffs)
+        {
+            file << "  " << coeff.x << " " << coeff.y << " " << coeff.z << " " << coeff.w << "\n";
+        }
+        file << "\n";
+    }
+
+    file.close();
+}
+
+bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file)
+        return false;
+
+    std::string line;
+    int numBasis = 0;
+
+    std::getline(file, line); // Skip "# Probe Grid Info"
+
+    // Resolution
+    std::getline(file, line);
+    std::istringstream resStream(line.substr(line.find(":") + 1));
+    resStream >> grid.resolution.x >> grid.resolution.y >> grid.resolution.z;
+
+    // Origin
+    std::getline(file, line);
+    std::istringstream orgStream(line.substr(line.find(":") + 1));
+    orgStream >> grid.origin.x >> grid.origin.y >> grid.origin.z;
+
+    // Spacing
+    std::getline(file, line);
+    std::istringstream spcStream(line.substr(line.find(":") + 1));
+    spcStream >> grid.spacing.x >> grid.spacing.y >> grid.spacing.z;
+
+    // NumBasis
+    std::getline(file, line);
+    std::istringstream basisStream(line.substr(line.find(":") + 1));
+    basisStream >> numBasis;
+
+    // Skip "# Probes (SH Coefficients per Probe)"
+    std::getline(file, line);
+
+    grid.probes.clear();
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+    grid.probes.resize(numProbes);
+
+    for (int probeIndex = 0; probeIndex < numProbes; ++probeIndex)
+    {
+        std::getline(file, line); // "Probe X"
+
+        SHProbe probe;
+        probe.shCoeffs.clear();
+        for (int i = 0; i < numBasis; ++i)
+        {
+            if (!std::getline(file, line))
+                return false;
+            std::istringstream coeffStream(line);
+            float4 coeff;
+            coeffStream >> coeff.x >> coeff.y >> coeff.z >> coeff.w;
+            probe.shCoeffs.push_back(coeff);
+        }
+
+        grid.probes[probeIndex] = probe;
+        std::getline(file, line); // empty line
+    }
+
+    return grid.probes.size() == numProbes;
+}
+
 
 
