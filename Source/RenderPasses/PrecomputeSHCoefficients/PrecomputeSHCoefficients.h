@@ -74,4 +74,5 @@ private:
     std::vector<float4> shCoeffs;
     bool mbShowReconstructedEnvMap = false;
     ProbeGrid mProbeGrid;
+    ref<Buffer> mpGridSHBuffer;
 };

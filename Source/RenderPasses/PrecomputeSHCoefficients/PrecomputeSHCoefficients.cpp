@@ -32,7 +32,8 @@
 
 namespace
 {
-const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
+//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
+const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
 
@@ -111,7 +112,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
         auto shShaderRootVar = mpVars->getRootVar();
         shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-        shShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
+        //shShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
+        shShaderRootVar["gSHCoeffs"] = mpGridSHBuffer;
+        shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
+        shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
+        shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
+        shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
+
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
     }
 }
@@ -130,18 +137,32 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     {
         if (mpScene->getEnvMap() != nullptr)
         {
-           /* mpEnvMap = mpScene->getEnvMap();
-            initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
-            decomposeSH(shCoeffs, mpEnvMap);
-            reconstructSH(shCoeffs, mpEnvMap, mpDevice);
+            mpEnvMap = mpScene->getEnvMap();
+            //initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
+            //decomposeSH(shCoeffs, mpEnvMap);
+            //reconstructSH(shCoeffs, mpEnvMap, mpDevice);
 
-            mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
-            mProbeGrid.resolution = int3(3, 3, 3);
-            mProbeGrid.spacing = float3(0.5f, 0.5f, 0.5f);
+            //mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
+            //mProbeGrid.resolution = int3(3, 3, 3);
+            //mProbeGrid.spacing = float3(0.5f, 0.5f, 0.5f);
 
-            createProbeGrid(mProbeGrid, shCoeffs);
-            saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");*/
+            //createProbeGrid(mProbeGrid, shCoeffs);
+            //saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");
             loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+
+            shCoeffs.clear();
+            shCoeffs.insert(shCoeffs.end(), mProbeGrid.probes.begin(), mProbeGrid.probes.begin() + mProbeGrid.numBasis); //just one env set for envmap render
+
+           int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+            mpGridSHBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4),
+                mProbeGrid.numBasis * numProbes,
+                ResourceBindFlags::ShaderResource,
+                MemoryType::DeviceLocal,
+               mProbeGrid.probes.data()
+            );
+           mpGridSHBuffer->setName("SH Grid Info");
+
             mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
         }
          // program

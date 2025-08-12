@@ -280,27 +280,36 @@ void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
     const int3 res = grid.resolution;
     const float3 origin = grid.origin;
     const float3 spacing = grid.spacing;
-
-    grid.probes.resize(res.x * res.y * res.z);
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+  
 
     int width = res.x;
     int height = res.y;
     int depth = res.z;
 
     int num_basis = (shOrder + 1) * (shOrder + 1);
+    grid.probes.resize(numProbes * num_basis);
+    grid.numBasis = num_basis;
+    //for (int probeZ = 0; probeZ < depth; ++probeZ)
+    //{
+    //    for (int probeY = 0; probeY < height; ++probeY)
+    //    {
+    //        for (int probeX = 0; probeX < width; ++probeX)
+    //        {
+    //            int index = probeX + probeY * width + probeZ * width * height;
 
-    for (int probeZ = 0; probeZ < depth; ++probeZ)
+    //            //float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
+
+    //            grid.probes[index] = sh_coeff;
+    //        }
+    //    }
+    //}
+
+    for (int i = 0; i < numProbes;  i++)
     {
-        for (int probeY = 0; probeY < height; ++probeY)
+        for (int nb = 0; nb < num_basis; nb++)
         {
-            for (int probeX = 0; probeX < width; ++probeX)
-            {
-                int index = probeX + probeY * width + probeZ * width * height;
-
-                //float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
-
-                grid.probes[index].shCoeffs = sh_coeff;
-            }
+            grid.probes[i * num_basis + nb] = sh_coeff[nb];
         }
     }
 }
@@ -313,7 +322,7 @@ void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path)
 
     // Set high precision for floating point values
     file << std::fixed << std::setprecision(6);
-    int numBasis = static_cast<int>(grid.probes[0].shCoeffs.size());
+    int numBasis = grid.numBasis;
     file << "# Probe Grid Info\n";
     file << "Resolution: " << grid.resolution.x << " " << grid.resolution.y << " " << grid.resolution.z << "\n";
     file << "Origin: " << grid.origin.x << " " << grid.origin.y << " " << grid.origin.z << "\n";
@@ -322,13 +331,18 @@ void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path)
 
     file << "# Probes (SH Coefficients per Probe)\n";
     int probeCount = 0;
-    for (const auto& probe : grid.probes)
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+
+    for (int p = 0; p < numProbes; ++p)
     {
         file << "Probe " << probeCount++ << ":\n";
-        for (const auto& coeff : probe.shCoeffs)
+
+        for (int b = 0; b < numBasis; ++b)
         {
+            const float4& coeff = grid.probes[p * numBasis + b];
             file << "  " << coeff.x << " " << coeff.y << " " << coeff.z << " " << coeff.w << "\n";
         }
+
         file << "\n";
     }
 
@@ -365,20 +379,18 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
     std::getline(file, line);
     std::istringstream basisStream(line.substr(line.find(":") + 1));
     basisStream >> numBasis;
-
+    grid.numBasis = numBasis;
     // Skip "# Probes (SH Coefficients per Probe)"
     std::getline(file, line);
 
     grid.probes.clear();
     int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
-    grid.probes.resize(numProbes);
+    grid.probes.resize(numProbes*numBasis);
 
     for (int probeIndex = 0; probeIndex < numProbes; ++probeIndex)
     {
         std::getline(file, line); // "Probe X"
 
-        SHProbe probe;
-        probe.shCoeffs.clear();
         for (int i = 0; i < numBasis; ++i)
         {
             if (!std::getline(file, line))
@@ -386,10 +398,9 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
             std::istringstream coeffStream(line);
             float4 coeff;
             coeffStream >> coeff.x >> coeff.y >> coeff.z >> coeff.w;
-            probe.shCoeffs.push_back(coeff);
+            grid.probes[probeIndex * numBasis + i] = coeff;
         }
 
-        grid.probes[probeIndex] = probe;
         std::getline(file, line); // empty line
     }
 
