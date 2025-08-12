@@ -70,9 +70,11 @@ void sampleSHAtPosition(float3 worldPos, out float4 outSH[MAX_SH_BASIS])
     float3 gridPos = (worldPos - origin) / spacing;
 
     // Compute the integer base coordinate of the grid cell containing the position
+    //note that this is the lower conner of the voxel (C00)
     int3 base = int3(floor(gridPos));
 
     // Compute the fractional part within the grid cell for interpolation weights
+    //relative position of gridPos in the voxel
     float3 frac = gridPos - float3(base);
 
     // Initialize output SH coefficients to zero
@@ -86,35 +88,39 @@ void sampleSHAtPosition(float3 worldPos, out float4 outSH[MAX_SH_BASIS])
     // Loop over all corners of the cube surrounding the position
     [unroll]
     for (int z = 0; z <= 1; ++z)
-    [unroll]
-    for (int y = 0; y <= 1; ++y)
-    [unroll]
-    for (int x = 0; x <= 1; ++x)
+    {
+        [unroll]
+        for (int y = 0; y <= 1; ++y)
         {
-            // Calculate interpolation weights for each dimension
-            // If coordinate is 0, weight is (1 - frac), else frac
-            float3 w = float3(
-            x == 0 ? (1.0 - frac.x) : frac.x,
-            y == 0 ? (1.0 - frac.y) : frac.y,
-            z == 0 ? (1.0 - frac.z) : frac.z
-        );
-
-            // Combine weights for 3D interpolation
-            float weight = w.x * w.y * w.z;
-
-            // Compute the neighbor probe coordinate
-            int3 neighborCoord = base + int3(x, y, z);
-
-            // Convert 3D coordinate to 1D probe index
-            int neighborProbeIndex = getProbeIndex(neighborCoord);
-
-            // Accumulate the weighted SH coefficients from the neighbor probe
-            [loop]
-            for (int i = 0; i < numBasis; ++i)
+            [unroll]
+            for (int x = 0; x <= 1; ++x)
             {
-                outSH[i] += gSHCoeffs[neighborProbeIndex * numBasis + i] * weight;
+                // Calculate interpolation weights for each dimension
+                // If coordinate is 0, weight is (1 - frac), else frac
+                float3 w = float3(
+                x == 0 ? (1.0 - frac.x) : frac.x,
+                y == 0 ? (1.0 - frac.y) : frac.y,
+                z == 0 ? (1.0 - frac.z) : frac.z
+                );
+
+                // Combine weights for 3D interpolation
+                float weight = w.x * w.y * w.z;
+
+                // Compute the neighbor probe coordinate
+                int3 neighborCoord = base + int3(x, y, z);
+
+                // Convert 3D coordinate to 1D probe index
+                int neighborProbeIndex = getProbeIndex(neighborCoord);
+
+                // Accumulate the weighted SH coefficients from the neighbor probe
+                [loop]
+                for (int i = 0; i < numBasis; ++i)
+                {
+                    outSH[i] += gSHCoeffs[neighborProbeIndex * numBasis + i] * weight;
+                }
             }
         }
+    }
 }
 
 // Evaluate 9 SH basis functions at direction n
