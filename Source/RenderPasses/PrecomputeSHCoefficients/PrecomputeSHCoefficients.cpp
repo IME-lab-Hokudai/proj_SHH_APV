@@ -80,6 +80,7 @@ RenderPassReflection PrecomputeSHCoefficients::reflect(const CompileData& compil
         .format(ResourceFormat::D32Float)
         .bindFlags(ResourceBindFlags::DepthStencil)
         .texture2D(sz.x, sz.y, 4);
+    //reflector.addInput()
     return reflector;
 }
 
@@ -120,6 +121,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
 
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+
+        mpProbeVisualizePass->setCameraData(mpScene->getCamera()->getViewProjMatrix());
+        mpProbeVisualizePass->execute(pRenderContext, mpFbo);
     }
 }
 
@@ -163,7 +167,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             );
            mpGridSHBuffer->setName("SH Grid Info");
 
-            mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
+           mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
+           mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+           mpProbeVisualizePass->setGridData(mProbeGrid);
         }
          // program
         ProgramDesc desc;
@@ -183,7 +189,6 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
         // default depth stencil state
         DepthStencilState::Desc dsDesc;
-        // dsDesc.setDepthFunc(ComparisonFunc::Greater);
         ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
 
         mpGraphicsState = GraphicsState::create(mpDevice);

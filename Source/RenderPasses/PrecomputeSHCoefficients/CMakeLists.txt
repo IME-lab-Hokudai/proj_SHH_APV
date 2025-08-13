@@ -11,6 +11,9 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     SHShader.slang
 	EnvMapShader.slang
 	SHGridShader.slang
+	ProbeVisualizePass.h
+	ProbeVisualizePass.cpp
+	ProbeGridVisualizeShader.slang
 )
 
 target_copy_shaders(PrecomputeSHCoefficients RenderPasses/PrecomputeSHCoefficients)

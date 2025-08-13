@@ -28,55 +28,39 @@
 #pragma once
 #include "envMap_SH.h"
 #include "Falcor.h"
-#include "ProbeVisualizePass.h"
-#include "Core/Pass/FullScreenPass.h"
+#include "Core/Pass/BaseGraphicsPass.h"
 #include "RenderGraph/RenderPass.h"
-#include "RenderGraph/RenderPassHelpers.h"
 
 using namespace Falcor;
 
-class PrecomputeSHCoefficients : public RenderPass
+class ProbeVisualizePass : public BaseGraphicsPass
 {
+struct ProbeVoxelVertex
+{
+    float3 worldPos;
+};
+
 public:
-    FALCOR_PLUGIN_CLASS(PrecomputeSHCoefficients, "PrecomputeSHCoefficients", "Insert pass description here.");
 
-    static ref<PrecomputeSHCoefficients> create(ref<Device> pDevice, const Properties& props)
-    {
-        return make_ref<PrecomputeSHCoefficients>(pDevice, props);
-    }
+    static ref<ProbeVisualizePass> create(
+        const ref<Device>& pDevice,
+        const DefineList& defines = DefineList()
+    );
+    virtual void execute(RenderContext* pRenderContext, const ref<Fbo>& pFbo, bool autoSetVpSc = true) const;
 
-    PrecomputeSHCoefficients(ref<Device> pDevice, const Properties& props);
+    void setGridData(const ProbeGrid& grid);
 
-    virtual Properties getProperties() const override;
-    virtual RenderPassReflection reflect(const CompileData& compileData) override;
-    virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
-    virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
-    virtual void renderUI(Gui::Widgets& widget) override;
-    virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
-    virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
-    virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+    void setCameraData(const float4x4&  viewProjMat);
+
+protected:
+    ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
 private:
-    ref<Scene> mpScene;
+    std::vector<ProbeVoxelVertex> generateProbeCube(const float3& center, const float3& spacing);
     ref<Program> mpProgram;
-    ref<GraphicsState> mpGraphicsState;
     ref<RasterizerState> mpRasterState;
-    ref<ProgramVars> mpVars;
-    ref<Sampler> mpLinearSampler;
-    // Internal state
-    ref<Fbo> mpFbo;
-    /// Selected output size.
-    RenderPassHelpers::IOSize mOutputSizeSelection = RenderPassHelpers::IOSize::Default;
-    /// Output size in pixels when 'Fixed' size is selected.
-    uint2 mFixedOutputSize = {512, 512};
+    ref<Buffer> pVertexBuffer;
+    ref<Vao> pVao;
 
-    ref<FullScreenPass> mpFullScreenPass;
-    ref<EnvMap> mpEnvMap;
-    std::vector<float4> shCoeffs;
-    bool mbShowReconstructedEnvMap = false;
-    ProbeGrid mProbeGrid;
-    ref<Buffer> mpGridSHBuffer;
-
-    //visualize probe grid
-    ref<ProbeVisualizePass> mpProbeVisualizePass;
+    std::vector<ProbeVoxelVertex> mVertices;
 };
