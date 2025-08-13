@@ -41,12 +41,16 @@ ProbeVisualizePass::ProbeVisualizePass(const ref<Device>& pDevice, const Program
     DepthStencilState::Desc dsDesc;
     ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
    // auto pDsState = DepthStencilState::create(DepthStencilState::Desc().setDepthEnabled(false));
+    dsDesc.setDepthEnabled(true);
+    dsDesc.setDepthWriteMask(false);
     mpState->setDepthStencilState(pDsState);
 
      // rasterizer state
     RasterizerState::Desc rasterDesc;
     rasterDesc.setFillMode(RasterizerState::FillMode::Wireframe);
     rasterDesc.setCullMode(RasterizerState::CullMode::None);
+    rasterDesc.setDepthBias(100000, 1.0f);
+    rasterDesc.setDepthClamp(0.0f);
     mpRasterState = RasterizerState::create(rasterDesc);
     mpState->setRasterizerState(mpRasterState);
 }
@@ -99,13 +103,15 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid)
      pLayout->addBufferLayout(0, pBufLayout);
 
      Vao::BufferVec buffers{pVertexBuffer};
-     pVao = Vao::create(Vao::Topology::LineList, pLayout, buffers);
+     pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
      mpState->setVao(pVao);
 }
 
-void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat)
+void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat, const float4x4& viewMat, const float4x4& projMat)
 {
     mpVars->getRootVar()["PerFrameBuffer"]["viewProjMat"] = viewProjMat;
+    mpVars->getRootVar()["PerFrameBuffer"]["viewMat"] = viewMat;
+    mpVars->getRootVar()["PerFrameBuffer"]["projMat"] = projMat;
 }
 
 /*
@@ -132,7 +138,7 @@ std::vector<ProbeVisualizePass::ProbeVoxelVertex> ProbeVisualizePass::generatePr
     float3 h = spacing * 0.5f;
 
     // Cube corners
-    ProbeVoxelVertex v[8] = {
+    ProbeVoxelVertex corners[8] = {
         {center + float3(-h.x, -h.y, -h.z)}, // 0
         {center + float3(h.x, -h.y, -h.z)},  // 1
         {center + float3(-h.x, h.y, -h.z)},  // 2
@@ -144,15 +150,51 @@ std::vector<ProbeVisualizePass::ProbeVoxelVertex> ProbeVisualizePass::generatePr
     };
 
     // Line list order: 12 edges × 2 vertices each
-    int edgeIdx[24] = {
-        0, 1, 1, 3, 3, 2, 2, 0, // bottom face
-        4, 5, 5, 7, 7, 6, 6, 4, // top face
-        0, 4, 1, 5, 2, 6, 3, 7  // vertical edges
-    };
+    //int edgeIdx[24] = {
+    //    0, 1, 1, 3, 3, 2, 2, 0, // bottom face
+    //    4, 5, 5, 7, 7, 6, 6, 4, // top face
+    //    0, 4, 1, 5, 2, 6, 3, 7  // vertical edges
+    //};
 
-    verts.reserve(24);
-    for (int i = 0; i < 24; i++)
-        verts.push_back(v[edgeIdx[i]]);
+    //verts.reserve(24);
+    //for (int i = 0; i < 24; i++)
+    //    verts.push_back(v[edgeIdx[i]]);
+
+        // 12 edges: each defined by a pair of corner indices
+    int edgeIdx[12][2] = {
+        {0, 1},
+        {1, 3},
+        {3, 2},
+        {2, 0}, // bottom
+        {4, 5},
+        {5, 7},
+        {7, 6},
+        {6, 4}, // top
+        {0, 4},
+        {1, 5},
+        {2, 6},
+        {3, 7} // verticals
+    };
+    float thickness = 0.0001f;
+    // For each edge, generate a thin quad along the line
+    for (int e = 0; e < 12; ++e)
+    {
+        float3 p0 = corners[edgeIdx[e][0]].worldPos;
+        float3 p1 = corners[edgeIdx[e][1]].worldPos;
+
+        // Compute a simple perpendicular offset in screen-aligned direction
+        // Here we just use a small arbitrary vector for thickness; ideally use camera-facing offset
+        float3 offset = float3(thickness, thickness, thickness);
+
+        // Quad vertices (two triangles)
+        verts.push_back({p0 - offset});
+        verts.push_back({p0 + offset});
+        verts.push_back({p1 - offset});
+
+        verts.push_back({p1 - offset});
+        verts.push_back({p0 + offset});
+        verts.push_back({p1 + offset});
+    }
 
     return verts;
 }

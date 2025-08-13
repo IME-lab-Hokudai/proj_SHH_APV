@@ -5,14 +5,17 @@ struct VSOut
 
 cbuffer PerFrameBuffer {
     float4x4 viewProjMat;
+    float4x4 viewMat;
+    float4x4 projMat;
 }
 
 VSOut vsMain(float4 posW: WORLD_POSITION)
 {
-    VSOut vOut;
+    VSOut vout;
     posW.w = 1.0f;
-    vOut.posH = mul(viewProjMat, posW);
-    return vOut;
+    //posW.z -= 0.1f;//small epsilon to avoid flickering
+    vout.posH = mul(viewProjMat, posW);
+    return vout;
 }
 
 float4 psMain(VSOut vsOut) : SV_TARGET

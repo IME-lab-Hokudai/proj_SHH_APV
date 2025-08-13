@@ -122,7 +122,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-        mpProbeVisualizePass->setCameraData(mpScene->getCamera()->getViewProjMatrix());
+        mpProbeVisualizePass->setCameraData(mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix());
         mpProbeVisualizePass->execute(pRenderContext, mpFbo);
     }
 }

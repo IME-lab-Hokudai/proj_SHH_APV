@@ -50,7 +50,7 @@ public:
 
     void setGridData(const ProbeGrid& grid);
 
-    void setCameraData(const float4x4&  viewProjMat);
+    void setCameraData(const float4x4& viewProjMat, const float4x4& viewMat, const float4x4& projMat);
 
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
