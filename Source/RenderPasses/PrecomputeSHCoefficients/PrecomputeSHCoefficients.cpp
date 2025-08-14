@@ -36,6 +36,7 @@ namespace
 const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
+const char kShowSHGrid[] = "Show SH grid";
 
 } // namespace
 
@@ -51,6 +52,8 @@ PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Pr
     {
         if (key == kShowReconstructedEnvMap)
             mbShowReconstructedEnvMap = value;
+        if (key == kShowSHGrid)
+            mbShowSHGrid = value;
     }
 
     mpFbo = Fbo::create(mpDevice);
@@ -65,6 +68,7 @@ Properties PrecomputeSHCoefficients::getProperties() const
 {
     Properties props;
     props[kShowReconstructedEnvMap] = mbShowReconstructedEnvMap;
+    props[kShowSHGrid] = mbShowSHGrid;
     return props;
 }
 
@@ -123,13 +127,18 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
         mpProbeVisualizePass->setCameraData(mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix());
-        mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+        if (mbShowSHGrid)
+        {
+            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+        }
     }
 }
 
 void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
 {
     if (widget.checkbox("Show Reconstructed Env Map", mbShowReconstructedEnvMap))
+        requestRecompile();
+    if (widget.checkbox("Show SH Grid", mbShowSHGrid))
         requestRecompile();
 }
 
@@ -142,9 +151,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
         if (mpScene->getEnvMap() != nullptr)
         {
             mpEnvMap = mpScene->getEnvMap();
-            //initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
-            //decomposeSH(shCoeffs, mpEnvMap);
-            //reconstructSH(shCoeffs, mpEnvMap, mpDevice);
+            initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
+            decomposeSH(shCoeffs, mpEnvMap);
+            reconstructSH(shCoeffs, mpEnvMap, mpDevice);
 
             //mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
             //mProbeGrid.resolution = int3(3, 3, 3);
@@ -152,7 +161,31 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
             //createProbeGrid(mProbeGrid, shCoeffs);
             //saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");
-            loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+
+            //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+
+            AABB sceneBounds = mpScene->getSceneBounds();
+            float3 minBound = sceneBounds.minPoint;
+            float3 maxBound = sceneBounds.maxPoint;
+            float3 sceneCenter = sceneBounds.center();
+            float3 sceneSize = maxBound - minBound;
+
+            // Decide spacing between probes
+            float3 spacing = float3(1.0f, 1.0f, 1.0f); 
+            // Number of probes in each dimension
+            int3 resolution;
+            resolution.x = (int)ceil(sceneSize.x / spacing.x) + 1;
+            resolution.y = (int)ceil(sceneSize.y / spacing.y) + 1;
+            resolution.z = (int)ceil(sceneSize.z / spacing.z) + 1;
+
+            float3 halfSize = 0.5f*(float3(resolution) - 1.0f) * spacing;
+
+            //mProbeGrid.origin = sceneCenter;
+            mProbeGrid.origin = sceneCenter - halfSize;
+            mProbeGrid.spacing = spacing;
+            mProbeGrid.resolution = resolution;
+
+            createProbeGrid(mProbeGrid, shCoeffs);
 
             shCoeffs.clear();
             shCoeffs.insert(shCoeffs.end(), mProbeGrid.probes.begin(), mProbeGrid.probes.begin() + mProbeGrid.numBasis); //just one env set for envmap render
