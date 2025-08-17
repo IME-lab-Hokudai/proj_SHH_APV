@@ -1,5 +1,6 @@
 #pragma once
 #include "Falcor.h"
+#include "ProbeSamplingData.slang"
 
 //using namespace std;
 using namespace Falcor;
@@ -25,3 +26,4 @@ void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff);
 void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path);
 bool loadProbeGridFromFile( ProbeGrid& out, const std::string& path);
 
+std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, const float3& probePos);

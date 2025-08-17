@@ -2,11 +2,14 @@
 #include "CommonDefines.h"
 #include "envMap_SH.h"
 
+
 #include <fstream>
+#include <random>
 
 float*  dOmega;
 float*  envSHTable;
 int shOrder = -1;
+
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 
@@ -405,6 +408,28 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
     }
 
     return grid.probes.size() == numProbes;
+}
+
+std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, const float3& probePos)
+{
+    std::vector<ProbeDirSample> samples;
+    samples.reserve(sampleCount);
+
+    std::mt19937 rng(12345);
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+
+    float dOmega = 4.0f * float(M_PI) / float(sampleCount); // Uniform solid angle per sample
+
+    for (int i = 0; i < sampleCount; ++i)
+    {
+        float z = 1.0f - 2.0f * dist(rng);
+        float phi = 2.0f * float(M_PI) * dist(rng);
+        float r = sqrtf(1.0f - z * z);
+
+        float3 dir = {r * cosf(phi), r * sinf(phi), z};
+        samples.push_back({dir, dOmega, probePos});
+    }
+    return samples;
 }
 
 

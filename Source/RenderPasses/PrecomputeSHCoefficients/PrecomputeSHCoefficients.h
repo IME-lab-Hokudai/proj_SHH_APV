@@ -77,7 +77,13 @@ private:
     bool mbShowSHGrid = false;
     ProbeGrid mProbeGrid;
     ref<Buffer> mpGridSHBuffer;
+    ref<Buffer> mpProbeDirSamplesBuffer;
+    ref<Buffer> mpProbeSamplingResultBuffer;
 
     //visualize probe grid
     ref<ProbeVisualizePass> mpProbeVisualizePass;
+
+    // for probe sampling using ray tracing
+    ref<Program> mpRtProgram;
+    ref<RtProgramVars> mpRtVars;
 };
