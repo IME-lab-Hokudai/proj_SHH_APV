@@ -200,6 +200,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 
    float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
 
-    float3 litColor = diffuseColor;
+   float3 litColor = diffuseColor;
+   litColor = gScene.getLight(0).intensity;
     return float4(litColor,1.0f);
 }

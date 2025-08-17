@@ -86,4 +86,7 @@ private:
     // for probe sampling using ray tracing
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
+
+    bool mbFinishProbeSampling = false;
+    uint32_t mSampleIndex = 0xdeadbeef;
 };
