@@ -32,7 +32,7 @@ import Rendering.Lights.LightHelpers;
 import ProbeSamplingData;
 
 StructuredBuffer<ProbeDirSample> gProbeDirSamples;
-
+StructuredBuffer<float3> gProbePositions; 
 RWStructuredBuffer<float4> gProbeSamplingOutput;
 
 cbuffer PerFrameCB
@@ -68,8 +68,19 @@ struct PrimaryRayData
 [shader("miss")]
 void primaryMiss(inout PrimaryRayData hitData)
 {
-    //hitData.color = float4(0.38f, 0.52f, 0.10f, 1.f);
-    hitData.color = float4(0.0f, 0.0f, 0.0f, 1.f);
+    float3 rayOrgW = WorldRayOrigin();
+
+    float3 color = float3(0.0f, 0.0f, 0.0f);
+    // Direct lighting from analytic light sources.
+    for (int i = 0; i < gScene.getLightCount(); i++)
+    {
+        AnalyticLightSample ls;
+        if (evalLightApproximate(rayOrgW, gScene.getLight(i), ls)) // there is another function that handle more type of light
+        {
+            color += ls.Li; // when miss we can take light color directly
+        }
+    }
+    hitData.color = float4(color, 1.0f);
     hitData.hitT = -1.f;
 }
 
@@ -129,11 +140,9 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
      float3 color = bsdfProperties.emission;
 
       uint3 launchIndex = DispatchRaysIndex();
-     // TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
-     //uint seed = launchIndex.x;
-     //TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(seed);
-      uint seed = launchIndex.x;
+
       UniformSampleGenerator sg = UniformSampleGenerator(launchIndex.xy, sampleIndex);
+
     // Direct lighting from analytic light sources.
     for (int i = 0; i < gScene.getLightCount(); i++)
     {
@@ -146,12 +155,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
             //{
             //     color += mi.eval(sd, ls.dir, sg) * ls.Li;
             // }
-            // color = mi.eval(sd, ls.dir, sg) * ls.Li;
-
-            color += mi.eval(sd, ls.dir, sg);
-            //color = sd.posW;
-            // color += ls.Li;
-            //color = ls.Li;
+            color += mi.eval(sd, ls.dir, sg) * ls.Li;
         }
     }
    // color = gScene.getLight(0).intensity;
@@ -178,37 +182,23 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 [shader("raygeneration")]
 void rayGen()
 {
-    //uint3 launchIndex = DispatchRaysIndex();
+    uint dirIdx = DispatchRaysIndex().x;
+    uint probeIdx = DispatchRaysIndex().y;
 
-    //RayDesc ray;
-   
-    //ray = gScene.camera.computeRayPinhole(launchIndex.xy, viewportDims).toRayDesc();
-    
-    //PrimaryRayData hitData;
-    //hitData.depth = 0;
-    //TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index 0 is primary ray*/, rayTypeCount, 0, ray, hitData);
-    //gOutput[launchIndex.xy] = hitData.color;
-
-    uint sampleIdx = DispatchRaysIndex().x; // 1D launch for N samples
-    //if (sampleIdx >= sampleCount)
-    //{
-    //    return; // Out of bounds
-    //}
-    // Use the sample index to access the precomputed probe direction sample
-    ProbeDirSample sample = gProbeDirSamples[sampleIdx];
+    float3 probePos = gProbePositions[probeIdx];
+    float3 dir = normalize(gProbeDirSamples[dirIdx].dir);
 
     RayDesc ray;
-    ray.Origin = sample.probePos;
-    ray.Direction = normalize(sample.dir);
+    ray.Origin = probePos;
+    ray.Direction = dir;
     ray.TMin = 0.001f;
-    ray.TMax = 1000.f;
+    ray.TMax = 100.f;
 
     PrimaryRayData hitData;
     hitData.depth = 0;
 
-    TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index 0 is primary ray*/, rayTypeCount, 0, ray, hitData);
+    TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
 
-    // Store result
-    gProbeSamplingOutput[sampleIdx] = hitData.color;
-    //gOutput[sampleIdx] = float4(sample.probePos,1.f);
+    // Store result in a 2D (flattened) buffer
+    gProbeSamplingOutput[probeIdx * sampleCount + dirIdx] = hitData.color;
 }

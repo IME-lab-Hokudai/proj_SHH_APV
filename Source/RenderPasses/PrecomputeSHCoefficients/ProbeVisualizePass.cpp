@@ -85,7 +85,7 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<Pr
     float sphereRadius = 0.3f * std::min({grid.spacing.x, grid.spacing.y, grid.spacing.z});
     int segmentsU = 64; // longitude
     int segmentsV = 32;  // latitude
-
+    uint32_t probeIndexCount = 0;
     for (int z = 0; z < depth; ++z)
     {
         for (int y = 0; y < height; ++y)
@@ -95,7 +95,8 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<Pr
                 float3 probePos = grid.origin + float3(x * grid.spacing.x, y * grid.spacing.y, z * grid.spacing.z);
                 //auto tmp = generateProbeCube(probePos, grid.spacing);
 
-                auto tmp = generateProbeSphere(probePos, sphereRadius, segmentsU, segmentsV, dirSamples);
+                auto tmp = generateProbeSphere(probePos, sphereRadius, segmentsU, segmentsV, dirSamples, probeIndexCount);
+                probeIndexCount ++;
                 mVertices.insert(mVertices.end(), tmp.begin(), tmp.end());
             }
         }
@@ -109,11 +110,13 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<Pr
      ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
      pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
      pBufLayout->addElement("DIR_SAMPLE_INDEX", sizeof(float3), ResourceFormat::R32Uint, 1, 0);
+     pBufLayout->addElement("PROBE_INDEX", sizeof(float3) + sizeof(uint32_t), ResourceFormat::R32Uint, 1, 0);
      pLayout->addBufferLayout(0, pBufLayout);
 
      Vao::BufferVec buffers{pVertexBuffer};
      pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
      mpState->setVao(pVao);
+     sampleCount = (uint32_t)dirSamples.size();
 }
 
 void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat, const float4x4& viewMat, const float4x4& projMat)
@@ -127,6 +130,7 @@ void ProbeVisualizePass::setProbeSamplingData(ref<Buffer> dirSamples, ref<Buffer
 {
     mpVars->getRootVar()["gProbeSamplingResults"] = samplingBuffer;
     mpVars->getRootVar()["gProbeDirSamples"] = dirSamples;
+    mpVars->getRootVar()["PerFrameBuffer"]["sampleCount"] = sampleCount;
 }
 
 /*
@@ -149,56 +153,56 @@ std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeCu
 {
     std::vector<ProbeVertex> verts;
 
-    // half-size along each axis
-    float3 h = spacing * 0.5f;
+    //// half-size along each axis
+    //float3 h = spacing * 0.5f;
 
-    // Cube corners
-    ProbeVertex corners[8] = {
-        {center + float3(-h.x, -h.y, -h.z)}, // 0
-        {center + float3(h.x, -h.y, -h.z)},  // 1
-        {center + float3(-h.x, h.y, -h.z)},  // 2
-        {center + float3(h.x, h.y, -h.z)},   // 3
-        {center + float3(-h.x, -h.y, h.z)},  // 4
-        {center + float3(h.x, -h.y, h.z)},   // 5
-        {center + float3(-h.x, h.y, h.z)},   // 6
-        {center + float3(h.x, h.y, h.z)}     // 7
-    };
+    //// Cube corners
+    //ProbeVertex corners[8] = {
+    //    {center + float3(-h.x, -h.y, -h.z)}, // 0
+    //    {center + float3(h.x, -h.y, -h.z)},  // 1
+    //    {center + float3(-h.x, h.y, -h.z)},  // 2
+    //    {center + float3(h.x, h.y, -h.z)},   // 3
+    //    {center + float3(-h.x, -h.y, h.z)},  // 4
+    //    {center + float3(h.x, -h.y, h.z)},   // 5
+    //    {center + float3(-h.x, h.y, h.z)},   // 6
+    //    {center + float3(h.x, h.y, h.z)}     // 7
+    //};
 
-     // 12 edges: each defined by a pair of corner indices
-    int edgeIdx[12][2] = {
-        {0, 1},
-        {1, 3},
-        {3, 2},
-        {2, 0}, // bottom
-        {4, 5},
-        {5, 7},
-        {7, 6},
-        {6, 4}, // top
-        {0, 4},
-        {1, 5},
-        {2, 6},
-        {3, 7} // verticals
-    };
-    float thickness = 0.0001f;
-    // For each edge, generate a thin quad along the line
-    for (int e = 0; e < 12; ++e)
-    {
-        float3 p0 = corners[edgeIdx[e][0]].worldPos;
-        float3 p1 = corners[edgeIdx[e][1]].worldPos;
+    // // 12 edges: each defined by a pair of corner indices
+    //int edgeIdx[12][2] = {
+    //    {0, 1},
+    //    {1, 3},
+    //    {3, 2},
+    //    {2, 0}, // bottom
+    //    {4, 5},
+    //    {5, 7},
+    //    {7, 6},
+    //    {6, 4}, // top
+    //    {0, 4},
+    //    {1, 5},
+    //    {2, 6},
+    //    {3, 7} // verticals
+    //};
+    //float thickness = 0.0001f;
+    //// For each edge, generate a thin quad along the line
+    //for (int e = 0; e < 12; ++e)
+    //{
+    //    float3 p0 = corners[edgeIdx[e][0]].worldPos;
+    //    float3 p1 = corners[edgeIdx[e][1]].worldPos;
 
-        // Compute a simple perpendicular offset in screen-aligned direction
-        // Here we just use a small arbitrary vector for thickness; ideally use camera-facing offset
-        float3 offset = float3(thickness, thickness, thickness);
+    //    // Compute a simple perpendicular offset in screen-aligned direction
+    //    // Here we just use a small arbitrary vector for thickness; ideally use camera-facing offset
+    //    float3 offset = float3(thickness, thickness, thickness);
 
-        // Quad vertices (two triangles)
-        verts.push_back({p0 - offset});
-        verts.push_back({p0 + offset});
-        verts.push_back({p1 - offset});
+    //    // Quad vertices (two triangles)
+    //    verts.push_back({p0 - offset});
+    //    verts.push_back({p0 + offset});
+    //    verts.push_back({p1 - offset});
 
-        verts.push_back({p1 - offset});
-        verts.push_back({p0 + offset});
-        verts.push_back({p1 + offset});
-    }
+    //    verts.push_back({p1 - offset});
+    //    verts.push_back({p0 + offset});
+    //    verts.push_back({p1 + offset});
+    //}
 
     return verts;
 }
@@ -209,7 +213,8 @@ std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeSp
     float radius,
     int segmentsU,
     int segmentsV,
-    const std::vector<ProbeDirSample>& dirSamples
+    const std::vector<ProbeDirSample>& dirSamples,
+    uint32_t probeIndex
 )
 {
     std::vector<ProbeVertex> verts;
@@ -243,13 +248,13 @@ std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeSp
             float3 p11 = center + radius * dir11;
 
             // Two triangles per quad
-            verts.push_back({p00, idx00});
-            verts.push_back({p10, idx10});
-            verts.push_back({p11, idx11});
+            verts.push_back({p00, idx00, probeIndex});
+            verts.push_back({p10, idx10, probeIndex});
+            verts.push_back({p11, idx11, probeIndex});
 
-            verts.push_back({p00, idx00});
-            verts.push_back({p11, idx11});
-            verts.push_back({p01, idx01});
+            verts.push_back({p00, idx00, probeIndex});
+            verts.push_back({p11, idx11, probeIndex});
+            verts.push_back({p01, idx01, probeIndex});
         }
     }
     return verts;

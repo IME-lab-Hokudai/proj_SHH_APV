@@ -38,7 +38,8 @@ class ProbeVisualizePass : public BaseGraphicsPass
 struct ProbeVertex
 {
     float3 worldPos;
-    uint32_t probeSampleIndex;
+    uint32_t dirSampleIndex;
+    uint32_t probeIndex;
 };
 
 public:
@@ -60,12 +61,20 @@ protected:
 
 private:
     std::vector<ProbeVertex> generateProbeCube(const float3& center, const float3& spacing);
-    std::vector<ProbeVertex> generateProbeSphere(const float3& center, float radius, int segmentsU, int segmentsV, const std::vector<ProbeDirSample>& dirSamples);
+    std::vector<ProbeVertex> generateProbeSphere(
+        const float3& center,
+        float radius,
+        int segmentsU,
+        int segmentsV,
+        const std::vector<ProbeDirSample>& dirSamples,
+        uint32_t probeIndex
+    );
+
     ref<Program> mpProgram;
     ref<RasterizerState> mpRasterState;
     ref<Buffer> pVertexBuffer;
     ref<Vao> pVao;
-
+    uint32_t sampleCount = 0;
     std::vector<ProbeVertex> mVertices;
 
     uint32_t findClosestDirIndex(const float3& dir, const std::vector<ProbeDirSample>& dirSamples);

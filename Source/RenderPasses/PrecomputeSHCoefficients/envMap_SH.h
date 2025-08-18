@@ -11,7 +11,8 @@ struct ProbeGrid
     float3 origin;            // world-space origin of grid
     float3 spacing;           // spacing between probes
     int numBasis;
-    std::vector<float4> probes;
+    std::vector<float4> probesSH;
+    std::vector<float3> probesPos;
 };
 
 void initSHTable(int sh_order, int width, int height);

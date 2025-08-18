@@ -291,28 +291,27 @@ void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
     int depth = res.z;
 
     int num_basis = (shOrder + 1) * (shOrder + 1);
-    grid.probes.resize(numProbes * num_basis);
+    grid.probesSH.resize(numProbes * num_basis);
     grid.numBasis = num_basis;
-    //for (int probeZ = 0; probeZ < depth; ++probeZ)
-    //{
-    //    for (int probeY = 0; probeY < height; ++probeY)
-    //    {
-    //        for (int probeX = 0; probeX < width; ++probeX)
-    //        {
-    //            int index = probeX + probeY * width + probeZ * width * height;
-
-    //            //float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
-
-    //            grid.probes[index] = sh_coeff;
-    //        }
-    //    }
-    //}
+    grid.probesPos.reserve(numProbes);
+    for (int probeZ = 0; probeZ < depth; ++probeZ)
+    {
+        for (int probeY = 0; probeY < height; ++probeY)
+        {
+            for (int probeX = 0; probeX < width; ++probeX)
+            {
+                //int index = probeX + probeY * width + probeZ * width * height;
+                float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
+                grid.probesPos.push_back(probePos);
+            }
+        }
+    }
 
     for (int i = 0; i < numProbes;  i++)
     {
         for (int nb = 0; nb < num_basis; nb++)
         {
-            grid.probes[i * num_basis + nb] = sh_coeff[nb];
+            grid.probesSH[i * num_basis + nb] = sh_coeff[nb];
         }
     }
 }
@@ -342,7 +341,7 @@ void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path)
 
         for (int b = 0; b < numBasis; ++b)
         {
-            const float4& coeff = grid.probes[p * numBasis + b];
+            const float4& coeff = grid.probesSH[p * numBasis + b];
             file << "  " << coeff.x << " " << coeff.y << " " << coeff.z << " " << coeff.w << "\n";
         }
 
@@ -386,9 +385,9 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
     // Skip "# Probes (SH Coefficients per Probe)"
     std::getline(file, line);
 
-    grid.probes.clear();
+    grid.probesSH.clear();
     int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
-    grid.probes.resize(numProbes*numBasis);
+    grid.probesSH.resize(numProbes*numBasis);
 
     for (int probeIndex = 0; probeIndex < numProbes; ++probeIndex)
     {
@@ -401,13 +400,13 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
             std::istringstream coeffStream(line);
             float4 coeff;
             coeffStream >> coeff.x >> coeff.y >> coeff.z >> coeff.w;
-            grid.probes[probeIndex * numBasis + i] = coeff;
+            grid.probesSH[probeIndex * numBasis + i] = coeff;
         }
 
         std::getline(file, line); // empty line
     }
 
-    return grid.probes.size() == numProbes;
+    return grid.probesSH.size() == numProbes;
 }
 
 std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, const float3& probePos)

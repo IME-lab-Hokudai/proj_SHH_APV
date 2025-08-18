@@ -134,14 +134,12 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         {
             auto rtVar = mpRtVars->getRootVar();
             rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+            rtVar["gProbePositions"] = mpProbePosBuffer;
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["sampleCount"] = sampleCount;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(sampleCount, 1, 1));
-
-            // Ensure all UAV writes are finished before mapping for read-back
-           // pRenderContext->uavBarrier(mpProbeSamplingResultBuffer.get());
-           // mpDevice->wait();
+            int numProbe = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(sampleCount, numProbe, 1));
 
             // Map the buffer for reading
             //float4* pData = new float4[sampleCount];
@@ -154,12 +152,11 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             //    // Process result as needed
             //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
             //}
-
-            // Unmap when done
             mbFinishProbeSampling = true;
            // delete[] pData;
         }
 
+        // visualize probes
         if (mbFinishProbeSampling)
         {
             // if (mbShowSHGrid)
@@ -215,15 +212,14 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             float3 spacing = float3(1.0f, 1.0f, 1.0f); 
             // Number of probes in each dimension
             int3 resolution;
-            resolution.x = (int)ceil(sceneSize.x / spacing.x) + 1;
-            resolution.y = (int)ceil(sceneSize.y / spacing.y) + 1;
-            resolution.z = (int)ceil(sceneSize.z / spacing.z) + 1;
+            resolution.x = (int)ceil(sceneSize.x / spacing.x);
+            resolution.y = (int)ceil(sceneSize.y / spacing.y);
+            resolution.z = (int)ceil(sceneSize.z / spacing.z);
 
             float3 halfSize = 0.5f*(float3(resolution) - 1.0f) * spacing;
-            resolution = int3(1, 1, 1);
+            //resolution = int3(1, 1, 1);
+            mProbeGrid.origin = sceneCenter - halfSize;
             //mProbeGrid.origin = sceneCenter;
-            //mProbeGrid.origin = sceneCenter - halfSize;
-            mProbeGrid.origin = sceneCenter;
             mProbeGrid.spacing = spacing;
             mProbeGrid.resolution = resolution;
 
@@ -233,24 +229,33 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            // shCoeffs.insert(shCoeffs.end(), mProbeGrid.probes.begin(), mProbeGrid.probes.begin() + mProbeGrid.numBasis); //just one env set for envmap render
 
            int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-            mpGridSHBuffer = mpDevice->createStructuredBuffer(
+           mpGridSHBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
                 mProbeGrid.numBasis * numProbes,
                 ResourceBindFlags::ShaderResource,
                 MemoryType::DeviceLocal,
-               mProbeGrid.probes.data()
+               mProbeGrid.probesSH.data()
             );
-           mpGridSHBuffer->setName("SH Grid Info");
+           mpGridSHBuffer->setName("SH Grid Coeffs");
 
-            // float3 probePos = sceneCenter - halfSize;
-            auto dirSamples = generateUniformSphereDirSamples(sampleCount, sceneCenter);
+           mpProbePosBuffer = mpDevice->createStructuredBuffer(
+               sizeof(float3),
+               numProbes,
+               ResourceBindFlags::ShaderResource,
+               MemoryType::DeviceLocal,
+               mProbeGrid.probesPos.data()
+           );
+           mpProbePosBuffer->setName("probes world pos");
 
-            mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
+           auto dirSamples = generateUniformSphereDirSamples(sampleCount, sceneCenter);
+
+           mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeDirSample), sampleCount, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
             );
-            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
-            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                sizeof(float4), sampleCount, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal
+           mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
+
+           mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4), sampleCount*numProbes, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal
             );
             mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
 
