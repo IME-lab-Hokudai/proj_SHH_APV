@@ -47,7 +47,8 @@ ProbeVisualizePass::ProbeVisualizePass(const ref<Device>& pDevice, const Program
 
      // rasterizer state
     RasterizerState::Desc rasterDesc;
-    rasterDesc.setFillMode(RasterizerState::FillMode::Wireframe);
+    //rasterDesc.setFillMode(RasterizerState::FillMode::Wireframe);
+    rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
     rasterDesc.setCullMode(RasterizerState::CullMode::None);
     rasterDesc.setDepthBias(100000, 1.0f);
     rasterDesc.setDepthClamp(0.0f);
@@ -70,7 +71,7 @@ void ProbeVisualizePass::execute(RenderContext* pRenderContext, const ref<Fbo>& 
     pRenderContext->draw(mpState.get(), mpVars.get(), mVertices.size(), 0);
 }
 
-void ProbeVisualizePass::setGridData(const ProbeGrid& grid)
+void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<ProbeDirSample>& dirSamples)
 {
     mVertices.clear();
 
@@ -80,6 +81,11 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid)
     int height = res.y;
     int depth = res.z;
 
+    // Sphere parameters
+    float sphereRadius = 0.3f * std::min({grid.spacing.x, grid.spacing.y, grid.spacing.z});
+    int segmentsU = 64; // longitude
+    int segmentsV = 32;  // latitude
+
     for (int z = 0; z < depth; ++z)
     {
         for (int y = 0; y < height; ++y)
@@ -87,19 +93,22 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid)
             for (int x = 0; x < width; ++x)
             {
                 float3 probePos = grid.origin + float3(x * grid.spacing.x, y * grid.spacing.y, z * grid.spacing.z);
-                auto tmp = generateProbeCube(probePos, grid.spacing);
+                //auto tmp = generateProbeCube(probePos, grid.spacing);
+
+                auto tmp = generateProbeSphere(probePos, sphereRadius, segmentsU, segmentsV, dirSamples);
                 mVertices.insert(mVertices.end(), tmp.begin(), tmp.end());
             }
         }
     }
 
-     const uint32_t vbSize = (uint32_t)(sizeof(ProbeVoxelVertex) * mVertices.size());
+     const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
      pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
      pVertexBuffer->breakStrongReferenceToDevice();
 
      ref<VertexLayout> pLayout = VertexLayout::create();
      ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
      pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+     pBufLayout->addElement("DIR_SAMPLE_INDEX", sizeof(float3), ResourceFormat::R32Uint, 1, 0);
      pLayout->addBufferLayout(0, pBufLayout);
 
      Vao::BufferVec buffers{pVertexBuffer};
@@ -112,6 +121,12 @@ void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat, const float4
     mpVars->getRootVar()["PerFrameBuffer"]["viewProjMat"] = viewProjMat;
     mpVars->getRootVar()["PerFrameBuffer"]["viewMat"] = viewMat;
     mpVars->getRootVar()["PerFrameBuffer"]["projMat"] = projMat;
+}
+
+void ProbeVisualizePass::setProbeSamplingData(ref<Buffer> dirSamples, ref<Buffer> samplingBuffer)
+{
+    mpVars->getRootVar()["gProbeSamplingResults"] = samplingBuffer;
+    mpVars->getRootVar()["gProbeDirSamples"] = dirSamples;
 }
 
 /*
@@ -130,15 +145,15 @@ Index order (triangle strip):
   4, 7, 6, 2,  // top face
   3, 1          // degenerate
   */
-std::vector<ProbeVisualizePass::ProbeVoxelVertex> ProbeVisualizePass::generateProbeCube(const float3& center, const float3& spacing)
+std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeCube(const float3& center, const float3& spacing)
 {
-    std::vector<ProbeVoxelVertex> verts;
+    std::vector<ProbeVertex> verts;
 
     // half-size along each axis
     float3 h = spacing * 0.5f;
 
     // Cube corners
-    ProbeVoxelVertex corners[8] = {
+    ProbeVertex corners[8] = {
         {center + float3(-h.x, -h.y, -h.z)}, // 0
         {center + float3(h.x, -h.y, -h.z)},  // 1
         {center + float3(-h.x, h.y, -h.z)},  // 2
@@ -149,18 +164,7 @@ std::vector<ProbeVisualizePass::ProbeVoxelVertex> ProbeVisualizePass::generatePr
         {center + float3(h.x, h.y, h.z)}     // 7
     };
 
-    // Line list order: 12 edges × 2 vertices each
-    //int edgeIdx[24] = {
-    //    0, 1, 1, 3, 3, 2, 2, 0, // bottom face
-    //    4, 5, 5, 7, 7, 6, 6, 4, // top face
-    //    0, 4, 1, 5, 2, 6, 3, 7  // vertical edges
-    //};
-
-    //verts.reserve(24);
-    //for (int i = 0; i < 24; i++)
-    //    verts.push_back(v[edgeIdx[i]]);
-
-        // 12 edges: each defined by a pair of corner indices
+     // 12 edges: each defined by a pair of corner indices
     int edgeIdx[12][2] = {
         {0, 1},
         {1, 3},
@@ -197,4 +201,73 @@ std::vector<ProbeVisualizePass::ProbeVoxelVertex> ProbeVisualizePass::generatePr
     }
 
     return verts;
+}
+
+// New function to generate a UV sphere at a given position
+std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeSphere(
+    const float3& center,
+    float radius,
+    int segmentsU,
+    int segmentsV,
+    const std::vector<ProbeDirSample>& dirSamples
+)
+{
+    std::vector<ProbeVertex> verts;
+
+    for (int v = 0; v < segmentsV; ++v)
+    {
+        float phi0 = float(v) / segmentsV * float(M_PI);
+        float phi1 = float(v + 1) / segmentsV * float(M_PI);
+
+        for (int u = 0; u < segmentsU; ++u)
+        {
+            float theta0 = float(u) / segmentsU * 2.0f * float(M_PI);
+            float theta1 = float(u + 1) / segmentsU * 2.0f * float(M_PI);
+
+            // Directions from center to vertex (normalized)
+            float3 dir00 = normalize(float3(std::sin(phi0) * std::cos(theta0), std::cos(phi0), std::sin(phi0) * std::sin(theta0)));
+            float3 dir01 = normalize(float3(std::sin(phi0) * std::cos(theta1), std::cos(phi0), std::sin(phi0) * std::sin(theta1)));
+            float3 dir10 = normalize(float3(std::sin(phi1) * std::cos(theta0), std::cos(phi1), std::sin(phi1) * std::sin(theta0)));
+            float3 dir11 = normalize(float3(std::sin(phi1) * std::cos(theta1), std::cos(phi1), std::sin(phi1) * std::sin(theta1)));
+
+            // Find closest sample index for each direction
+            uint32_t idx00 = findClosestDirIndex(dir00, dirSamples);
+            uint32_t idx01 = findClosestDirIndex(dir01, dirSamples);
+            uint32_t idx10 = findClosestDirIndex(dir10, dirSamples);
+            uint32_t idx11 = findClosestDirIndex(dir11, dirSamples);
+
+            // Four points of the quad
+            float3 p00 = center + radius * dir00;
+            float3 p01 = center + radius * dir01;
+            float3 p10 = center + radius * dir10;
+            float3 p11 = center + radius * dir11;
+
+            // Two triangles per quad
+            verts.push_back({p00, idx00});
+            verts.push_back({p10, idx10});
+            verts.push_back({p11, idx11});
+
+            verts.push_back({p00, idx00});
+            verts.push_back({p11, idx11});
+            verts.push_back({p01, idx01});
+        }
+    }
+    return verts;
+}
+
+// Helper: find the closest direction index
+uint32_t ProbeVisualizePass::findClosestDirIndex(const float3& dir, const std::vector<ProbeDirSample>& dirSamples)
+{
+    uint32_t bestIdx = 0;
+    float bestDot = -1.0f;
+    for (int i = 0; i < dirSamples.size(); ++i)
+    {
+        float d = dot(dir, normalize(dirSamples[i].dir));
+        if (d > bestDot)
+        {
+            bestDot = d;
+            bestIdx = i;
+        }
+    }
+    return bestIdx;
 }

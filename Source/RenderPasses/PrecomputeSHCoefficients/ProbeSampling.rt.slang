@@ -33,7 +33,7 @@ import ProbeSamplingData;
 
 StructuredBuffer<ProbeDirSample> gProbeDirSamples;
 
-RWStructuredBuffer<float4> gOutput;
+RWStructuredBuffer<float4> gProbeSamplingOutput;
 
 cbuffer PerFrameCB
 {
@@ -147,8 +147,9 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
             //     color += mi.eval(sd, ls.dir, sg) * ls.Li;
             // }
             // color = mi.eval(sd, ls.dir, sg) * ls.Li;
-           
+
             color += mi.eval(sd, ls.dir, sg);
+            //color = sd.posW;
             // color += ls.Li;
             //color = ls.Li;
         }
@@ -200,7 +201,7 @@ void rayGen()
     ray.Origin = sample.probePos;
     ray.Direction = normalize(sample.dir);
     ray.TMin = 0.001f;
-    ray.TMax = 1e6f;
+    ray.TMax = 1000.f;
 
     PrimaryRayData hitData;
     hitData.depth = 0;
@@ -208,6 +209,6 @@ void rayGen()
     TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index 0 is primary ray*/, rayTypeCount, 0, ray, hitData);
 
     // Store result
-    gOutput[sampleIdx] = hitData.color;
+    gProbeSamplingOutput[sampleIdx] = hitData.color;
     //gOutput[sampleIdx] = float4(sample.probePos,1.f);
 }

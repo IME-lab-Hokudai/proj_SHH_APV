@@ -29,6 +29,7 @@
 
 #include "envMap_SH.h"
 #include "Core/Pass/FullScreenPass.h"
+#include "Scene/TriangleMesh.h"
 
 const int sampleCount = 4096;
 
@@ -129,40 +130,48 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-        //mpProbeVisualizePass->setCameraData(mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix());
-        //if (mbShowSHGrid)
-        //{
-        //    mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-        //}
         if (!mbFinishProbeSampling)
         {
             auto rtVar = mpRtVars->getRootVar();
             rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-            rtVar["gOutput"] = mpProbeSamplingResultBuffer;
+            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["sampleCount"] = sampleCount;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(sampleCount, 1, 1));
 
             // Ensure all UAV writes are finished before mapping for read-back
-            pRenderContext->uavBarrier(mpProbeSamplingResultBuffer.get());
-            mpDevice->wait();
+           // pRenderContext->uavBarrier(mpProbeSamplingResultBuffer.get());
+           // mpDevice->wait();
 
             // Map the buffer for reading
-            float4* pData = new float4[sampleCount];
-            mpProbeSamplingResultBuffer->getBlob(pData, 0, sampleCount*sizeof(float4));
+            //float4* pData = new float4[sampleCount];
+            //mpProbeSamplingResultBuffer->getBlob(pData, 0, sampleCount*sizeof(float4));
 
-            // Now pData points to your results, size is sampleCount
-            for (int i = 0; i < sampleCount; ++i)
-            {
-                float4 result = pData[i];
-                // Process result as needed
-                logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
-            }
+            //// Now pData points to your results, size is sampleCount
+            //for (int i = 0; i < sampleCount; ++i)
+            //{
+            //    float4 result = pData[i];
+            //    // Process result as needed
+            //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
+            //}
 
             // Unmap when done
             mbFinishProbeSampling = true;
-            delete[] pData;
+           // delete[] pData;
         }
+
+        if (mbFinishProbeSampling)
+        {
+            // if (mbShowSHGrid)
+            //{
+            mpProbeVisualizePass->setCameraData(
+                mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
+            );
+            mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
+            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+            //}
+        }
+
     }
 }
 
@@ -180,11 +189,11 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-      /*  if (mpScene->getEnvMap() != nullptr)
-        {
-            mpEnvMap = mpScene->getEnvMap();*/
-            //initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
-            //decomposeSH(shCoeffs, mpEnvMap);
+      //if (mpScene->getEnvMap() != nullptr)
+        //{
+            mpEnvMap = mpScene->getEnvMap();
+            initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
+            decomposeSH(shCoeffs, mpEnvMap);
             //reconstructSH(shCoeffs, mpEnvMap, mpDevice);
 
             //mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
@@ -211,9 +220,10 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             resolution.z = (int)ceil(sceneSize.z / spacing.z) + 1;
 
             float3 halfSize = 0.5f*(float3(resolution) - 1.0f) * spacing;
-
+            resolution = int3(1, 1, 1);
             //mProbeGrid.origin = sceneCenter;
-            mProbeGrid.origin = sceneCenter - halfSize;
+            //mProbeGrid.origin = sceneCenter - halfSize;
+            mProbeGrid.origin = sceneCenter;
             mProbeGrid.spacing = spacing;
             mProbeGrid.resolution = resolution;
 
@@ -222,19 +232,31 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            // shCoeffs.clear();
            // shCoeffs.insert(shCoeffs.end(), mProbeGrid.probes.begin(), mProbeGrid.probes.begin() + mProbeGrid.numBasis); //just one env set for envmap render
 
-           //int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-           // mpGridSHBuffer = mpDevice->createStructuredBuffer(
-           //     sizeof(float4),
-           //     mProbeGrid.numBasis * numProbes,
-           //     ResourceBindFlags::ShaderResource,
-           //     MemoryType::DeviceLocal,
-           //    mProbeGrid.probes.data()
-           // );
-           //mpGridSHBuffer->setName("SH Grid Info");
+           int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+            mpGridSHBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4),
+                mProbeGrid.numBasis * numProbes,
+                ResourceBindFlags::ShaderResource,
+                MemoryType::DeviceLocal,
+               mProbeGrid.probes.data()
+            );
+           mpGridSHBuffer->setName("SH Grid Info");
+
+            // float3 probePos = sceneCenter - halfSize;
+            auto dirSamples = generateUniformSphereDirSamples(sampleCount, sceneCenter);
+
+            mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
+                sizeof(ProbeDirSample), sampleCount, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
+            );
+            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
+            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4), sampleCount, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal
+            );
+            mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
 
            //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
-           //mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
-           //mpProbeVisualizePass->setGridData(mProbeGrid);
+           mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+           mpProbeVisualizePass->setGridData(mProbeGrid, dirSamples);
 
         //}
          // program
@@ -288,25 +310,5 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
         mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
         mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
-        auto tmp = mpScene->getMaterialSystem().getMaterials();
-
-        float3 probePos = sceneCenter - halfSize;
-        auto dirSamples = generateUniformSphereDirSamples(sampleCount, probePos);
-
-         mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
-             sizeof(ProbeDirSample),
-             sampleCount,
-             ResourceBindFlags::ShaderResource,
-             MemoryType::DeviceLocal,
-             dirSamples.data()
-         );
-        mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
-        mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-             sizeof(float4),
-             sampleCount,
-             ResourceBindFlags::ShaderResource|ResourceBindFlags::UnorderedAccess,
-             MemoryType::DeviceLocal
-         );
-        mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
     }
 }

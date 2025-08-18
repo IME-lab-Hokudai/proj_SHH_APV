@@ -426,7 +426,9 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, con
         float phi = 2.0f * float(M_PI) * dist(rng);
         float r = sqrtf(1.0f - z * z);
 
-        float3 dir = {r * cosf(phi), r * sinf(phi), z};
+        //float3 dir = {r * cosf(phi), r * sinf(phi), z};
+        // Falcor Y-up: y = z, z = r*sin(phi)
+        float3 dir = {r * cosf(phi), z, r * sinf(phi)}; // x, y, z
         samples.push_back({dir, dOmega, probePos});
     }
     return samples;

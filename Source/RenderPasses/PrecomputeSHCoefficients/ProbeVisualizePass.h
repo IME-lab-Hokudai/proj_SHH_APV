@@ -35,9 +35,10 @@ using namespace Falcor;
 
 class ProbeVisualizePass : public BaseGraphicsPass
 {
-struct ProbeVoxelVertex
+struct ProbeVertex
 {
     float3 worldPos;
+    uint32_t probeSampleIndex;
 };
 
 public:
@@ -48,19 +49,24 @@ public:
     );
     virtual void execute(RenderContext* pRenderContext, const ref<Fbo>& pFbo, bool autoSetVpSc = true) const;
 
-    void setGridData(const ProbeGrid& grid);
+    void setGridData(const ProbeGrid& grid, const std::vector<ProbeDirSample>& dirSamples);
 
     void setCameraData(const float4x4& viewProjMat, const float4x4& viewMat, const float4x4& projMat);
+
+    void setProbeSamplingData(ref<Buffer> dirSamples,  ref<Buffer> samplingBuffer);
 
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
 private:
-    std::vector<ProbeVoxelVertex> generateProbeCube(const float3& center, const float3& spacing);
+    std::vector<ProbeVertex> generateProbeCube(const float3& center, const float3& spacing);
+    std::vector<ProbeVertex> generateProbeSphere(const float3& center, float radius, int segmentsU, int segmentsV, const std::vector<ProbeDirSample>& dirSamples);
     ref<Program> mpProgram;
     ref<RasterizerState> mpRasterState;
     ref<Buffer> pVertexBuffer;
     ref<Vao> pVao;
 
-    std::vector<ProbeVoxelVertex> mVertices;
+    std::vector<ProbeVertex> mVertices;
+
+    uint32_t findClosestDirIndex(const float3& dir, const std::vector<ProbeDirSample>& dirSamples);
 };
