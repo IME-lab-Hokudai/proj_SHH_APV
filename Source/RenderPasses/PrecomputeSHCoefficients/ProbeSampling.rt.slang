@@ -37,8 +37,8 @@ RWStructuredBuffer<float4> gProbeSamplingOutput;
 
 cbuffer PerFrameCB
 {
-    uint sampleIndex;
-    uint sampleCount;
+    uint sampleIndex; // for UniformSampleGenerator. I don't know how to use it properly yet'
+    uint numSamplePerProbe;
 };
 
 struct PrimaryRayData
@@ -200,5 +200,5 @@ void rayGen()
     TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
 
     // Store result in a 2D (flattened) buffer
-    gProbeSamplingOutput[probeIdx * sampleCount + dirIdx] = hitData.color;
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx] = hitData.color;
 }

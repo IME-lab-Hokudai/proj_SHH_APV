@@ -35,7 +35,6 @@ BEGIN_NAMESPACE_FALCOR
 struct ProbeDirSample {
     float3 dir;
     float dOmega;
-    float3 probePos;
 };
 
 END_NAMESPACE_FALCOR

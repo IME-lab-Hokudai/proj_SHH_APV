@@ -72,7 +72,6 @@ private:
 
     ref<FullScreenPass> mpFullScreenPass;
     ref<EnvMap> mpEnvMap;
-    std::vector<float4> shCoeffs;
     bool mbShowReconstructedEnvMap = false;
     bool mbShowSHGrid = false;
     ProbeGrid mProbeGrid;
@@ -88,6 +87,6 @@ private:
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
 
-    bool mbFinishProbeSampling = false;
+    bool mbFinishSHPrecompute = true;
     uint32_t mSampleIndex = 0xdeadbeef;
 };

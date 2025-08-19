@@ -74,7 +74,7 @@ private:
     ref<RasterizerState> mpRasterState;
     ref<Buffer> pVertexBuffer;
     ref<Vao> pVao;
-    uint32_t sampleCount = 0;
+    uint32_t numSamplePerProbe = 0;
     std::vector<ProbeVertex> mVertices;
 
     uint32_t findClosestDirIndex(const float3& dir, const std::vector<ProbeDirSample>& dirSamples);

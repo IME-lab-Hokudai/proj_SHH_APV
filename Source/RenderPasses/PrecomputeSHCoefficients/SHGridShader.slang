@@ -170,7 +170,7 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
         shCoeffs[7] * Y7 +
         shCoeffs[8] * Y8;
 
-    return max(result, float4(0.0)); // Clamp to avoid negative lighting
+    return max(result, float4(0.f)); // Clamp to avoid negative lighting
 }
 
 float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
@@ -201,6 +201,5 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
    float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
 
    float3 litColor = diffuseColor;
-   //litColor = gScene.getLight(0).intensity;
     return float4(litColor,1.0f);
 }

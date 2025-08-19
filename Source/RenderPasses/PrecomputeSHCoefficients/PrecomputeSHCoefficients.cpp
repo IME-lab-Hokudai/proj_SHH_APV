@@ -31,7 +31,7 @@
 #include "Core/Pass/FullScreenPass.h"
 #include "Scene/TriangleMesh.h"
 
-const int sampleCount = 4096;
+const int numSamplePerProbe = 4096;
 
 namespace
 {
@@ -116,34 +116,20 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //envMapShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
         //envMapShaderRootVar["PerFrameCB"]["showReconstructedEnvMap"] = mbShowReconstructedEnvMap;
         //mpFullScreenPass->execute(pRenderContext, mpFbo);
-
-        pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
-
-        auto shShaderRootVar = mpVars->getRootVar();
-        shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-        //shShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
-        shShaderRootVar["gSHCoeffs"] = mpGridSHBuffer;
-        shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
-        shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
-        shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
-        shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
-
-        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
-
-        if (!mbFinishProbeSampling)
+        if (!mbFinishSHPrecompute)
         {
             auto rtVar = mpRtVars->getRootVar();
             rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
             rtVar["gProbePositions"] = mpProbePosBuffer;
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-            rtVar["PerFrameCB"]["sampleCount"] = sampleCount;
+            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
             int numProbe = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(sampleCount, numProbe, 1));
+            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
 
             // Map the buffer for reading
-            //float4* pData = new float4[sampleCount];
-            //mpProbeSamplingResultBuffer->getBlob(pData, 0, sampleCount*sizeof(float4));
+            float4* samplingData = new float4[numSamplePerProbe * numProbe];
+            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe*numProbe*sizeof(float4));
 
             //// Now pData points to your results, size is sampleCount
             //for (int i = 0; i < sampleCount; ++i)
@@ -152,23 +138,63 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             //    // Process result as needed
             //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
             //}
-            mbFinishProbeSampling = true;
-           // delete[] pData;
+
+            mProbeGrid.probesSH.clear();
+            mProbeGrid.probesSH.reserve(mProbeGrid.numBasis*numProbe);
+
+            for (int probeIdx = 0; probeIdx < numProbe; ++probeIdx)
+            {
+                int offset = probeIdx * numSamplePerProbe;
+                std::vector<float4> shCoeffs;
+                std::vector<float4> probeSamples;
+                probeSamples.clear();
+                probeSamples.reserve(numSamplePerProbe);
+                for (int i = 0; i < numSamplePerProbe; i++)
+                {
+                    probeSamples.push_back(samplingData[offset + i]);
+                }
+                decomposeSH(shCoeffs, probeSamples, numSamplePerProbe);
+                mProbeGrid.probesSH.insert(mProbeGrid.probesSH.end(), shCoeffs.begin(), shCoeffs.end());
+            }
+
+            saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");
+
+            mpGridSHBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4),
+                mProbeGrid.numBasis * numProbe,
+                ResourceBindFlags::ShaderResource,
+                MemoryType::DeviceLocal,
+                mProbeGrid.probesSH.data()
+            );
+            mpGridSHBuffer->setName("SH Grid Coeffs");
+
+            mbFinishSHPrecompute = true;
+            delete[] samplingData;
         }
 
         // visualize probes
-        if (mbFinishProbeSampling)
+        if (mbFinishSHPrecompute)
         {
-            // if (mbShowSHGrid)
-            //{
-            mpProbeVisualizePass->setCameraData(
-                mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
-            );
-            mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
-            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-            //}
-        }
+            pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
+             auto shShaderRootVar = mpVars->getRootVar();
+             shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+             shShaderRootVar["gSHCoeffs"] = mpGridSHBuffer;
+             shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
+             shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
+             shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
+             shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
+
+             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+             if (mbShowSHGrid)
+             {
+                mpProbeVisualizePass->setCameraData(
+                    mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
+                );
+                mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
+                mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+             }
+        }
     }
 }
 
@@ -186,134 +212,135 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-      //if (mpScene->getEnvMap() != nullptr)
-        //{
-            mpEnvMap = mpScene->getEnvMap();
-            initSHTable(2, mpEnvMap->getEnvMap()->getWidth(), mpEnvMap->getEnvMap()->getHeight());
-            decomposeSH(shCoeffs, mpEnvMap);
-            //reconstructSH(shCoeffs, mpEnvMap, mpDevice);
-
-            //mProbeGrid.origin = float3(0.0f, 0.0f, 0.0f);
-            //mProbeGrid.resolution = int3(3, 3, 3);
-            //mProbeGrid.spacing = float3(0.5f, 0.5f, 0.5f);
-
-            //createProbeGrid(mProbeGrid, shCoeffs);
-            //saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");
-
-            //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
-
-            AABB sceneBounds = mpScene->getSceneBounds();
-            float3 minBound = sceneBounds.minPoint;
-            float3 maxBound = sceneBounds.maxPoint;
-            float3 sceneCenter = sceneBounds.center();
-            float3 sceneSize = maxBound - minBound;
-
-            // Decide spacing between probes
-            float3 spacing = float3(1.0f, 1.0f, 1.0f); 
-            // Number of probes in each dimension
-            int3 resolution;
-            resolution.x = (int)ceil(sceneSize.x / spacing.x);
-            resolution.y = (int)ceil(sceneSize.y / spacing.y);
-            resolution.z = (int)ceil(sceneSize.z / spacing.z);
-
-            float3 halfSize = 0.5f*(float3(resolution) - 1.0f) * spacing;
-            //resolution = int3(1, 1, 1);
-            mProbeGrid.origin = sceneCenter - halfSize;
-            //mProbeGrid.origin = sceneCenter;
-            mProbeGrid.spacing = spacing;
-            mProbeGrid.resolution = resolution;
-
-            createProbeGrid(mProbeGrid, shCoeffs);
-
-           // shCoeffs.clear();
-           // shCoeffs.insert(shCoeffs.end(), mProbeGrid.probes.begin(), mProbeGrid.probes.begin() + mProbeGrid.numBasis); //just one env set for envmap render
-
-           int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-           mpGridSHBuffer = mpDevice->createStructuredBuffer(
-                sizeof(float4),
-                mProbeGrid.numBasis * numProbes,
-                ResourceBindFlags::ShaderResource,
-                MemoryType::DeviceLocal,
-               mProbeGrid.probesSH.data()
-            );
-           mpGridSHBuffer->setName("SH Grid Coeffs");
-
-           mpProbePosBuffer = mpDevice->createStructuredBuffer(
-               sizeof(float3),
-               numProbes,
-               ResourceBindFlags::ShaderResource,
-               MemoryType::DeviceLocal,
-               mProbeGrid.probesPos.data()
-           );
-           mpProbePosBuffer->setName("probes world pos");
-
-           auto dirSamples = generateUniformSphereDirSamples(sampleCount, sceneCenter);
-
-           mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
-                sizeof(ProbeDirSample), sampleCount, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
+           auto dirSamples = generateUniformSphereDirSamples(numSamplePerProbe);
+            mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
+                sizeof(ProbeDirSample), numSamplePerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
             );
            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
 
-           mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                sizeof(float4), sampleCount*numProbes, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal
-            );
-            mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+           if (!mbFinishSHPrecompute) // config for precomputing SH coefficients
+           {
+               AABB sceneBounds = mpScene->getSceneBounds();
+               float3 minBound = sceneBounds.minPoint;
+               float3 maxBound = sceneBounds.maxPoint;
+               float3 sceneCenter = sceneBounds.center();
+               float3 sceneSize = maxBound - minBound;
+              
+               int order = 2; // SH order
+               initSHTable(order, dirSamples);
+               // Decide spacing between probes
+               float3 spacing = float3(2.f, 2.f, 2.f);
+               // Number of probes in each dimension
+               int3 resolution;
+               resolution.x = (int)ceil(sceneSize.x / spacing.x);
+               resolution.y = (int)ceil(sceneSize.y / spacing.y);
+               resolution.z = (int)ceil(sceneSize.z / spacing.z);
 
-           //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
+               float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
+               // resolution = int3(1, 1, 1);
+               mProbeGrid.origin = sceneCenter - halfSize;
+               mProbeGrid.origin.y += 0.2f;
+
+               // mProbeGrid.origin = sceneCenter;
+               mProbeGrid.spacing = spacing;
+               mProbeGrid.resolution = resolution;
+               mProbeGrid.numBasis = (order + 1) * (order + 1); // number of SH coefficients per probe
+               int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+               computeProbesPos(mProbeGrid);
+
+               mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float4),
+                   numSamplePerProbe * numProbes,
+                   ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                   MemoryType::DeviceLocal
+               );
+               mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+
+               mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, mProbeGrid.probesPos.data()
+               );
+               mpProbePosBuffer->setName("probes world pos");
+
+                       // ray tracing program to sample probes
+               ProgramDesc rtProgDesc;
+               rtProgDesc.addShaderModules(mpScene->getShaderModules());
+               rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+               rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+                                                        // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+                                                        // tracing a shadow ray
+               rtProgDesc.setMaxPayloadSize(24);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+                                                        // should be set as small as possible for maximum performance.
+               rtProgDesc.setMaxAttributeSize(8);
+               // Add global type conformances.
+               rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+
+               ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+               sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+               sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+               // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+               auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+               // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+
+               sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+               //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+
+               mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+               mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+           }
+           else // config to render scene with resulting SH grid stored in file
+           {
+               loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+               int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
+               initSHTable(order, dirSamples);
+               int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+               mpGridSHBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float4),
+                   mProbeGrid.numBasis * numProbes,
+                   ResourceBindFlags::ShaderResource,
+                   MemoryType::DeviceLocal,
+                   mProbeGrid.probesSH.data()
+               );
+               mpGridSHBuffer->setName("SH Grid Coeffs");
+
+               std::vector<float4> reconstructedData;
+               reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
+
+               mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float4),
+                   numSamplePerProbe * numProbes,
+                   ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                   MemoryType::DeviceLocal,
+                   reconstructedData.data()
+               );
+               mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+           }
+           // program
+           ProgramDesc desc;
+           desc.addShaderModules(mpScene->getShaderModules());
+           desc.addShaderLibrary(kShaderFile)
+               .vsEntry("vsMain")  // Vertex shader entry point
+               .psEntry("psMain"); // Pixel shader entry point;
+           mpProgram = Program::create(mpDevice, desc, mpScene->getSceneDefines());
+           mpVars = ProgramVars::create(mpDevice, mpProgram->getReflector());
+
+           // rasterizer state
+           RasterizerState::Desc rasterDesc;
+           rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
+           rasterDesc.setCullMode(RasterizerState::CullMode::None);
+           rasterDesc.setDepthBias(100000, 1.0f);
+           mpRasterState = RasterizerState::create(rasterDesc);
+
+           // default depth stencil state
+           DepthStencilState::Desc dsDesc;
+           ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
+
+           mpGraphicsState = GraphicsState::create(mpDevice);
+           mpGraphicsState->setProgram(mpProgram);
+           mpGraphicsState->setRasterizerState(mpRasterState);
+           mpGraphicsState->setFbo(mpFbo);
+           mpGraphicsState->setDepthStencilState(pDsState);
+            // mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
            mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
            mpProbeVisualizePass->setGridData(mProbeGrid, dirSamples);
-
-        //}
-         // program
-        ProgramDesc desc;
-        desc.addShaderModules(mpScene->getShaderModules());
-        desc.addShaderLibrary(kShaderFile)
-            .vsEntry("vsMain")  // Vertex shader entry point
-            .psEntry("psMain"); // Pixel shader entry point;
-        mpProgram = Program::create(mpDevice, desc, mpScene->getSceneDefines());
-        mpVars = ProgramVars::create(mpDevice, mpProgram->getReflector());
-
-        // rasterizer state
-        RasterizerState::Desc rasterDesc;
-        rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
-        rasterDesc.setCullMode(RasterizerState::CullMode::None);
-        rasterDesc.setDepthBias(100000, 1.0f);
-        mpRasterState = RasterizerState::create(rasterDesc);
-
-        // default depth stencil state
-        DepthStencilState::Desc dsDesc;
-        ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
-
-        mpGraphicsState = GraphicsState::create(mpDevice);
-        mpGraphicsState->setProgram(mpProgram);
-        mpGraphicsState->setRasterizerState(mpRasterState);
-        mpGraphicsState->setFbo(mpFbo);
-        mpGraphicsState->setDepthStencilState(pDsState);
-
-        // ray tracing program to sample probes
-        ProgramDesc rtProgDesc;
-        rtProgDesc.addShaderModules(mpScene->getShaderModules());
-        rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-        rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-                                                 // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-                                                 // tracing a shadow ray
-        rtProgDesc.setMaxPayloadSize(24);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-                                                 // should be set as small as possible for maximum performance.
-        rtProgDesc.setMaxAttributeSize(8);
-        // Add global type conformances.
-        rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
-
-        ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-        sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-        sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-       // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-        auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-       // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
-
-        sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-      //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
-
-        mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
-        mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
     }
 }

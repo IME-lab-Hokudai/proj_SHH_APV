@@ -7,7 +7,7 @@
 #include <random>
 
 float*  dOmega;
-float*  envSHTable;
+float*  SHBasisTable;
 int shOrder = -1;
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -119,7 +119,7 @@ void initSHTable(int sh_order, int width, int height)
     SphericalHarmonics sh(sh_order);
     int num_basis = sh.getNumBasis();
     // Allocate SH basis table for each pixel (flattened 3D array: [basis][width][height])
-    envSHTable = new float[num_basis * width * height];
+    SHBasisTable = new float[num_basis * width * height];
 
     // Preallocate vector for SH basis
     vector<double> y(num_basis);
@@ -141,12 +141,112 @@ void initSHTable(int sh_order, int width, int height)
             //storing all Ylm for this direction (i.e 9 Y if l = 2)
             for (int i = 0; i < num_basis; ++i)
             {
-                envSHTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, width , height)] = y[i];
+                SHBasisTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, width , height)] = y[i];
             }
         }
     }
     //float Y00 = envSHTable[THREE_D_TO_ONE_D(0, width / 2, height / 2, width, height)];
     //std::cout << "Y00 = " << Y00 << std::endl;
+}
+
+//data layout
+//sample0: b0 b1 b2 ... bN
+//sample1 : b0 b1 b2... bN
+//sample2 : b0 b1 b2... bN
+//--> indexing scheme SHBasisTable[num_basis * sampleIdx + basisIdx]
+void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
+{
+    shOrder = sh_order;
+    SphericalHarmonics sh(sh_order);
+    int num_basis = sh.getNumBasis();
+    int numSamplePerProbe = (int)dirSamples.size();
+
+    // Allocate SH basis table for each direction (flattened 2D array: [basis][sampleIdx])
+    if (SHBasisTable)
+        delete[] SHBasisTable;
+    SHBasisTable = new float[num_basis * numSamplePerProbe];
+
+    // Preallocate vector for SH basis
+    std::vector<double> y(num_basis);
+
+    for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
+    {
+        const float3& dir = dirSamples[sampleIdx].dir;
+
+        // Convert to spherical coordinates
+        double theta = acos(clamp(dir.y, -1.0f, 1.0f)); // y_ is cos(theta)
+        double phi = atan2(dir.z, dir.x);                         // Note: atan2(z, x) for Falcor's Y-up
+
+        // Compute SH basis for this direction
+        sh.calcSHBasis(y, cos(theta), phi);
+
+        for (int basisIdx = 0; basisIdx < num_basis; ++basisIdx)
+        {
+            //SHBasisTable[basisIdx * numSamplePerProbe + sampleIdx] = (float)y[basisIdx];
+            SHBasisTable[num_basis * sampleIdx + basisIdx] = (float)y[basisIdx];
+        }
+    }
+}
+
+void decomposeSH(
+    std::vector<float4>& out,                // Output SH coefficients (num_basis)
+    const std::vector<float4>& probeSamples, // Probe sampling results, size = numSamples
+    int numSamplePerProbe
+)
+{
+    if (shOrder == -1 || SHBasisTable == nullptr)
+    {
+        logError("call initSHTable before decomposeSH!");
+        return;
+    }
+
+    int num_basis = (shOrder + 1) * (shOrder + 1);
+    out.clear();
+    out.resize(num_basis);
+
+    float weight = 4.0f * float(M_PI) / float(numSamplePerProbe); //because uniform sampling
+
+    // For each SH basis
+    for (int basisIdx = 0; basisIdx < num_basis; ++basisIdx)
+    {
+        double r = 0.0, g = 0.0, b = 0.0, a = 0.0;
+
+        // For each direction sample
+        for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
+        {
+            const float4& sample = probeSamples[sampleIdx];
+            float shY = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
+
+            r += (double)sample.x * shY * weight;
+            g += (double)sample.y * shY * weight;
+            b += (double)sample.z * shY * weight;
+            a += (double)sample.w * shY * weight;
+        }
+        out[basisIdx] = float4((float)r, (float)g, (float)b, (float)a);
+    }
+}
+
+// irr = sumlm(coefflm* Ylm)
+void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4>& reconstructedData)
+{
+    int num_basis = grid.numBasis;
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+
+    reconstructedData.clear();
+    reconstructedData.resize(numProbes * numSamplePerProbe);
+
+    for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+    {
+        for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
+        {
+            float4 irr = float4(0, 0, 0, 0);
+            for (int basisIdx = 0; basisIdx < num_basis; ++basisIdx)
+            {
+                irr += grid.probesSH[probeIdx * num_basis + basisIdx] * SHBasisTable[num_basis * sampleIdx + basisIdx];
+            }
+            reconstructedData[probeIdx * numSamplePerProbe + sampleIdx] = irr;
+        }
+    }
 }
 
 void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
@@ -184,7 +284,7 @@ void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
                 float4 envMapValue = data[TWO_D_TO_ONE_D(x,y,width)]; 
 
                 // Lookup SH basis value at (l, x, y)
-                float yd = envSHTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
+                float yd = SHBasisTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
 
                //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
                 float delta = dOmega[TWO_D_TO_ONE_D(x, y, width)]; 
@@ -235,7 +335,7 @@ void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& env
             float4 tmp = float4 (0,0,0,0);
             for (int i = 0; i < num_basis; ++i)
             {
-                tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
+                tmp += sh_coeff[i] * SHBasisTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
             }
             float3 color = float3(tmp[0], tmp[1], tmp[2]);
             reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 0] = color[0];
@@ -278,7 +378,7 @@ float4* TranposeData(float4* data, int width, int height)
     return tranposedData;
 }
 
-void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
+void computeProbesPos(ProbeGrid& grid)
 {
     const int3 res = grid.resolution;
     const float3 origin = grid.origin;
@@ -290,9 +390,9 @@ void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
     int height = res.y;
     int depth = res.z;
 
-    int num_basis = (shOrder + 1) * (shOrder + 1);
+    int num_basis = grid.numBasis;
     grid.probesSH.resize(numProbes * num_basis);
-    grid.numBasis = num_basis;
+    
     grid.probesPos.reserve(numProbes);
     for (int probeZ = 0; probeZ < depth; ++probeZ)
     {
@@ -304,14 +404,6 @@ void createProbeGrid(ProbeGrid& grid, const std::vector<float4>& sh_coeff)
                 float3 probePos = {origin.x + probeX * spacing.x, origin.y + probeY * spacing.y, origin.z + probeZ * spacing.z};
                 grid.probesPos.push_back(probePos);
             }
-        }
-    }
-
-    for (int i = 0; i < numProbes;  i++)
-    {
-        for (int nb = 0; nb < num_basis; nb++)
-        {
-            grid.probesSH[i * num_basis + nb] = sh_coeff[nb];
         }
     }
 }
@@ -406,10 +498,11 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
         std::getline(file, line); // empty line
     }
 
+    computeProbesPos(grid);
     return grid.probesSH.size() == numProbes;
 }
 
-std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, const float3& probePos)
+std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
 {
     std::vector<ProbeDirSample> samples;
     samples.reserve(sampleCount);
@@ -428,7 +521,7 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount, con
         //float3 dir = {r * cosf(phi), r * sinf(phi), z};
         // Falcor Y-up: y = z, z = r*sin(phi)
         float3 dir = {r * cosf(phi), z, r * sinf(phi)}; // x, y, z
-        samples.push_back({dir, dOmega, probePos});
+        samples.push_back({dir, dOmega});
     }
     return samples;
 }
