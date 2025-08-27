@@ -52,7 +52,13 @@ float3 NormalSampleToWorldSpace(float3 normalMapSample, float3 unitNormalW, floa
     return bumpedNormalW;
 }
 
-//3D to 1D index
+// 3D to 1D index for the probe grid corresponding to cpu code
+//int width = res.x;
+//int height = res.y;
+//int depth = res.z;
+//for (int probeZ = 0; probeZ < depth; ++probeZ)
+//    for (int probeY = 0; probeY < height; ++probeY)
+ //       for (int probeX = 0; probeX < width; ++probeX)
 int getProbeIndex(int3 coord)
 {
     int width = resolution.x;

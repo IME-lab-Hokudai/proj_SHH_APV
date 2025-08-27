@@ -29,6 +29,10 @@
 
 #include "envMap_SH.h"
 #include "Core/Pass/FullScreenPass.h"
+#include "Rendering/Lights/EmissivePowerSampler.h"
+#include "Rendering/Lights/EmissiveUniformSampler.h"
+#include "Rendering/Lights/LightBVHSampler.h"
+#include "Scene/SceneBuilder.h"
 #include "Scene/TriangleMesh.h"
 
 const int numSamplePerProbe = 4096;
@@ -121,6 +125,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             auto rtVar = mpRtVars->getRootVar();
             rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
             rtVar["gProbePositions"] = mpProbePosBuffer;
+
+            if (mpEmissiveSampler)
+                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
@@ -157,7 +165,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mProbeGrid.probesSH.insert(mProbeGrid.probesSH.end(), shCoeffs.begin(), shCoeffs.end());
             }
 
-            saveProbeGridToFile(mProbeGrid, "ProbeGrid.txt");
+            saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
 
             mpGridSHBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
@@ -229,17 +237,23 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                int order = 2; // SH order
                initSHTable(order, dirSamples);
                // Decide spacing between probes
-               float3 spacing = float3(2.f, 2.f, 2.f);
+               //float3 spacing = float3(2.f, 2.f, 2.f);
+               //float3 spacing = float3(2.f, 2.f, 2.f);
+               float3 spacing = float3(.2f, .2f, .2f);
+               //float3 spacing = float3(.3f, .3f, .3f);
+
                // Number of probes in each dimension
                int3 resolution;
                resolution.x = (int)ceil(sceneSize.x / spacing.x);
                resolution.y = (int)ceil(sceneSize.y / spacing.y);
                resolution.z = (int)ceil(sceneSize.z / spacing.z);
 
+              // resolution = int3(1, 1, 1); // for testing
+
                float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
                // resolution = int3(1, 1, 1);
                mProbeGrid.origin = sceneCenter - halfSize;
-               mProbeGrid.origin.y += 0.2f;
+               mProbeGrid.origin += 0.025f;
 
                // mProbeGrid.origin = sceneCenter;
                mProbeGrid.spacing = spacing;
@@ -284,12 +298,55 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
                //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-               mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+               const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK wierd design that light collection is created upon first call to this.
+               if (mpScene->useEmissiveLights())
+               {
+                   if (!mpEmissiveSampler)
+                   {
+                       FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+                       FALCOR_ASSERT(!mpEmissiveSampler);
+
+                       switch (mEmissiveSamplerType)
+                       {
+                           case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+                               mpEmissiveSampler =
+                                   std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                               break;
+                           case EmissiveLightSamplerType::LightBVH:
+                               mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+                                   pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+                               );
+                               break;
+                           case EmissiveLightSamplerType::Power:
+                               mpEmissiveSampler =
+                                   std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                               break;
+                           default:
+                               FALCOR_THROW("Unknown emissive light sampler type");
+                       }
+                   }
+               }
+
+              mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+              
+               if (mpEmissiveSampler)
+               {
+                   auto defines = mpEmissiveSampler->getDefines();
+                   mpRtProgram->addDefines(defines);
+               }
+
+               DefineList lightRelatedDefines;
+               lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+               lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+
+               mpRtProgram->addDefines(lightRelatedDefines);
+
                mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
            }
            else // config to render scene with resulting SH grid stored in file
            {
-               loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+               //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+               loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
                int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
                initSHTable(order, dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;

@@ -82,8 +82,8 @@ void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<Pr
     int depth = res.z;
 
     // Sphere parameters
-    //float sphereRadius = 0.3f * std::min({grid.spacing.x, grid.spacing.y, grid.spacing.z});
-    float sphereRadius = 0.3f;
+    float sphereRadius = 0.15f * std::min({grid.spacing.x, grid.spacing.y, grid.spacing.z});
+    //float sphereRadius = 0.3f;
     int segmentsU = 64; // longitude
     int segmentsV = 32;  // latitude
     uint32_t probeIndexCount = 0;

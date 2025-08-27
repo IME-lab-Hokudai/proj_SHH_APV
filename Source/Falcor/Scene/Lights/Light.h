@@ -343,6 +343,7 @@ namespace Falcor
 
     /** Rectangular area light source.
     */
+//REMARK: Rectangle light
     class FALCOR_API RectLight : public AnalyticAreaLight
     {
     public:

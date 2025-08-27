@@ -575,6 +575,7 @@ struct PathTracer
         return any(ls.Li > 0.f);
     }
 
+    // REMARK : generate sample for emissive lights
     /** Generates a light sample on the emissive geometry.
         \param[in] vertex Path vertex.
         \param[in] upperHemisphere True if only upper hemisphere should be considered.
@@ -814,6 +815,7 @@ struct PathTracer
         }
     }
 
+    // REMARK : handle ray hit
     /** Handle the case when a scatter ray hits a surface.
         After handling the hit, a new scatter ray is generated or the path is terminated.
         \param[in,out] path The path state.

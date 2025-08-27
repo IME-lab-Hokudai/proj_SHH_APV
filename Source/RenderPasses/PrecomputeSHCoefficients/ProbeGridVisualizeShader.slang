@@ -32,7 +32,7 @@ VSOut vsMain(VSIn vIn)
     vOut.probeIdx = vIn.probeIdx;
     uint flatIdx = vIn.probeIdx * numSamplePerProbe + vIn.probeDirSampleIndex;
     //vOut.irradiance = abs(gProbeSamplingResults[flatIdx]);
-    vOut.irradiance = abs(gProbeSamplingResults[flatIdx]);
+    vOut.irradiance = gProbeSamplingResults[flatIdx];
     return vOut;
 }
 

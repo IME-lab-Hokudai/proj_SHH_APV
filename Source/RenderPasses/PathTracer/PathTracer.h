@@ -129,7 +129,7 @@ private:
         bool        useMIS = true;                              ///< Use multiple importance sampling (MIS) when NEE is enabled.
         MISHeuristic misHeuristic = MISHeuristic::Balance;      ///< MIS heuristic.
         float       misPowerExponent = 2.f;                     ///< MIS exponent for the power heuristic. This is only used when 'PowerExp' is chosen.
-        EmissiveLightSamplerType emissiveSampler = EmissiveLightSamplerType::LightBVH;  ///< Emissive light sampler to use for NEE.
+        EmissiveLightSamplerType emissiveSampler = EmissiveLightSamplerType::Uniform;  ///< Emissive light sampler to use for NEE.
         bool        useRTXDI = false;                           ///< Use RTXDI for direct illumination.
 
         // Material parameters

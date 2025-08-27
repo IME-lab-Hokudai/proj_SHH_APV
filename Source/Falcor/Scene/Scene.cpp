@@ -1619,7 +1619,7 @@ namespace Falcor
                 // TODO: This is slow since the buffer is not CPU writable. Copy into CPU buffer and upload once instead.
                 mpLightsBuffer->setElement(activeLightIndex, light->getData());
 
-                //I use a quadmesh representing the rectangle light
+                //REMARK I use a quadmesh representing the rectangle light
                 //here I update the quadmesh transformation according to light transformation
                 if (light->getType() == LightType::Rect)
                 {
