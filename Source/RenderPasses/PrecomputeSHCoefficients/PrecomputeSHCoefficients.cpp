@@ -166,6 +166,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             }
 
             saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
+            //saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
 
             mpGridSHBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
@@ -239,7 +240,10 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                // Decide spacing between probes
                //float3 spacing = float3(2.f, 2.f, 2.f);
                //float3 spacing = float3(2.f, 2.f, 2.f);
-               float3 spacing = float3(.2f, .2f, .2f);
+               //float3 spacing = float3(1.5f, 1.5f, 1.5f);
+               //float3 spacing = float3(1.f, 1.f, 1.f);
+               //float3 spacing = float3(.2f, .2f, .2f);
+               float3 spacing = float3(.15f, .15f, .15f);
                //float3 spacing = float3(.3f, .3f, .3f);
 
                // Number of probes in each dimension
@@ -347,6 +351,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            {
                //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
                loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               //loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
                int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
                initSHTable(order, dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;

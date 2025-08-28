@@ -2,7 +2,6 @@ import Scene.Raster; // Imports defaultVS.
 
 SamplerState gLinearSampler;
 #define MAX_SH_BASIS 16
-
 // Indexing: probeIndex * numBasis + basisIndex
 StructuredBuffer<float4> gSHCoeffs;
 
@@ -204,8 +203,8 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
         normalSampleW = normalSample;
   }
 
-   float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
-
-   float3 litColor = diffuseColor;
+  float3 diffuseColor = baseColorSample.rgb * abs(vsOut.irradiance.rgb) / 3.14159265;
+  float3 emissiveColor = emissiveSample.rgb;
+   float3 litColor = diffuseColor + emissiveColor;
     return float4(litColor,1.0f);
 }

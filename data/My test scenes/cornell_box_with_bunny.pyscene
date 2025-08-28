@@ -29,30 +29,39 @@
 # Create materials
 
 light = StandardMaterial('Light')
-light.emissiveColor = float3(17, 12, 4)
+#light.emissiveColor = float3(17, 12, 4)
+light.emissiveColor = float3(17, 17, 17)
 light.emissiveFactor = 5
 
+#gray
 floor = StandardMaterial('Floor')
 floor.baseColor = float4(0.725, 0.71, 0.68, 1.0)
-floor.roughness = 0.5
+#floor.roughness = 0.5
+floor.roughness = 1.0
 
 backWall = StandardMaterial('Back Wall')
-#backWall.baseColor = float4(0.725, 0.71, 0.68, 1.0)
-backWall.baseColor = float4(0.125, 0.71, 0.68, 1.0)
-backWall.roughness = 0.5
+backWall.baseColor = float4(0.725, 0.71, 0.68, 1.0)
+#backWall.baseColor = float4(0.125, 0.71, 0.68, 1.0)
+#backWall.roughness = 0.5
+backWall.roughness = 1.0
 
+#gray, same as floor
 ceiling = StandardMaterial('Ceiling')
-ceiling.baseColor = float4(0.725, 0.171, 0.68, 1.0)
-ceiling.roughness = 0.5
+floor.baseColor = float4(0.725, 0.71, 0.68, 1.0)
+#ceiling.roughness = 0.5
+ceiling.roughness = 1.0
 
+#red
 leftWall = StandardMaterial('Left Wall')
 leftWall.baseColor = float4(0.63, 0.065, 0.05, 1.0)
-leftWall.roughness = 0.5
+#leftWall.roughness = 0.5
+leftWall.roughness = 1.0
 
+#green
 rightWall = StandardMaterial('Right Wall')
 rightWall.baseColor = float4(0.14, 0.45, 0.091, 1.0)
-rightWall.roughness = 0.5
-
+#rightWall.roughness = 0.5
+rightWall.roughness = 1.0
 bunny = StandardMaterial('Bunny')
 bunny.baseColor = float4(0.5, 0.5, 0.5, 1.0)
 bunny.roughness = 0.5
@@ -100,8 +109,9 @@ sceneBuilder.addMeshInstance(
 #    sceneBuilder.addTriangleMesh(bunnyMesh, bunny)
 #)
 
+sphereNodeID = sceneBuilder.addNode('Sphere', Transform(translation=float3(0.0, 0.2, 0), rotationEuler=float3(0, 0, 0), scaling=0.1))
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('Sphere', Transform(translation=float3(0.0, 0.2, 0), rotationEuler=float3(0, 0, 0), scaling=0.1)),
+    sphereNodeID,
     sceneBuilder.addTriangleMesh(sphereMesh, bunny)
 )
 
@@ -109,6 +119,14 @@ sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Light', Transform(scaling=0.15, translation=float3(0, 0.549, 0), rotationEulerDeg=float3(180, 0, 0))),
     sceneBuilder.addTriangleMesh(quadMesh, light)
 )
+
+anim = Animation('sphereAnim',sphereNodeID,16.0)
+anim.addKeyframe(0.0, Transform(translation=float3(-0.15, 0.25, 0), scaling=0.1))
+anim.addKeyframe(4.0, Transform(translation=float3(0.15, 0.25, 0), scaling=0.1))
+anim.addKeyframe(8.0, Transform(translation=float3(0.15, 0.25, 0.2), scaling=0.1))
+anim.addKeyframe(12.0, Transform(translation=float3(-0.15, 0.25, 0.2), scaling=0.1))
+anim.addKeyframe(16.0, Transform(translation=float3(-0.15, 0.25, 0), scaling=0.1))
+sceneBuilder.addAnimation(anim)
 
 # Create camera
 camera = Camera()
