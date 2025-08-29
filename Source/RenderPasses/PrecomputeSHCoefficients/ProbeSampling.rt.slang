@@ -218,26 +218,26 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
          }
     }
 
-    //if(kUseEmissiveLights){
-    //    const int numEmissiveSamplesPerTriangle = 4; // hard coded for now
-    //    int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
-    //    const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount)); // at least 1 sample per triangle
-    //    float3 accum = float3(0.0f);
-    //    for (int s = 0; s < numEmissiveSamples; ++s)
-    //    {
-    //        // Prepare a PathVertex for the current shading point
-    //        PathVertex vertex = PathVertex(0, sd.posW, sd.faceN, sd.frontFacing);
+    if(kUseEmissiveLights){
+        const int numEmissiveSamplesPerTriangle = 4; // hard coded for now
+        int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
+        const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount)); // at least 1 sample per triangle
+        float3 accum = float3(0.0f);
+        for (int s = 0; s < numEmissiveSamples; ++s)
+        {
+            // Prepare a PathVertex for the current shading point
+            PathVertex vertex = PathVertex(0, sd.posW, sd.faceN, sd.frontFacing);
 
-    //        LightSample ls;
-    //        // Sample the upper hemisphere (typical for diffuse/irradiance)
-    //        if (generateEmissiveSample(vertex, true, sg, ls) && ls.pdf > 0.0f)
-    //        {
-    //            float3 bsdf = mi.eval(sd, ls.dir, sg);
-    //            accum += bsdf * ls.Li ;
-    //        }
-    //    }
-    //    color += accum / float(numEmissiveSamples);
-    //}
+            LightSample ls;
+            // Sample the upper hemisphere (typical for diffuse/irradiance)
+            if (generateEmissiveSample(vertex, true, sg, ls) && ls.pdf > 0.0f)
+            {
+                float3 bsdf = mi.eval(sd, ls.dir, sg);
+                accum += bsdf * ls.Li ;
+            }
+        }
+        color += accum / float(numEmissiveSamples);
+    }
    
     hitData.color = float4(color, 1.0f);
     hitData.hitT = hitT;
