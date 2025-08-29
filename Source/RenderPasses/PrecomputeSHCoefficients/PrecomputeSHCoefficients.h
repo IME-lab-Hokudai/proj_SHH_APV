@@ -90,6 +90,7 @@ private:
     ref<RtProgramVars> mpRtVars;
 
     bool mbFinishSHPrecompute = true;
+    std::string sceneName = "arcade";
     uint32_t mSampleIndex = 0xdeadbeef;
 
     // emissive light sampler

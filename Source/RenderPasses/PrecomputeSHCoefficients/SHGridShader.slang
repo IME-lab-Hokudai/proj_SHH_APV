@@ -1,7 +1,7 @@
 import Scene.Raster; // Imports defaultVS.
 
 SamplerState gLinearSampler;
-#define MAX_SH_BASIS 16
+#define MAX_SH_BASIS 9
 // Indexing: probeIndex * numBasis + basisIndex
 StructuredBuffer<float4> gSHCoeffs;
 
@@ -23,9 +23,10 @@ struct MyVSOut : VSOut
 MyVSOut vsMain(VSIn vIn)
 {
     MyVSOut vsOut = (MyVSOut)defaultVS(vIn);
-    float4 shCoeffs[MAX_SH_BASIS];
-    sampleSHAtPosition(vsOut.posW, shCoeffs);
-    vsOut.irradiance = evaluateIrradiance(vsOut.normalW, shCoeffs);
+   // float4 shCoeffs[MAX_SH_BASIS];
+    //ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
+    //sampleSHAtPosition(vsOut.posW, shCoeffs);
+    //vsOut.irradiance = evaluateIrradiance(normalize(vsOut.normalW), shCoeffs);
     
     return vsOut;
 }
@@ -162,18 +163,18 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
     float Y6 = 0.315392 * (3.0 * z * z - 1.0);
     float Y7 = 1.092548 * x * z;
     float Y8 = 0.546274 * (x * x - y * y);
-
+    float A[3] = { 3.141593, 2.094395, 0.785398 }; // Cosine lobe coefficients
     // Dot product: coeffs · basis
-    float4 result = 
-        shCoeffs[0] * Y0 +
-        shCoeffs[1] * Y1 +
-        shCoeffs[2] * Y2 +
-        shCoeffs[3] * Y3 +
-        shCoeffs[4] * Y4 +
-        shCoeffs[5] * Y5 +
-        shCoeffs[6] * Y6 +
-        shCoeffs[7] * Y7 +
-        shCoeffs[8] * Y8;
+float4 result = 
+        shCoeffs[0] * Y0 * A[0] +
+        shCoeffs[1] * Y1 * A[1] +
+        shCoeffs[2] * Y2 * A[1] +
+        shCoeffs[3] * Y3 * A[1] +
+        shCoeffs[4] * Y4 * A[2] +
+        shCoeffs[5] * Y5 * A[2] +
+        shCoeffs[6] * Y6 * A[2] +
+        shCoeffs[7] * Y7 * A[2] +
+        shCoeffs[8] * Y8 * A[2];
 
     return max(result, float4(0.f)); // Clamp to avoid negative lighting
 }
@@ -203,8 +204,17 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
         normalSampleW = normalSample;
   }
 
-  float3 diffuseColor = baseColorSample.rgb * abs(vsOut.irradiance.rgb) / 3.14159265;
+  float4 shCoeffs[MAX_SH_BASIS];
+  sampleSHAtPosition(shadingData.posW, shCoeffs);
+  vsOut.irradiance = evaluateIrradiance(normalize(shadingData.faceN), shCoeffs);
+
+  //float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb / 3.14159265;
+  float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
   float3 emissiveColor = emissiveSample.rgb;
-   float3 litColor = diffuseColor + emissiveColor;
+   ///float3 litColor = diffuseColor + emissiveColor;
+   float3 litColor = diffuseColor;
+  // float3 litColor = normalSampleW;
+  // float3 litColor = shadingData.faceN;
+  //float3 litColor = vsOut.irradiance.rgb;
     return float4(litColor,1.0f);
 }

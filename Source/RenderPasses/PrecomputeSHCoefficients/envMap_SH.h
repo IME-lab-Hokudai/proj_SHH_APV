@@ -16,9 +16,9 @@ struct ProbeGrid
 };
 
 //for lat-long env map
-void initSHTable(int sh_order, int width, int height);
-void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap);
-void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice);
+//void initSHTable(int sh_order, int width, int height);
+//void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap);
+//void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice);
 
 // for probe sampling using ray tracing
 void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples);

@@ -86,7 +86,7 @@ RenderPassReflection PrecomputeSHCoefficients::reflect(const CompileData& compil
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4);
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA16Float);
     // Add the required depth output. This always exists.
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
@@ -165,8 +165,16 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mProbeGrid.probesSH.insert(mProbeGrid.probesSH.end(), shCoeffs.begin(), shCoeffs.end());
             }
 
-            saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
-            //saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
+            if (sceneName == "arcade")
+            {
+                saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
+            }
+            else
+            {
+                 saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
+            }
+            
+            
 
             mpGridSHBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
@@ -241,11 +249,19 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                //float3 spacing = float3(2.f, 2.f, 2.f);
                //float3 spacing = float3(2.f, 2.f, 2.f);
                //float3 spacing = float3(1.5f, 1.5f, 1.5f);
-               //float3 spacing = float3(1.f, 1.f, 1.f);
+               float3 spacing = float3(1.f, 1.f, 1.f);
                //float3 spacing = float3(.2f, .2f, .2f);
-               float3 spacing = float3(.15f, .15f, .15f);
+               //float3 spacing = float3(.15f, .15f, .15f);
                //float3 spacing = float3(.3f, .3f, .3f);
 
+               if (sceneName == "arcade")
+               {
+                   spacing = float3(1.f, 1.f, 1.f);
+                }
+                else
+                {
+                    spacing = float3(.15f, .15f, .15f);
+               }
                // Number of probes in each dimension
                int3 resolution;
                resolution.x = (int)ceil(sceneSize.x / spacing.x);
@@ -350,8 +366,15 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            else // config to render scene with resulting SH grid stored in file
            {
                //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
-               loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
-               //loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
+               //loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               if (sceneName == "arcade")
+               {
+                   loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
+               }
+               else
+               {
+                   loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               }
                int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
                initSHTable(order, dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;

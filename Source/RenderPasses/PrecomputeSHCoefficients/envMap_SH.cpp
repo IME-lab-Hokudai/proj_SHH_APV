@@ -84,70 +84,70 @@ int shOrder = -1;
 //}
 
 //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
-void calcDeltaFormFactorEquirect(int width, int height)
-{
-    dOmega = new float[width * height];
-    double dTheta = M_PI / height;
-    double dPhi = 2.0 * M_PI / width;
-
-    for (int y = 0; y < height; ++y)
-    {
-        // theta from 0 to pi
-        double theta = M_PI * (y + 0.5) / height;
-        double sinTheta = sin(theta);
-
-        for (int x = 0; x < width; ++x)
-        {
-            dOmega[TWO_D_TO_ONE_D(x,y,width)] = (float)sinTheta * dTheta * dPhi;
-        }
-    }
-
-    //double sum = 0.0;
-    //for (int y = 0; y < height; ++y)
-    //    for (int x = 0; x < width; ++x)
-    //        sum += dOmega[y * width + x];
-
-    //std::cout << "Total Omega = " << sum << std::endl; // Should be ≈ 4π
-}
+//void calcDeltaFormFactorEquirect(int width, int height)
+//{
+//    dOmega = new float[width * height];
+//    double dTheta = M_PI / height;
+//    double dPhi = 2.0 * M_PI / width;
+//
+//    for (int y = 0; y < height; ++y)
+//    {
+//        // theta from 0 to pi
+//        double theta = M_PI * (y + 0.5) / height;
+//        double sinTheta = sin(theta);
+//
+//        for (int x = 0; x < width; ++x)
+//        {
+//            dOmega[TWO_D_TO_ONE_D(x,y,width)] = (float)sinTheta * dTheta * dPhi;
+//        }
+//    }
+//
+//    //double sum = 0.0;
+//    //for (int y = 0; y < height; ++y)
+//    //    for (int x = 0; x < width; ++x)
+//    //        sum += dOmega[y * width + x];
+//
+//    //std::cout << "Total Omega = " << sum << std::endl; // Should be ≈ 4π
+//}
 
 //this function precalculate value of all SH basis in all direction and store in SHTableLookup 
 //then when we precompute coefficients we look up from SHTableLookup to calculate Coeff = dOmega * env_map * Y
-void initSHTable(int sh_order, int width, int height)
-{
-    calcDeltaFormFactorEquirect(width, height);
-    shOrder = sh_order;
-    SphericalHarmonics sh(sh_order);
-    int num_basis = sh.getNumBasis();
-    // Allocate SH basis table for each pixel (flattened 3D array: [basis][width][height])
-    SHBasisTable = new float[num_basis * width * height];
-
-    // Preallocate vector for SH basis
-    vector<double> y(num_basis);
-    for (int y_idx = 0; y_idx < height; ++y_idx)
-    {
-        // θ = latitude angle from 0 (top) to π (bottom)
-        double v = (y_idx + 0.5) / height;
-        double theta = v * M_PI;
-
-        for (int x_idx = 0; x_idx < width; ++x_idx)
-        {
-            // φ = longitude angle from 0 to 2π
-            double u = (x_idx + 0.5) / width;
-            double phi = u * 2.0 * M_PI;
-
-            // Compute SH basis at (θ, φ)
-            sh.calcSHBasis(y, cos(theta), phi); // ct = cos(θ)
-
-            //storing all Ylm for this direction (i.e 9 Y if l = 2)
-            for (int i = 0; i < num_basis; ++i)
-            {
-                SHBasisTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, width , height)] = y[i];
-            }
-        }
-    }
-    //float Y00 = envSHTable[THREE_D_TO_ONE_D(0, width / 2, height / 2, width, height)];
-    //std::cout << "Y00 = " << Y00 << std::endl;
-}
+//void initSHTable(int sh_order, int width, int height)
+//{
+//    calcDeltaFormFactorEquirect(width, height);
+//    shOrder = sh_order;
+//    SphericalHarmonics sh(sh_order);
+//    int num_basis = sh.getNumBasis();
+//    // Allocate SH basis table for each pixel (flattened 3D array: [basis][width][height])
+//    SHBasisTable = new float[num_basis * width * height];
+//
+//    // Preallocate vector for SH basis
+//    vector<double> y(num_basis);
+//    for (int y_idx = 0; y_idx < height; ++y_idx)
+//    {
+//        // θ = latitude angle from 0 (top) to π (bottom)
+//        double v = (y_idx + 0.5) / height;
+//        double theta = v * M_PI;
+//
+//        for (int x_idx = 0; x_idx < width; ++x_idx)
+//        {
+//            // φ = longitude angle from 0 to 2π
+//            double u = (x_idx + 0.5) / width;
+//            double phi = u * 2.0 * M_PI;
+//
+//            // Compute SH basis at (θ, φ)
+//            sh.calcSHBasis(y, cos(theta), phi); // ct = cos(θ)
+//
+//            //storing all Ylm for this direction (i.e 9 Y if l = 2)
+//            for (int i = 0; i < num_basis; ++i)
+//            {
+//                SHBasisTable[THREE_D_TO_ONE_D(i, x_idx, y_idx, width , height)] = y[i];
+//            }
+//        }
+//    }
+//    //float Y00 = envSHTable[THREE_D_TO_ONE_D(0, width / 2, height / 2, width, height)];
+//    //std::cout << "Y00 = " << Y00 << std::endl;
+//}
 
 //data layout
 //sample0: b0 b1 b2 ... bN
@@ -172,6 +172,7 @@ void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
     for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
     {
         const float3& dir = dirSamples[sampleIdx].dir;
+        //const float3& dir = -dirSamples[sampleIdx].dir;
 
         // Convert to spherical coordinates
         double theta = acos(clamp(dir.y, -1.0f, 1.0f)); // y_ is cos(theta)
@@ -249,100 +250,100 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
     }
 }
 
-void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
-{
-    if (shOrder == -1)
-    {
-        logError( "call initSHTable before decompositionSHEnvMap!");
-        return;
-    }
-
-    int num_basis = (shOrder + 1) * (shOrder + 1);
-    out.resize(num_basis);
-    const Falcor::ref<Texture> envMapTex = envMap->getEnvMap();
-    int width = envMapTex->getWidth();
-    int height = envMapTex->getHeight();
-
-    //read texture data into an array
-    float4* data = new float4[width*height];
-    envMapTex->getSubresourceBlob(0, &data[0], sizeof(float4) * width * height);
-
-   // float4* tranposedData = TranposeData(data, width, height);
-
-    for (int l = 0; l < num_basis; ++l)
-    {
-        double r = 0.0;
-        double g = 0.0;
-        double b = 0.0;
-        double a = 0.0;
-
-        for (int y = 0; y < height; ++y)
-        {
-            for (int x = 0; x < width; ++x)
-            {
-                //read value from env map
-                float4 envMapValue = data[TWO_D_TO_ONE_D(x,y,width)]; 
-
-                // Lookup SH basis value at (l, x, y)
-                float yd = SHBasisTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
-
-               //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
-                float delta = dOmega[TWO_D_TO_ONE_D(x, y, width)]; 
-
-                double weight = (double)yd * (double)delta;
-
-                r += (double)envMapValue[0] * weight;
-                g += (double)envMapValue[1] * weight;
-                b += (double)envMapValue[2] * weight;
-                a += (double)envMapValue[3] * weight;
-            }
-        }
-        float4 tmp(r, g, b, a);
-        out[l] = tmp;
-    }
-    delete [] data;
-}
-
-void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice)
-{
-    int num_basis = (shOrder + 1) * (shOrder + 1);
-    const Falcor::ref<Texture> envMapTex = envMap->getEnvMap();
-    int width = envMapTex->getWidth();
-    int height = envMapTex->getHeight();
-
-  // float3* reconstructedData = new float3[width * height];
-
-    //for (int y = 0; y < height; ++y)
-    //{
-    //    for (int x = 0; x < width; ++x)
-    //    {
-    //        float4 tmp = float4 (0,0,0,0);
-    //        for (int i = 0; i < num_basis; ++i)
-    //        {
-    //            tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
-    //        }
-    //        float3 color = float3(tmp[0], tmp[1], tmp[2]);
-    //        reconstructedData[TWO_D_TO_ONE_D(x, y, width)] = color;
-    //    }
-    //}
-
-   float* reconstructedData = new float[width * height*3];
-
-    for (int y = 0; y < height; ++y)
-    {
-        for (int x = 0; x < width; ++x)
-        {
-            float4 tmp = float4 (0,0,0,0);
-            for (int i = 0; i < num_basis; ++i)
-            {
-                tmp += sh_coeff[i] * SHBasisTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
-            }
-            float3 color = float3(tmp[0], tmp[1], tmp[2]);
-            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 0] = color[0];
-            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 1] = color[1];
-            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 2] = color[2];
-        }
-    }
+//void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
+//{
+//    if (shOrder == -1)
+//    {
+//        logError( "call initSHTable before decompositionSHEnvMap!");
+//        return;
+//    }
+//
+//    int num_basis = (shOrder + 1) * (shOrder + 1);
+//    out.resize(num_basis);
+//    const Falcor::ref<Texture> envMapTex = envMap->getEnvMap();
+//    int width = envMapTex->getWidth();
+//    int height = envMapTex->getHeight();
+//
+//    //read texture data into an array
+//    float4* data = new float4[width*height];
+//    envMapTex->getSubresourceBlob(0, &data[0], sizeof(float4) * width * height);
+//
+//   // float4* tranposedData = TranposeData(data, width, height);
+//
+//    for (int l = 0; l < num_basis; ++l)
+//    {
+//        double r = 0.0;
+//        double g = 0.0;
+//        double b = 0.0;
+//        double a = 0.0;
+//
+//        for (int y = 0; y < height; ++y)
+//        {
+//            for (int x = 0; x < width; ++x)
+//            {
+//                //read value from env map
+//                float4 envMapValue = data[TWO_D_TO_ONE_D(x,y,width)]; 
+//
+//                // Lookup SH basis value at (l, x, y)
+//                float yd = SHBasisTable[THREE_D_TO_ONE_D(l, x, y, width, height)]; 
+//
+//               //  precomputed pixel solid angle weight sin(theta)*dtheta*dphi
+//                float delta = dOmega[TWO_D_TO_ONE_D(x, y, width)]; 
+//
+//                double weight = (double)yd * (double)delta;
+//
+//                r += (double)envMapValue[0] * weight;
+//                g += (double)envMapValue[1] * weight;
+//                b += (double)envMapValue[2] * weight;
+//                a += (double)envMapValue[3] * weight;
+//            }
+//        }
+//        float4 tmp(r, g, b, a);
+//        out[l] = tmp;
+//    }
+//    delete [] data;
+//}
+//
+//void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice)
+//{
+//    int num_basis = (shOrder + 1) * (shOrder + 1);
+//    const Falcor::ref<Texture> envMapTex = envMap->getEnvMap();
+//    int width = envMapTex->getWidth();
+//    int height = envMapTex->getHeight();
+//
+//  // float3* reconstructedData = new float3[width * height];
+//
+//    //for (int y = 0; y < height; ++y)
+//    //{
+//    //    for (int x = 0; x < width; ++x)
+//    //    {
+//    //        float4 tmp = float4 (0,0,0,0);
+//    //        for (int i = 0; i < num_basis; ++i)
+//    //        {
+//    //            tmp += sh_coeff[i] * envSHTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
+//    //        }
+//    //        float3 color = float3(tmp[0], tmp[1], tmp[2]);
+//    //        reconstructedData[TWO_D_TO_ONE_D(x, y, width)] = color;
+//    //    }
+//    //}
+//
+//   float* reconstructedData = new float[width * height*3];
+//
+//    for (int y = 0; y < height; ++y)
+//    {
+//        for (int x = 0; x < width; ++x)
+//        {
+//            float4 tmp = float4 (0,0,0,0);
+//            for (int i = 0; i < num_basis; ++i)
+//            {
+//                tmp += sh_coeff[i] * SHBasisTable[THREE_D_TO_ONE_D(i, x, y, width, height)]; 
+//            }
+//            float3 color = float3(tmp[0], tmp[1], tmp[2]);
+//            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 0] = color[0];
+//            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 1] = color[1];
+//            reconstructedData[TWO_D_TO_ONE_D(x, y, width)*3 + 2] = color[2];
+//        }
+//    }
 
     //Falcor::ref<Texture> outTex =
     //    pDevice->createTexture2D(width, height, ResourceFormat::RGB32Float, 1, 1, reconstructedData, ResourceBindFlags::ShaderResource);
@@ -355,10 +356,10 @@ void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& env
     //}
     //cout << "end first 3" << endl;
 
-    stbi_write_hdr("reconstructed_env.hdr", width, height, 3, reconstructedData);
-
-    delete[] reconstructedData;
-}
+//    stbi_write_hdr("reconstructed_env.hdr", width, height, 3, reconstructedData);
+//
+//    delete[] reconstructedData;
+//}
 
 float4* TranposeData(float4* data, int width, int height)
 {
