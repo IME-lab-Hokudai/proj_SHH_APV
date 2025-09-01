@@ -30,8 +30,8 @@
 
 light = StandardMaterial('Light')
 #light.emissiveColor = float3(17, 12, 4)
-light.emissiveColor = float3(17, 17, 17)
-light.emissiveFactor = 5
+light.emissiveColor = float3(1, 1, 1)
+light.emissiveFactor = 10
 
 #gray
 floor = StandardMaterial('Floor')
@@ -123,8 +123,8 @@ sceneBuilder.addMeshInstance(
 anim = Animation('sphereAnim',sphereNodeID,16.0)
 anim.addKeyframe(0.0, Transform(translation=float3(-0.15, 0.25, 0), scaling=0.1))
 anim.addKeyframe(4.0, Transform(translation=float3(0.15, 0.25, 0), scaling=0.1))
-anim.addKeyframe(8.0, Transform(translation=float3(0.15, 0.25, 0.2), scaling=0.1))
-anim.addKeyframe(12.0, Transform(translation=float3(-0.15, 0.25, 0.2), scaling=0.1))
+anim.addKeyframe(8.0, Transform(translation=float3(0.15, 0.25, 0.5), scaling=0.1))
+anim.addKeyframe(12.0, Transform(translation=float3(-0.15, 0.25, 0.5), scaling=0.1))
 anim.addKeyframe(16.0, Transform(translation=float3(-0.15, 0.25, 0), scaling=0.1))
 sceneBuilder.addAnimation(anim)
 

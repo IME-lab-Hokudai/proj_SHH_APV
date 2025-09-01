@@ -30,8 +30,8 @@
 
 light = StandardMaterial('Light')
 #light.emissiveColor = float3(17, 12, 4)
-light.emissiveColor = float3(17, 17, 17)
-light.emissiveFactor = 5
+light.emissiveColor = float3(1, 1, 1)
+light.emissiveFactor = 10
 
 #gray
 floor = StandardMaterial('Floor')

@@ -376,7 +376,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                    loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
                }
                int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
-               initSHTable(order, dirSamples);
+              // initSHTable(order, dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
                mpGridSHBuffer = mpDevice->createStructuredBuffer(
                    sizeof(float4),
@@ -388,7 +388,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                mpGridSHBuffer->setName("SH Grid Coeffs");
 
                std::vector<float4> reconstructedData;
-               reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
+               //reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
 
                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
                    sizeof(float4),

@@ -89,9 +89,10 @@ private:
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
 
+    //bool mbFinishSHPrecompute = true;
     bool mbFinishSHPrecompute = true;
-    //std::string sceneName = "arcade";
-    std::string sceneName = "cornell";
+    std::string sceneName = "arcade";
+    //std::string sceneName = "cornell";
     uint32_t mSampleIndex = 0xdeadbeef;
 
     // emissive light sampler

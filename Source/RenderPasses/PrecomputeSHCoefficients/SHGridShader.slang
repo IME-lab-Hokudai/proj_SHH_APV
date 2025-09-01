@@ -132,10 +132,6 @@ void sampleSHAtPosition(float3 worldPos, out float4 outSH[MAX_SH_BASIS])
 // Evaluate 9 SH basis functions at direction n
 float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
 {
-    float x = n.x;
-    float y = n.y;
-    float z = n.z;
-
     // SH basis function indexing and formulas:
     // Index | l (band) | m (order) | SH function          | Formula (Cartesian coords)
     // -------------------------------------------------------------------------------------
@@ -149,23 +145,34 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
     // 7     | 2        |  1        | Y_2^1                | 1.092548 * x * z   // ~ sqrt(15/(4π)) * xz/r² * cos(φ)
     // 8     | 2        |  2        | Y_2^2                | 0.546274 * (x*x - y*y)  // ~ 0.546274 * (x² - y²)/r² * cos(2φ)
 
+    // Falcor Y-up coordinates
+    float x = n.x; // right
+    float y = n.y; // up, polar axis
+    float z = n.z; // forward
+
     // Band 0
-    float Y0 = 0.282095;
+    float Y0 = 0.282095f;
 
     // Band 1
-    float Y1 = 0.488603 * y;
-    float Y2 = 0.488603 * z;
-    float Y3 = 0.488603 * x;
+    // m = -1 -> sin(phi) term in x–z plane -> corresponds to forward (z)
+    // m = 0  -> polar axis -> y
+    // m = 1  -> cos(phi) term in x–z plane -> x
+    float Y1 = 0.488603f * z; // Y_1^-1
+    float Y2 = 0.488603f * y; // Y_1^0
+    float Y3 = 0.488603f * x; // Y_1^1
 
     // Band 2
-    float Y4 = 1.092548 * x * y;
-    float Y5 = 1.092548 * y * z;
-    float Y6 = 0.315392 * (3.0 * z * z - 1.0);
-    float Y7 = 1.092548 * x * z;
-    float Y8 = 0.546274 * (x * x - y * y);
-    float A[3] = { 3.141593, 2.094395, 0.785398 }; // Cosine lobe coefficients
+    float Y4 = 1.092548f * x * z;                 // Y_2^-2 = sin(2φ) xy-plane -> x*z
+    float Y5 = 1.092548f * z * y;                 // Y_2^-1 = sin(φ) * P -> z*y
+    float Y6 = 0.315392f * (3.0f * y * y - 1.0f); // Y_2^0 = along polar axis
+    float Y7 = 1.092548f * x * y;                 // Y_2^1 = cos(φ) * P -> x*y
+    float Y8 = 0.546274f * (x * x - z * z);       // Y_2^2 = cos(2φ) in x–z plane
+
+    // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
+    float A[3] = { 3.141593f, 2.094395f, 0.785398f };
+
     // Dot product: coeffs · basis
-float4 result = 
+    float4 result =
         shCoeffs[0] * Y0 * A[0] +
         shCoeffs[1] * Y1 * A[1] +
         shCoeffs[2] * Y2 * A[1] +
@@ -176,7 +183,8 @@ float4 result =
         shCoeffs[7] * Y7 * A[2] +
         shCoeffs[8] * Y8 * A[2];
 
-    return max(result, float4(0.f)); // Clamp to avoid negative lighting
+    // Clamp negative lighting
+    return max(result, float4(0.f));
 }
 
 float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
@@ -212,9 +220,9 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
   float3 emissiveColor = emissiveSample.rgb;
    ///float3 litColor = diffuseColor + emissiveColor;
-   float3 litColor = diffuseColor;
+ //  float3 litColor = diffuseColor;
   // float3 litColor = normalSampleW;
   // float3 litColor = shadingData.faceN;
-  //float3 litColor = vsOut.irradiance.rgb;
+  float3 litColor = vsOut.irradiance.rgb;
     return float4(litColor,1.0f);
 }
