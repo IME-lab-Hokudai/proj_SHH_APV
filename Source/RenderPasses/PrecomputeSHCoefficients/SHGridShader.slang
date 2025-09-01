@@ -219,10 +219,10 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   //float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb / 3.14159265;
   float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
   float3 emissiveColor = emissiveSample.rgb;
-   ///float3 litColor = diffuseColor + emissiveColor;
+   float3 litColor = diffuseColor + emissiveColor;
  //  float3 litColor = diffuseColor;
   // float3 litColor = normalSampleW;
   // float3 litColor = shadingData.faceN;
-  float3 litColor = vsOut.irradiance.rgb;
+  //float3 litColor = vsOut.irradiance.rgb;
     return float4(litColor,1.0f);
 }

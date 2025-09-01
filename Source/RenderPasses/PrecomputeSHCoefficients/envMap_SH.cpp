@@ -177,7 +177,6 @@ void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
         // Convert to spherical coordinates
         double theta = acos(clamp(dir.y, -1.0f, 1.0f)); // y_ is cos(theta)
         double phi = atan2(dir.z, dir.x);                         // Note: atan2(z, x) for Falcor's Y-up
-        //double phi = atan2(dir.x, dir.z);                         // Note: atan2(z, x) for Falcor's Y-up
 
         // Compute SH basis for this direction
         sh.calcSHBasis(y, cos(theta), phi);
@@ -522,8 +521,8 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
 
         //float3 dir = {r * cosf(phi), r * sinf(phi), z};
         // Falcor Y-up: y = z, z = r*sin(phi)
-        //float3 dir = {h * cosf(phi), y, h * sinf(phi)}; // x, y, z
-        float3 dir = {h * sinf(phi), y, h * cosf(phi)}; // x, y, z
+        float3 dir = {h * cosf(phi), y, h * sinf(phi)}; // x, y, z
+        //float3 dir = {h * sinf(phi), y, h * cosf(phi)}; // x, y, z
         samples.push_back({dir, dOmega});
     }
     return samples;
