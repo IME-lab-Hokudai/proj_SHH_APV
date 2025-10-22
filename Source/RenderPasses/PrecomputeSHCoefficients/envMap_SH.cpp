@@ -8,6 +8,7 @@
 
 float*  dOmega;
 float*  SHBasisTable;
+float3* SHGradientTable;
 int shOrder = -1;
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -189,6 +190,36 @@ void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
     }
 }
 
+void initSHGradientTable(const std::vector<ProbeDirSample>& dirSamples)
+{
+    std::array<float3, 9> glmGrad;
+    std::array<float, 9> ylm; // local storage for SH values
+    int numSamples = (int)dirSamples.size();
+
+    if (SHGradientTable)
+        delete[] SHGradientTable;
+    SHGradientTable = new float3[9 * numSamples];
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float3& dir = dirSamples[i].dir;
+
+        // compute SH gradients for this direction
+        SHGradientL2(dir, ylm.data(), glmGrad);
+
+        // store into SHGradientTable
+        for (int b = 0; b < 9; ++b)
+        {
+            SHGradientTable[i * 9 + b] = glmGrad[b];
+        }
+    }
+}
+
+void computeCoeffGradients(const std::vector<ProbeDirSample>& dirSamples)
+{
+
+}
+
 void decomposeSH(
     std::vector<float4>& out,                // Output SH coefficients (num_basis)
     const std::vector<float4>& probeSamples, // Probe sampling results, size = numSamples
@@ -249,6 +280,108 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
         }
     }
 }
+
+void SHGradientL2(const float3& normDir, float* const ylm, std::array<float3, 9>& glm)
+{
+    float x = normDir.x;
+    float y = normDir.y;
+    float z = normDir.z;
+    float c0, c1, s0, s1, tmp, tmp0, tmp1, tmp2, tmp3;
+    float z2 = z * z;
+    std::array<float, 9> qlm{};
+    // zonal harmonics(m=0)
+    ylm[0] = 0.2820947917738781f;
+    qlm[0] = 0.2820947917738781f;
+    ylm[2] = 0.4886025119029199f * z;
+    qlm[3] = 0.4886025119029199f * z;
+    ylm[6] = 0.9461746957575601f * z2 - 0.3153915652525200f;
+    qlm[6] = 0.9461746957575601f * z2 - 0.3153915652525200f;
+    c0 = x;
+    s0 = y;
+    c1 = 1;
+    s1 = 0;
+    // m = 001
+    qlm[4] = -0.4886025119029200f;
+    ylm[3] = qlm[4] * c0;
+    ylm[1] = qlm[4] * s0;
+    qlm[7] = -1.0925484305920792f * z;
+    ylm[7] = qlm[7] * c0;
+    ylm[5] = qlm[7] * s0;
+    s1 = s0;
+    c1 = c0;
+    c0 = x * c1 - y * s1;
+    s0 = y * c1 + x * s1;
+    // m = 002
+    qlm[8] = 0.5462742152960396f;
+    ylm[8] = qlm[8] * c0;
+    ylm[4] = qlm[8] * s0;
+    // calculate gradient
+    const float3 zero = float3(0.f, 0.f, 0.f);
+    glm[0] = zero; // because Y00 is constant
+    glm[2].x = -x * ylm[2];
+    glm[2].y = -y * ylm[2];
+    glm[2].z = -z * ylm[2] + 0.4886025119029199f;
+    tmp0 = 2 * ylm[6];
+    tmp1 = 1.2909944487358056f * qlm[4];
+    glm[6].x = -x * (tmp0 - tmp1);
+    glm[6].y = -y * (tmp0 - tmp1);
+    glm[6].z = -z * tmp0 + 2.5819888974716116f * qlm[3];
+    c0 = x;
+    s0 = y;
+    c1 = 1;
+    s1 = 0;
+    // m = 001
+    tmp = 1.2247448713915892f * qlm[2];
+    tmp0 = tmp * c0;
+    tmp1 = tmp * s0;
+    tmp = 1 * qlm[4];
+    tmp2 = tmp * c1;
+    tmp3 = tmp * s1;
+    tmp = 1 * ylm[3];
+    glm[3].x = -x * (tmp - tmp0) + tmp2;
+    glm[3].y = -y * (tmp - tmp0) - tmp3;
+    glm[3].z = -z * tmp;
+    tmp = 1 * ylm[1];
+    glm[1].x = -x * (tmp - tmp1) + tmp3;
+    glm[1].y = -y * (tmp - tmp1) + tmp2;
+    glm[1].z = -z * tmp;
+    tmp = 2.4494897427831783f * qlm[1];
+    glm[3].z += tmp * c0;
+    glm[1].z += tmp * s0;
+    tmp = 0.5270462766947299f * qlm[5];
+    tmp0 = tmp * c0;
+    tmp1 = tmp * s0;
+    tmp = 1 * qlm[7];
+    tmp2 = tmp * c1;
+    tmp3 = tmp * s1;
+    tmp = 2 * ylm[7];
+    glm[7].x = -x * (tmp - tmp0) + tmp2;
+    glm[7].y = -y * (tmp - tmp0) - tmp3;
+    glm[7].z = -z * tmp;
+    tmp = 2 * ylm[5];
+    glm[5].x = -x * (tmp - tmp1) + tmp3;
+    glm[5].y = -y * (tmp - tmp1) + tmp2;
+    glm[5].z = -z * tmp;
+    tmp = 2.2360679774997898f * qlm[4];
+    glm[7].z += tmp * c0;
+    glm[5].z += tmp * s0;
+    s1 = s0;
+    c1 = c0;
+    c0 = x * c1 - y * s1;
+    s0 = y * c1 + x * s1;
+    tmp = 2 * qlm[8];
+    tmp0 = tmp * c1;
+    tmp1 = tmp * s1;
+    tmp2 = 2 * ylm[8];
+    tmp3 = 2 * ylm[4];
+    glm[8].x = -x * tmp2 + tmp0;
+    glm[8].y = -y * tmp2 - tmp1;
+    glm[8].z = -z * tmp2;
+    glm[4].x = -x * tmp3 + tmp1;
+    glm[4].y = -y * tmp3 + tmp0;
+    glm[4].z = -z * tmp3;
+}
+
 
 //void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap)
 //{

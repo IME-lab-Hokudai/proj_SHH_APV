@@ -29,6 +29,14 @@ void decomposeSH(
 );
 void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4> & out);
 
+// note that we will write to ylm, it is passed in as pointer to avoid repeated allocation
+// calculate gradient of SH basis functions up to l = 2.
+// gradient is calculated indirectly using solid spherical harmonics as described in Iwasaki sensei paper
+//the code is generated using https://github.com/kiwasaki/shh_code_generator
+void SHGradientL2(const float3& normDir, float* const ylm, std::array<float3, 9>& glm);
+// note that we calculate up to l = 2 only 
+void initSHGradientTable(const std::vector<ProbeDirSample>& dirSamples);
+void computeCoeffGradients(const std::vector<ProbeDirSample>& dirSamples);
 
 float4* TranposeData(float4* data, int width, int height);
 

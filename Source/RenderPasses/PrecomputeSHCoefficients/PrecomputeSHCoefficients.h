@@ -90,7 +90,7 @@ private:
     ref<RtProgramVars> mpRtVars;
 
     bool mbFinishSHPrecompute = true;
-    //bool mbFinishSHPrecompute = true;
+    //bool mbFinishSHPrecompute = false;
     //std::string sceneName = "arcade";
     std::string sceneName = "cornell";
     uint32_t mSampleIndex = 0xdeadbeef;

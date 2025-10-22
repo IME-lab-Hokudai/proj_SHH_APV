@@ -2,8 +2,10 @@
 #include <vector>
 #include <math.h>
 #include <iostream>
-using namespace std;
 
+#include "Utils/Math/VectorTypes.h"
+using namespace std;
+using namespace Falcor;
 #ifndef M_PI
 #define M_PI 3.14159268
 #endif
