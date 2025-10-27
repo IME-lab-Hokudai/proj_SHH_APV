@@ -25,6 +25,7 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+
 import Scene.Raytracing;
 import Utils.Sampling.UniformSampleGenerator;
 import Rendering.Lights.LightHelpers;
@@ -35,7 +36,7 @@ import Utils.Geometry.GeometryHelpers;
 
 StructuredBuffer<ProbeDirSample> gProbeDirSamples;
 StructuredBuffer<float3> gProbePositions;
-RWStructuredBuffer<float4> gProbeSamplingOutput;
+RWStructuredBuffer<ProbeSampleData> gProbeSamplingOutput;
 
 
 static const bool kUseEmissiveLights = USE_EMISSIVE_LIGHTS;
@@ -277,5 +278,5 @@ void rayGen()
     TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
 
     // Store result in a 2D (flattened) buffer
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx] = hitData.color;
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].Li = hitData.color;
 }

@@ -6,8 +6,6 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     PrecomputeSHCoefficients.h
 	sphericalHarmonics.h
 	sphericalHarmonics.cpp
-	SolidSphericalHarmonics.h
-	SolidSphericalHarmonics.cpp
     envMap_SH.h
 	envMap_SH.cpp
     SHShader.slang

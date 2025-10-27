@@ -2,13 +2,13 @@
 #include "CommonDefines.h"
 #include "envMap_SH.h"
 
-
 #include <fstream>
 #include <random>
 
 float*  dOmega;
 float*  SHBasisTable;
 float3* SHGradientTable;
+float3x3* SHHessianTable;
 int shOrder = -1;
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -190,39 +190,47 @@ void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
     }
 }
 
-void initSHGradientTable(const std::vector<ProbeDirSample>& dirSamples)
+void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples)
 {
-    std::array<float3, 9> glmGrad;
+    shOrder = 2; // fixed to L2 for now
+    std::array<float3, 9> glm;
+    std::array<float3x3, 9> hlm;
     std::array<float, 9> ylm; // local storage for SH values
-    int numSamples = (int)dirSamples.size();
+    int numSamplesPerProbe = (int)dirSamples.size();
+
+    // Allocate SH basis table for each direction (flattened 2D array: [basis][sampleIdx])
+    if (SHBasisTable)
+        delete[] SHBasisTable;
+    SHBasisTable = new float[9 * numSamplesPerProbe];
 
     if (SHGradientTable)
         delete[] SHGradientTable;
-    SHGradientTable = new float3[9 * numSamples];
+    SHGradientTable = new float3[9 * numSamplesPerProbe];
 
-    for (int i = 0; i < numSamples; ++i)
+      if (SHHessianTable)
+        delete[] SHHessianTable;
+      SHHessianTable = new float3x3[9 * numSamplesPerProbe];
+
+    for (int i = 0; i < numSamplesPerProbe; ++i)
     {
         const float3& dir = dirSamples[i].dir;
 
         // compute SH gradients for this direction
-        SHGradientL2(dir, ylm.data(), glmGrad);
+        SHGradientAndHessianL2(dir, ylm, glm, hlm);
 
         // store into SHGradientTable
-        for (int b = 0; b < 9; ++b)
+        for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
         {
-            SHGradientTable[i * 9 + b] = glmGrad[b];
+            SHBasisTable[i * 9 + basisIdx] = ylm[basisIdx];
+            SHGradientTable[i * 9 + basisIdx] = glm[basisIdx];
+            SHHessianTable[i * 9 + basisIdx] = hlm[basisIdx];
         }
     }
 }
 
-void computeCoeffGradients(const std::vector<ProbeDirSample>& dirSamples)
-{
-
-}
-
 void decomposeSH(
     std::vector<float4>& out,                // Output SH coefficients (num_basis)
-    const std::vector<float4>& probeSamples, // Probe sampling results, size = numSamples
+    const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
 )
 {
@@ -246,7 +254,7 @@ void decomposeSH(
         // For each direction sample
         for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
         {
-            const float4& sample = probeSamples[sampleIdx];
+            const float4& sample = probeSamplingResults[sampleIdx].Li;
             float shY = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
 
             r += (double)sample.x * shY * weight;
@@ -281,21 +289,23 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
     }
 }
 
-void SHGradientL2(const float3& normDir, float* const ylm, std::array<float3, 9>& glm)
+void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, std::array<float3, 9>& glm, std::array<float3x3, 9>& hlm)
 {
     float x = normDir.x;
     float y = normDir.y;
     float z = normDir.z;
-    float c0, c1, s0, s1, tmp, tmp0, tmp1, tmp2, tmp3;
-    float z2 = z * z;
+    float c0, c1, cm, cs, s0, s1, sm, ss, tmp, tmp0, tmp1, tmp2, tmp3, tmp4, tmp5,  lx, ly, lz;
+    const float x2 = x * x;
+    const float y2 = y * y;
+    const float z2 = z * z;
+    const float xy = x * y;
+    const float xz = x * z;
+    const float yz = y * z;
     std::array<float, 9> qlm{};
     // zonal harmonics(m=0)
-    ylm[0] = 0.2820947917738781f;
-    qlm[0] = 0.2820947917738781f;
-    ylm[2] = 0.4886025119029199f * z;
-    qlm[3] = 0.4886025119029199f * z;
-    ylm[6] = 0.9461746957575601f * z2 - 0.3153915652525200f;
-    qlm[6] = 0.9461746957575601f * z2 - 0.3153915652525200f;
+    ylm[0] = qlm[0] = 0.2820947917738781f;
+    ylm[2] = qlm[3] = 0.4886025119029199f * z;
+    ylm[6] = qlm[6] = 0.9461746957575601f * z2 - 0.3153915652525200f;
     c0 = x;
     s0 = y;
     c1 = 1;
@@ -316,70 +326,152 @@ void SHGradientL2(const float3& normDir, float* const ylm, std::array<float3, 9>
     ylm[8] = qlm[8] * c0;
     ylm[4] = qlm[8] * s0;
     // calculate gradient
-    const float3 zero = float3(0.f, 0.f, 0.f);
-    glm[0] = zero; // because Y00 is constant
+    glm[0] = {};
+    hlm[0] = float3x3::zeros();
+    lx = x;
+    ly = y;
+    lz = z;
     glm[2].x = -x * ylm[2];
     glm[2].y = -y * ylm[2];
     glm[2].z = -z * ylm[2] + 0.4886025119029199f;
-    tmp0 = 2 * ylm[6];
-    tmp1 = 1.2909944487358056f * qlm[4];
-    glm[6].x = -x * (tmp0 - tmp1);
-    glm[6].y = -y * (tmp0 - tmp1);
-    glm[6].z = -z * tmp0 + 2.5819888974716116f * qlm[3];
+    hlm[2][0][0] = -((1 - x2) * ylm[2] + 2 * x * glm[2].x);
+    hlm[2][0][1] = -(-xy * ylm[2] + y * glm[2].x + x * glm[2].y);
+    hlm[2][0][2] = -(-xz * ylm[2] + z * glm[2].x + x * glm[2].z);
+    hlm[2][1][0] = hlm[2][0][1];
+    hlm[2][1][1] = -((1 - y2) * ylm[2] + 2 * y * glm[2].y);
+    hlm[2][1][2] = -(-yz * ylm[2] + z * glm[2].y + y * glm[2].z);
+    hlm[2][2][0] = hlm[2][0][2];
+    hlm[2][2][1] = hlm[2][1][2];
+    hlm[2][2][2] = -((1 - z2) * ylm[2] + 2 * z * glm[2].z);
+    lx += x;
+    ly += y;
+    lz += z;
+    tmp = 2 * ylm[6];
+    tmp0 = 1.2909944487358056f * qlm[4] - tmp;
+    glm[6].x = x * tmp0;
+    glm[6].y = y * tmp0;
+    glm[6].z = -z * tmp + 2.5819888974716116f * qlm[3];
+    tmp1 = 0 * tmp;
+    tmp2 = 1.5811388300841898f * qlm[2] - tmp1;
+    tmp3 = 1.5811388300841898f * qlm[1] - glm[6].z;
+    hlm[6][0][0] = x2 * tmp2 + tmp0 - 2 * lx * glm[6].x;
+    hlm[6][0][1] = hlm[6][1][0] = xy * tmp2 - ly * glm[6].x - lx * glm[6].y;
+    hlm[6][1][1] = y2 * tmp2 + tmp0 - 2 * ly * glm[6].y;
+    hlm[6][0][2] = hlm[6][2][0] = -xz * tmp1 + lx * tmp3 - lz * glm[6].x;
+    hlm[6][1][2] = hlm[6][2][1] = -yz * tmp1 + ly * tmp3 - lz * glm[6].y;
+    hlm[6][2][2] = -z2 * tmp1 - 2 * lz * glm[6].z + 4.4721359549995796f * qlm[0] - tmp;
+    lx += x;
+    ly += y;
+    lz += z;
     c0 = x;
     s0 = y;
     c1 = 1;
     s1 = 0;
+    cm = 1;
+    sm = 0;
+    cs = 0;
+    ss = 0;
     // m = 001
-    tmp = 1.2247448713915892f * qlm[2];
-    tmp0 = tmp * c0;
-    tmp1 = tmp * s0;
-    tmp = 1 * qlm[4];
-    tmp2 = tmp * c1;
-    tmp3 = tmp * s1;
-    tmp = 1 * ylm[3];
-    glm[3].x = -x * (tmp - tmp0) + tmp2;
-    glm[3].y = -y * (tmp - tmp0) - tmp3;
-    glm[3].z = -z * tmp;
-    tmp = 1 * ylm[1];
-    glm[1].x = -x * (tmp - tmp1) + tmp3;
-    glm[1].y = -y * (tmp - tmp1) + tmp2;
-    glm[1].z = -z * tmp;
-    tmp = 2.4494897427831783f * qlm[1];
-    glm[3].z += tmp * c0;
-    glm[1].z += tmp * s0;
-    tmp = 0.5270462766947299f * qlm[5];
-    tmp0 = tmp * c0;
-    tmp1 = tmp * s0;
-    tmp = 1 * qlm[7];
-    tmp2 = tmp * c1;
-    tmp3 = tmp * s1;
-    tmp = 2 * ylm[7];
-    glm[7].x = -x * (tmp - tmp0) + tmp2;
-    glm[7].y = -y * (tmp - tmp0) - tmp3;
-    glm[7].z = -z * tmp;
-    tmp = 2 * ylm[5];
-    glm[5].x = -x * (tmp - tmp1) + tmp3;
-    glm[5].y = -y * (tmp - tmp1) + tmp2;
-    glm[5].z = -z * tmp;
-    tmp = 2.2360679774997898f * qlm[4];
-    glm[7].z += tmp * c0;
-    glm[5].z += tmp * s0;
+    lx = 1 * x;
+    ly = 1 * y;
+    lz = 1 * z;
+    tmp0 = qlm[4] * cm;
+    tmp1 = qlm[4] * sm;
+    glm[3].x = -lx * ylm[3] + tmp0;
+    glm[3].y = -ly * ylm[3] - tmp1;
+    glm[3].z = -lz * ylm[3];
+    glm[1].x = -lx * ylm[1] + tmp1;
+    glm[1].y = -ly * ylm[1] + tmp0;
+    glm[1].z = -lz * ylm[1];
+    tmp0 = 1 * ylm[3];
+    tmp1 = -1 * tmp0;
+    tmp2 = qlm[4] * cs;
+    tmp3 = qlm[4] * ss;
+    hlm[3][0][0] = -tmp1 * x2 - tmp0 + tmp2 - (lx + lx) * glm[3].x;
+    hlm[3][0][1] = hlm[3][1][0] = -tmp1 * xy - tmp3 - lx * glm[3].y - ly * glm[3].x;
+    hlm[3][1][1] = -tmp1 * y2 - tmp0 - tmp2 - (ly + ly) * glm[3].y;
+    hlm[3][0][2] = hlm[3][2][0] = -tmp1 * xz - lx * glm[3].z - lz * glm[3].x;
+    hlm[3][1][2] = hlm[3][2][1] = -tmp1 * yz - ly * glm[3].z - lz * glm[3].y;
+    hlm[3][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[3].z;
+    tmp0 = 1 * ylm[1];
+    tmp1 = -1 * tmp0;
+    hlm[1][0][0] = -tmp1 * x2 - tmp0 + tmp3 - (lx + lx) * glm[1].x;
+    hlm[1][0][1] = hlm[1][1][0] = -tmp1 * xy + tmp2 - lx * glm[1].y - ly * glm[1].x;
+    hlm[1][1][1] = -tmp1 * y2 - tmp0 - tmp3 - (ly + ly) * glm[1].y;
+    hlm[1][0][2] = hlm[1][2][0] = -tmp1 * xz - lx * glm[1].z - lz * glm[1].x;
+    hlm[1][1][2] = hlm[1][2][1] = -tmp1 * yz - ly * glm[1].z - lz * glm[1].y;
+    hlm[1][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[1].z;
+    lx += x;
+    ly += y;
+    lz += z;
+    tmp0 = qlm[7] * cm;
+    tmp1 = qlm[7] * sm;
+    tmp2 = 2.2360679774997898f * ylm[3];
+    tmp3 = 2.2360679774997898f * ylm[1];
+    glm[7].x = -lx * ylm[7] + tmp0;
+    glm[7].y = -ly * ylm[7] - tmp1;
+    glm[7].z = -lz * ylm[7] + tmp2;
+    glm[5].x = -lx * ylm[5] + tmp1;
+    glm[5].y = -ly * ylm[5] + tmp0;
+    glm[5].z = -lz * ylm[5] + tmp3;
+    tmp0 = 2 * ylm[7];
+    tmp1 = 0 * tmp0;
+    tmp2 = qlm[7] * cs;
+    tmp3 = qlm[7] * ss;
+    tmp4 = 2.2360679774997898f * qlm[4];
+    tmp5 = tmp4 * sm;
+    tmp4 *= cm;
+    hlm[7][0][0] = -tmp1 * x2 - tmp0 + tmp2 - (lx + lx) * glm[7].x;
+    hlm[7][0][1] = hlm[7][1][0] = -tmp1 * xy - tmp3 - lx * glm[7].y - ly * glm[7].x;
+    hlm[7][1][1] = -tmp1 * y2 - tmp0 - tmp2 - (ly + ly) * glm[7].y;
+    hlm[7][0][2] = hlm[7][2][0] = -tmp1 * xz + tmp4 - lx * glm[7].z - lz * glm[7].x;
+    hlm[7][1][2] = hlm[7][2][1] = -tmp1 * yz - tmp5 - ly * glm[7].z - lz * glm[7].y;
+    hlm[7][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[7].z;
+    tmp0 = 2 * ylm[5];
+    tmp1 = 0 * tmp0;
+    hlm[5][0][0] = -tmp1 * x2 - tmp0 + tmp3 - (lx + lx) * glm[5].x;
+    hlm[5][0][1] = hlm[5][1][0] = -tmp1 * xy + tmp2 - lx * glm[5].y - ly * glm[5].x;
+    hlm[5][1][1] = -tmp1 * y2 - tmp0 - tmp3 - (ly + ly) * glm[5].y;
+    hlm[5][0][2] = hlm[5][2][0] = -tmp1 * xz + tmp5 - lx * glm[5].z - lz * glm[5].x;
+    hlm[5][1][2] = hlm[5][2][1] = -tmp1 * yz + tmp4 - ly * glm[5].z - lz * glm[5].y;
+    hlm[5][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[5].z;
+    cs = 2 * c1;
+    ss = 2 * s1;
+    cm = 2 * c0;
+    sm = 2 * s0;
     s1 = s0;
     c1 = c0;
     c0 = x * c1 - y * s1;
     s0 = y * c1 + x * s1;
-    tmp = 2 * qlm[8];
-    tmp0 = tmp * c1;
-    tmp1 = tmp * s1;
-    tmp2 = 2 * ylm[8];
-    tmp3 = 2 * ylm[4];
-    glm[8].x = -x * tmp2 + tmp0;
-    glm[8].y = -y * tmp2 - tmp1;
-    glm[8].z = -z * tmp2;
-    glm[4].x = -x * tmp3 + tmp1;
-    glm[4].y = -y * tmp3 + tmp0;
-    glm[4].z = -z * tmp3;
+    lx = 2 * x;
+    ly = 2 * y;
+    lz = 2 * z;
+    tmp0 = qlm[8] * cm;
+    tmp1 = qlm[8] * sm;
+    glm[8].x = -lx * ylm[8] + tmp0;
+    glm[8].y = -ly * ylm[8] - tmp1;
+    glm[8].z = -lz * ylm[8];
+    glm[4].x = -lx * ylm[4] + tmp1;
+    glm[4].y = -ly * ylm[4] + tmp0;
+    glm[4].z = -lz * ylm[4];
+    tmp0 = 2 * ylm[8];
+    tmp1 = 0 * tmp0;
+    tmp2 = qlm[8] * cs;
+    tmp3 = qlm[8] * ss;
+    hlm[8][0][0] = -tmp1 * x2 - tmp0 + tmp2 - (lx + lx) * glm[8].x;
+    hlm[8][0][1] = hlm[8][1][0] = -tmp1 * xy - tmp3 - lx * glm[8].y - ly * glm[8].x;
+    hlm[8][1][1] = -tmp1 * y2 - tmp0 - tmp2 - (ly + ly) * glm[8].y;
+    hlm[8][0][2] = hlm[8][2][0] = -tmp1 * xz - lx * glm[8].z - lz * glm[8].x;
+    hlm[8][1][2] = hlm[8][2][1] = -tmp1 * yz - ly * glm[8].z - lz * glm[8].y;
+    hlm[8][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[8].z;
+    tmp0 = 2 * ylm[4];
+    tmp1 = 0 * tmp0;
+    hlm[4][0][0] = -tmp1 * x2 - tmp0 + tmp3 - (lx + lx) * glm[4].x;
+    hlm[4][0][1] = hlm[4][1][0] = -tmp1 * xy + tmp2 - lx * glm[4].y - ly * glm[4].x;
+    hlm[4][1][1] = -tmp1 * y2 - tmp0 - tmp3 - (ly + ly) * glm[4].y;
+    hlm[4][0][2] = hlm[4][2][0] = -tmp1 * xz - lx * glm[4].z - lz * glm[4].x;
+    hlm[4][1][2] = hlm[4][2][1] = -tmp1 * yz - ly * glm[4].z - lz * glm[4].y;
+    hlm[4][2][2] = -tmp1 * z2 - tmp0 - (lz + lz) * glm[4].z;
 }
 
 
@@ -661,5 +753,177 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
     return samples;
 }
 
+float3 gradOmega(float3 s, float3 x, float3 n, float N)
+{
+    // q = s - x
+    float3 q = s - x;
+
+    // r = ||q||
+    float r = length(q);
+
+    // cosξ = -(n · q) / r
+    float cosXi = -(dot(n, q)) / r;
+
+    // Numerical guard to avoid division by zero or near-zero values
+    if (abs(cosXi) < 1e-6 || r < 1e-6)
+        return float3(0.0, 0.0, 0.0);
+
+    // Use uniform sampling with N samples
+    float factor = 4.0 * M_PI / N;
+
+    // Element-wise computation:
+    // ∂xΩ_i = factor * (n_x * r + 3 * q_x * cosξ) / (r² * cosξ)
+    // ∂yΩ_i = factor * (n_y * r + 3 * q_y * cosξ) / (r² * cosξ)
+    // ∂zΩ_i = factor * (n_z * r + 3 * q_z * cosξ) / (r² * cosξ)
+    float3 grad = factor * ((n * r + 3.0f * q * cosXi) / (r * r * cosXi));
+
+    return grad;
+}
+
+// Notes:
+//   - gradOmega() computes ∇Ω_i (geometry term derivative).
+//   - gradY_lm() provides ∇Y_l^m(ω_i) in direction space.
+//   - ∂ω/∂x = -(I - ωω^T) / r maps direction derivative to spatial domain.
+//   - Numerical guards in gradOmega() handle small r or cosξ cases.
+//   - Typically used for SH grid refinement or Hessian computation.
+//-------------------------------------------------------------------------------
+float3 gradSHCoeffLM(
+    float3 x,
+    const float3* s_list,
+    const float3* n_list,
+    const float* L_list,
+    int N,
+    int l,
+    int m,
+    const float* const SHBasisTable,
+    const float3* const SHGradientTable
+)
+{
+    float3 grad_f = float3(0.0, 0.0, 0.0);
+
+    for (int i = 0; i < N; ++i)
+    {
+        float3 s = s_list[i];
+        float3 n = n_list[i];
+        float L = L_list[i];
+
+        // Geometry and direction
+        float3 q = s - x;
+        float r = length(q);
+        float3 omega_i = normalize(q); // note: omega_i points from x to s to evaluate SH basis
+
+        // Solid angle (uniform per patch)
+        float Omega_i = (4.0f * M_PI) / N;
+
+        // Spatial derivative of Ω_i (geometry-dependent)
+        float3 dOmega = gradOmega(s, x, n, N);
+
+        // SH basis and derivative in direction space
+        int numBasis = (l + 1) * (l + 1);
+        int sampleIdx = i;
+        int basisIdx = l * (l + 1) + m;
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        // Contribution of this sample to ∇f_l^m
+        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
+        grad_f += L * (dOmega * Ylm + Omega_i * gradYlm);
+    }
+
+    return grad_f;
+}
+
+float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, int N)
+{
+    float3 q = s - x;
+    float qx = q.x, qy = q.y, qz = q.z;
+    float r = length(q);
+
+    // cosξ = -(n.q)/r
+    float cosXi = -(dot(n, q)) / r;
+
+    const float eps = 1e-6f;
+    if (fabs(cosXi) < eps)
+        cosXi = (cosXi < 0 ? -eps : eps);
+
+    // Precompute powers of r
+    float r2 = r * r;
+    float r3 = r2 * r;
+    float r4 = r2 * r2;
+
+    // Pure second derivatives
+    float d2Omega_xx = -(4.0f * M_PI / N) * (6.0f * n.x * qx * r - 3.0f * cosXi * (r2 - 5.0f * qx * qx)) / (r4 * cosXi);
+    float d2Omega_yy = -(4.0f * M_PI / N) * (6.0f * n.y * qy * r - 3.0f * cosXi * (r2 - 5.0f * qy * qy)) / (r4 * cosXi);
+    float d2Omega_zz = -(4.0f * M_PI / N) * (6.0f * n.z * qz * r - 3.0f * cosXi * (r2 - 5.0f * qz * qz)) / (r4 * cosXi);
+
+    // Mixed derivatives (symmetric)
+    float d2Omega_xy = -(4.0f * M_PI / N) * (((3.0f * n.x * qy + 3.0f * qx * n.y) / (r3 * cosXi)) + (15.0f * qx * qy / r4));
+    float d2Omega_xz = -(4.0f * M_PI / N) * (((3.0f * n.x * qz + 3.0f * qx * n.z) / (r3 * cosXi)) + (15.0f * qx * qz / r4));
+    float d2Omega_yz = -(4.0f * M_PI / N) * (((3.0f * n.y * qz + 3.0f * qy * n.z) / (r3 * cosXi)) + (15.0f * qy * qz / r4));
+
+    // Assemble symmetric Hessian
+    float3x3 H = float3x3::zeros();
+    H[0][0] = d2Omega_xx;
+    H[0][1] = d2Omega_xy;
+    H[0][2] = d2Omega_xz;
+    H[1][0] = d2Omega_xy;
+    H[1][1] = d2Omega_yy;
+    H[1][2] = d2Omega_yz;
+    H[2][0] = d2Omega_xz;
+    H[2][1] = d2Omega_yz;
+    H[2][2] = d2Omega_zz;
+
+    return H;
+}
+
+float3x3 hessianSHCoeffLM(
+    const float3& x,
+    const float3* s_list,
+    const float3* n_list,
+    const float* L_list,
+    int N,
+    int l,
+    int m,
+    const float* const SHBasisTable,
+    const float3* const SHGradientTable,
+    const float3x3* const SHHessianTable
+)
+{
+    float3x3 HessianCoeffLM = float3x3::zeros();
+
+    int numBasis = (l + 1) * (l + 1);
+    int basisIdx = l * (l + 1) + m;
+    for (int sampleIdx = 0; sampleIdx < N; ++sampleIdx)
+    {
+        float3 s = s_list[sampleIdx];
+        float3 n = n_list[sampleIdx];
+        float L = L_list[sampleIdx];
+
+        float3 q = s - x;
+        float r = length(q);
+        float3 omega_i = normalize(q);
+        float Omega_i = (4.0f * M_PI) / N;
+
+        // Gradients and Hessian of Omega_i
+        float3 gOmega = gradOmega(s, x, n, N);
+        float3x3 H_Omega = grad2OmegaHessian(s, x, n, N);
+
+         // SH basis and derivatives
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+
+        // Accumulate Hessian of f_l^m
+        //∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j ) Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                HessianCoeffLM[j][k] += L * (H_Omega[j][k] * Ylm + gOmega[j] * gradYlm[k] + gOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k]);
+            }
+        }
+    }
+
+    return HessianCoeffLM;
+}
 
 

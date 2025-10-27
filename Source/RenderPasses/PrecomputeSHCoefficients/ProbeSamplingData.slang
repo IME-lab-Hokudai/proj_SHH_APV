@@ -37,4 +37,14 @@ struct ProbeDirSample {
     float dOmega;
 };
 
+// -----------------------------------------------
+// Probe sampling data shared between CPU and GPU
+// -----------------------------------------------
+struct ProbeSampleData
+{
+    float4 Li; // incoming radiance L_i
+    float4 s;  // Sample position s_i (world-space)
+    float4 n;  // Sample normal n_i (world-space)
+};
+
 END_NAMESPACE_FALCOR

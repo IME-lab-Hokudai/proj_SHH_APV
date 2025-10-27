@@ -20,7 +20,7 @@ private:
     // Function: gradOmega
     // Purpose : Compute the spatial gradient of Ω_i with respect to the grid point x.
     //
-    // Equation:
+    // Equation 3:
     //   ∂Ω_i/∂x = (4π / N) * ((n_x * r + 3 * q_x * cosξ) / (r² * cosξ))
     //   (and similarly for ∂Ω_i/∂y, ∂Ω_i/∂z)
     //
@@ -93,8 +93,10 @@ private:
     //   x  : float3 - Position of the grid point where gradient of Ω_i is evaluated
     //   n  : float3 - Surface normal at the environmental patch
     //   N  : int  - number of samples
-    //
-    // Returns:
+    // Equation 5 and 6
+    // ∂_xx Ω_i= -∂_(q_x ) ∂_(q_x ) Ω_i= -4π/N⋅(6n_x q_x r-3cosξ(r^2- 5q_x^2))/(r^4 cosξ)
+    //∂_yx Ω_i = -∂_(q_y) ∂_(q_x) Ω_i = -4π / N((3n_x q_y + 3q_x n_y) / (r ^ 3 cosξ) + (15q_x q_y) / r ^ 4)
+    // Returns: 
     //    3x3 Hessian matrix H, where H(i,j) = ∂²Ω_i / ∂x_i ∂x_j
     //
     // Notes:

@@ -34,7 +34,7 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "Scene/SceneBuilder.h"
 #include "Scene/TriangleMesh.h"
-
+#include "ProbeSamplingData.slang"
 const int numSamplePerProbe = 4096;
 
 namespace
@@ -136,8 +136,11 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
 
             // Map the buffer for reading
-            float4* samplingData = new float4[numSamplePerProbe * numProbe];
-            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe*numProbe*sizeof(float4));
+           //float4* samplingData = new float4[numSamplePerProbe * numProbe];
+            //mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe*numProbe*sizeof(float4));
+
+            ProbeSampleData* samplingData = new ProbeSampleData[numSamplePerProbe * numProbe];
+            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe * numProbe * sizeof(ProbeSampleData));
 
             //// Now pData points to your results, size is sampleCount
             //for (int i = 0; i < sampleCount; ++i)
@@ -154,7 +157,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             {
                 int offset = probeIdx * numSamplePerProbe;
                 std::vector<float4> shCoeffs;
-                std::vector<float4> probeSamples;
+                std::vector<ProbeSampleData> probeSamples;
                 probeSamples.clear();
                 probeSamples.reserve(numSamplePerProbe);
                 for (int i = 0; i < numSamplePerProbe; i++)
@@ -173,8 +176,6 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             {
                  saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
             }
-            
-            
 
             mpGridSHBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
@@ -244,7 +245,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                float3 sceneSize = maxBound - minBound;
               
                int order = 2; // SH order
-               initSHTable(order, dirSamples);
+               //initSHTable(order, dirSamples);
+               initSHBasisGradientAndHessianTables(dirSamples);
                // Decide spacing between probes
                //float3 spacing = float3(2.f, 2.f, 2.f);
                //float3 spacing = float3(2.f, 2.f, 2.f);
@@ -283,7 +285,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                computeProbesPos(mProbeGrid);
 
                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                   sizeof(float4),
+                   sizeof(ProbeSampleData),
                    numSamplePerProbe * numProbes,
                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
                    MemoryType::DeviceLocal
@@ -318,7 +320,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
                //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-               const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK wierd design that light collection is created upon first call to this.
+               const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is created upon first call to this.
                if (mpScene->useEmissiveLights())
                {
                    if (!mpEmissiveSampler)
@@ -376,7 +378,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                    loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
                }
                int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
-               initSHTable(order, dirSamples);
+               //initSHTable(order, dirSamples);
+               initSHBasisGradientAndHessianTables(dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
                mpGridSHBuffer = mpDevice->createStructuredBuffer(
                    sizeof(float4),

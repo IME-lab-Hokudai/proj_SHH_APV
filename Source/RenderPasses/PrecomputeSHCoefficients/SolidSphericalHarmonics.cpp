@@ -158,5 +158,5 @@ float3x3 SolidSphericalHarmonics::hessianSHCoeffLM(const float3& x,
 
     }
 
-       return H;
+    return H;
 }
