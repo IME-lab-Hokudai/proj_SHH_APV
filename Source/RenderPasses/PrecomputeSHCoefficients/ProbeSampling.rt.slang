@@ -52,7 +52,9 @@ cbuffer PerFrameCB
 struct PrimaryRayData
 {
     float4 color;
+    float3 s; // hit world position
     uint depth;
+    float3 n; // hit world normal
     float hitT;
 };
 
@@ -178,6 +180,8 @@ void primaryMiss(inout PrimaryRayData hitData)
     }
 
     hitData.color = float4(color, 1.0f);
+    hitData.s = float3(0.f, 0.f, 0.f);
+    hitData.n = float3(0.f, 0.f, 0.f);
     hitData.hitT = -1.f;
 }
 
@@ -239,8 +243,10 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
         }
         color += accum / float(numEmissiveSamples);
     }
-   
+
     hitData.color = float4(color, 1.0f);
+    hitData.s = sd.posW;
+    hitData.n = normalize(sd.faceN);
     hitData.hitT = hitT;
 }
 
@@ -287,4 +293,7 @@ void rayGen()
 
     // Store result in a 2D (flattened) buffer
     gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].Li = hitData.color;
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].n = float4(hitData.n, 1.0f);
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].s = float4(hitData.s, 1.0f);
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].hitT = hitData.hitT;
 }

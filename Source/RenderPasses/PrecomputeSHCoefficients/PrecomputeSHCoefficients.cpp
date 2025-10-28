@@ -86,13 +86,18 @@ RenderPassReflection PrecomputeSHCoefficients::reflect(const CompileData& compil
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA16Float);
+    //reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA16Float);
     // Add the required depth output. This always exists.
+    // reflector.addOutput("depth", "Depth buffer")
+    //     .format(ResourceFormat::D32Float)
+    //     .bindFlags(ResourceBindFlags::DepthStencil)
+    //     .texture2D(sz.x, sz.y, 4);
+
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y).format(ResourceFormat::RGBA16Float);
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
         .bindFlags(ResourceBindFlags::DepthStencil)
-        .texture2D(sz.x, sz.y, 4);
-    //reflector.addInput()
+        .texture2D(sz.x, sz.y);
     return reflector;
 }
 
@@ -150,8 +155,15 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
             //}
 
-            mProbeGrid.probesSH.clear();
-            mProbeGrid.probesSH.reserve(mProbeGrid.numBasis*numProbe);
+            mProbeGrid.probesSHCoeffs.clear();
+            mProbeGrid.probesSHCoeffs.reserve(mProbeGrid.numBasis*numProbe);
+
+            mProbeGrid.probesSHCoeffsGradients.clear();
+            mProbeGrid.probesSHCoeffsGradients.reserve(mProbeGrid.numBasis * numProbe);
+
+
+            mProbeGrid.probesSHCoeffsHessians.clear();
+            mProbeGrid.probesSHCoeffsHessians.reserve(mProbeGrid.numBasis * numProbe);
 
             for (int probeIdx = 0; probeIdx < numProbe; ++probeIdx)
             {
@@ -165,16 +177,31 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     probeSamplingResults.push_back(samplingData[offset + i]);
                 }
                 calculateSHCoeffs(shCoeffs, probeSamplingResults, numSamplePerProbe);
-                mProbeGrid.probesSH.insert(mProbeGrid.probesSH.end(), shCoeffs.begin(), shCoeffs.end());
+
+                std::vector<GradSHCoeff> shCoeffsGradients;
+                std::vector<HessianSHCoeff> shCoeffsHessians;
+                calculateSHCoeffsGradientsAndHessians(shCoeffsGradients, shCoeffsHessians, mProbeGrid.probesPos[probeIdx], probeSamplingResults);
+                mProbeGrid.probesSHCoeffs.insert(mProbeGrid.probesSHCoeffs.end(), shCoeffs.begin(), shCoeffs.end());
+                mProbeGrid.probesSHCoeffsGradients.insert(mProbeGrid.probesSHCoeffsGradients.end(), shCoeffsGradients.begin(), shCoeffsGradients.end());
+                mProbeGrid.probesSHCoeffsHessians.insert(mProbeGrid.probesSHCoeffsHessians.end(), shCoeffsHessians.begin(), shCoeffsHessians.end());
             }
+
+            //if (sceneName == "arcade")
+            //{
+            //    saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
+            //}
+            //else
+            //{
+            //     saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
+            //}
 
             if (sceneName == "arcade")
             {
-                saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
+                saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
             }
             else
             {
-                 saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
+                saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
             }
 
             mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
@@ -182,7 +209,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mProbeGrid.numBasis * numProbe,
                 ResourceBindFlags::ShaderResource,
                 MemoryType::DeviceLocal,
-                mProbeGrid.probesSH.data()
+                mProbeGrid.probesSHCoeffs.data()
             );
             mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
 
@@ -306,7 +333,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
                                                         // primary-ray ClosestHit shader for reflections, 1 for reflection ray
                                                         // tracing a shadow ray
-               rtProgDesc.setMaxPayloadSize(24);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+               rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
                                                         // should be set as small as possible for maximum performance.
                rtProgDesc.setMaxAttributeSize(8);
                // Add global type conformances.
@@ -371,24 +398,34 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            {
                //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
                //loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               //if (sceneName == "arcade")
+               //{
+               //    loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
+               //}
+               //else
+               //{
+               //    loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               //}
+
                if (sceneName == "arcade")
                {
-                   loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
+                   loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
                }
                else
                {
-                   loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+                   loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
                }
-               int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
+
+               //int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
                //initSHTable(order, dirSamples);
-               initSHBasisGradientAndHessianTables(dirSamples);
+               //initSHBasisGradientAndHessianTables(dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
                mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
                    sizeof(float4),
                    mProbeGrid.numBasis * numProbes,
                    ResourceBindFlags::ShaderResource,
                    MemoryType::DeviceLocal,
-                   mProbeGrid.probesSH.data()
+                   mProbeGrid.probesSHCoeffs.data()
                );
                mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
 

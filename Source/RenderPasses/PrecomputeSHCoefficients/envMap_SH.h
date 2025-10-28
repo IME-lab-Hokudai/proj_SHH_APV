@@ -5,13 +5,29 @@
 //using namespace std;
 using namespace Falcor;
 
+struct GradSHCoeff
+{
+    float3 r; // ∇f_lm for red channel
+    float3 g; // ∇f_lm for green channel
+    float3 b; // ∇f_lm for blue channel
+};
+
+struct HessianSHCoeff
+{
+    float3x3 r; // Hessian of f_lm for red channel
+    float3x3 g; // Hessian of f_lm for green channel
+    float3x3 b; // Hessian of f_lm for blue channel
+};
+
 struct ProbeGrid
 {
     int3 resolution;       // grid size (x, y, z)
     float3 origin;            // world-space origin of grid
     float3 spacing;           // spacing between probes
     int numBasis;
-    std::vector<float4> probesSH;
+    std::vector<float4> probesSHCoeffs;
+    std::vector<GradSHCoeff> probesSHCoeffsGradients;
+    std::vector<HessianSHCoeff> probesSHCoeffsHessians;
     std::vector<float3> probesPos;
 };
 
@@ -27,6 +43,13 @@ void calculateSHCoeffs(
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
 );
+void calculateSHCoeffsGradientsAndHessians(
+    std::vector<GradSHCoeff>& gradOut,
+    std::vector<HessianSHCoeff>& hessianOut,
+    const float3& gridPos,
+    const std::vector<ProbeSampleData>& probeSamplingResults
+);
+
 void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4> & out);
 
 // calculate gradient and hessian of SH basis functions up to l = 2.
@@ -43,6 +66,8 @@ float4* TranposeData(float4* data, int width, int height);
 void computeProbesPos(ProbeGrid& grid);
 
 void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path);
+void saveProbeGridToFileWithGradAndHessian(const ProbeGrid& grid, const std::string& path);
+bool loadProbeGridFromFileWithGradAndHessian(ProbeGrid& out, const std::string& path);
 bool loadProbeGridFromFile( ProbeGrid& out, const std::string& path);
 
 std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount);
@@ -127,16 +152,12 @@ float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, in
 // Output:
 //   Returns float3(∂_x f_l^m, ∂_y f_l^m, ∂_z f_l^m)
 //   - The spatial gradient of f_l^m evaluated at grid point x.
-float3 gradSHCoeffLM(
-    float3 x,
-    const float3* s_list,
-    const float3* n_list,
-    const float* L_list,
-    int N,
-    int l,
-    int m,
-    const float* const SHBasisTable,
-    const float3* const SHGradientTable
+void calculateGradAndHessianSHCoeffLM(
+    const float3 &x,
+    const std::vector<ProbeSampleData>& samplingData,
+    const int &basisIdx,
+    GradSHCoeff& outGrad,
+    HessianSHCoeff& outHessian
 );
 
 //-------------------------------------------------------------------------------
@@ -156,15 +177,8 @@ float3 gradSHCoeffLM(
 // Returns:
 //   full Hessian ∂² f_l^m / ∂x_j ∂x_k
 //-------------------------------------------------------------------------------
-float3x3 hessianSHCoeffLM(
+HessianSHCoeff hessianSHCoeffLM(
     const float3& x,
-    const float3* s_list,
-    const float3* n_list,
-    const float* L_list,
-    int N,
-    int l,
-    int m,
-    const float* const SHBasisTable,
-    const float3* const SHGradientTable,
-    const float3x3* const SHHessianTable
+    const std::vector<ProbeSampleData>& samplingData,
+    const int& basisIdx
 );

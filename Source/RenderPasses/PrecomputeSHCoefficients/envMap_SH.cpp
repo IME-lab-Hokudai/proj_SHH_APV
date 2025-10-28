@@ -266,6 +266,28 @@ void calculateSHCoeffs(
     }
 }
 
+void calculateSHCoeffsGradientsAndHessians(
+    std::vector<GradSHCoeff>& gradOut,
+    std::vector<HessianSHCoeff>& hessianOut,
+    const float3& gridPos,
+    const std::vector<ProbeSampleData>& probeSamplingResults
+)
+{
+    gradOut.clear();
+    gradOut.resize(9);
+    hessianOut.clear();
+    hessianOut.resize(9);
+    // For each SH basis
+    for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+    {
+        GradSHCoeff grad;
+        HessianSHCoeff hessian;
+        calculateGradAndHessianSHCoeffLM(gridPos, probeSamplingResults, basisIdx, grad, hessian);
+        gradOut[basisIdx] = grad;
+        hessianOut[basisIdx] = hessian;
+    }
+}
+
 // irr = sumlm(coefflm* Ylm)
 void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4>& reconstructedData)
 {
@@ -282,7 +304,7 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
             float4 irr = float4(0, 0, 0, 0);
             for (int basisIdx = 0; basisIdx < num_basis; ++basisIdx)
             {
-                irr += grid.probesSH[probeIdx * num_basis + basisIdx] * SHBasisTable[num_basis * sampleIdx + basisIdx];
+                irr += grid.probesSHCoeffs[probeIdx * num_basis + basisIdx] * SHBasisTable[num_basis * sampleIdx + basisIdx];
             }
             reconstructedData[probeIdx * numSamplePerProbe + sampleIdx] = irr;
         }
@@ -610,14 +632,13 @@ void computeProbesPos(ProbeGrid& grid)
     const float3 origin = grid.origin;
     const float3 spacing = grid.spacing;
     int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
-  
 
     int width = res.x;
     int height = res.y;
     int depth = res.z;
 
     int num_basis = grid.numBasis;
-    grid.probesSH.resize(numProbes * num_basis);
+    grid.probesSHCoeffs.resize(numProbes * num_basis);
     
     grid.probesPos.reserve(numProbes);
     for (int probeZ = 0; probeZ < depth; ++probeZ)
@@ -650,23 +671,202 @@ void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path)
     file << "NumBasis: " << numBasis << "\n";
 
     file << "# Probes (SH Coefficients per Probe)\n";
+
     int probeCount = 0;
     int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
 
     for (int p = 0; p < numProbes; ++p)
     {
         file << "Probe " << probeCount++ << ":\n";
-
+        file << "Coeffs:\n";
         for (int b = 0; b < numBasis; ++b)
         {
-            const float4& coeff = grid.probesSH[p * numBasis + b];
+            const float4& coeff = grid.probesSHCoeffs[p * numBasis + b];
             file << "  " << coeff.x << " " << coeff.y << " " << coeff.z << " " << coeff.w << "\n";
         }
-
         file << "\n";
     }
 
     file.close();
+}
+
+void saveProbeGridToFileWithGradAndHessian(const ProbeGrid& grid, const std::string& path)
+{
+    std::ofstream file(path, std::ios::binary);
+    if (!file)
+        return;
+
+    // Set high precision for floating point values
+    file << std::fixed << std::setprecision(6);
+    int numBasis = grid.numBasis;
+    file << "# Probe Grid Info\n";
+    file << "Resolution: " << grid.resolution.x << " " << grid.resolution.y << " " << grid.resolution.z << "\n";
+    file << "Origin: " << grid.origin.x << " " << grid.origin.y << " " << grid.origin.z << "\n";
+    file << "Spacing: " << grid.spacing.x << " " << grid.spacing.y << " " << grid.spacing.z << "\n";
+    file << "NumBasis: " << numBasis << "\n";
+
+    file << "# Probes (SH Coefficients per Probe)\n";
+
+    int probeCount = 0;
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+
+    for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+    {
+        file << "Probe " << probeCount++ << ":\n";
+        file << "Coeffs:\n";
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            const float4& coeff = grid.probesSHCoeffs[probeIdx * numBasis + basisIdx];
+            file << "  " << coeff.x << " " << coeff.y << " " << coeff.z << " " << coeff.w << "\n";
+        }
+        file << "\n";
+        file << "*** Gradients: (each line corresponds to r, g, b channel respectively) ***\n";
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            file << "*** of coeff " << basisIdx << " ***\n";
+            const GradSHCoeff& coeff = grid.probesSHCoeffsGradients[probeIdx * numBasis + basisIdx];
+            file << coeff.r.x << " " << coeff.r.y << " " << coeff.r.z << "\n";
+            file << coeff.g.x << " " << coeff.g.y << " " << coeff.g.z << "\n";
+            file << coeff.b.x << " " << coeff.b.y << " " << coeff.b.z << "\n";
+            file << "\n";
+        }
+    
+        file << "*** Hessian: (each 3 lines corresponds to r, g, b channel respectively) ***\n";
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            file << "*** of coeff " << basisIdx << " ***\n";
+            const HessianSHCoeff& hessian = grid.probesSHCoeffsHessians[probeIdx * numBasis + basisIdx];
+            for (int row = 0; row < 3; ++row)
+            {
+                file << hessian.r[row][0] << " " << hessian.r[row][1] << " " << hessian.r[row][2] << "\n";
+            }
+            file << "\n";
+            for (int row = 0; row < 3; ++row)
+            {
+                file << hessian.g[row][0] << " " << hessian.g[row][1] << " " << hessian.g[row][2] << "\n";
+            }
+            file << "\n";
+            for (int row = 0; row < 3; ++row)
+            {
+                file << hessian.b[row][0] << " " << hessian.b[row][1] << " " << hessian.b[row][2] << "\n";
+            }
+            file << "\n";
+        }
+    }
+
+    file.close();
+}
+
+bool loadProbeGridFromFileWithGradAndHessian(ProbeGrid& grid, const std::string& path)
+{
+    std::ifstream file(path);
+    if (!file)
+        return false;
+
+    std::string line;
+    int numBasis = 0;
+
+    std::getline(file, line); // Skip "# Probe Grid Info"
+
+    // Resolution
+    std::getline(file, line);
+    std::istringstream resStream(line.substr(line.find(":") + 1));
+    resStream >> grid.resolution.x >> grid.resolution.y >> grid.resolution.z;
+
+    // Origin
+    std::getline(file, line);
+    std::istringstream orgStream(line.substr(line.find(":") + 1));
+    orgStream >> grid.origin.x >> grid.origin.y >> grid.origin.z;
+
+    // Spacing
+    std::getline(file, line);
+    std::istringstream spcStream(line.substr(line.find(":") + 1));
+    spcStream >> grid.spacing.x >> grid.spacing.y >> grid.spacing.z;
+
+    // NumBasis
+    std::getline(file, line);
+    std::istringstream basisStream(line.substr(line.find(":") + 1));
+    basisStream >> numBasis;
+    grid.numBasis = numBasis;
+    
+    std::getline(file, line); // Skip "# Probes (SH Coefficients per Probe)"
+
+    grid.probesSHCoeffs.clear();
+    int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
+    grid.probesSHCoeffs.resize(numProbes * numBasis);
+
+    grid.probesSHCoeffsGradients.clear();
+    grid.probesSHCoeffsGradients.resize(numProbes * numBasis);
+
+    grid.probesSHCoeffsHessians.clear();
+    grid.probesSHCoeffsHessians.resize(numProbes * numBasis);
+
+    for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+    {
+        // Read SH coefficients
+        std::getline(file, line); // skip "Probe X"
+        std::getline(file, line); // skip "Coeffs:"
+
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            std::getline(file, line); // get coeff line
+            std::istringstream coeffStream(line);
+            float4 coeff;
+            coeffStream >> coeff.x >> coeff.y >> coeff.z >> coeff.w;
+            grid.probesSHCoeffs[probeIdx * numBasis + basisIdx] = coeff;
+        }
+
+         // Read gradients
+        std::getline(file, line); // empty line
+        std::getline(file, line); // skip "*** Gradients: (each line corresponds to r, g, b channel respectively) ***"
+        
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            std::getline(file, line); // skip " *** of coeff X ***"
+            float3 gradR, gradG, gradB;
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                std::getline(file, line); // get gradient lines
+                std::istringstream gradStream(line);
+                if (channel == 0)
+                    gradStream >> gradR.x >> gradR.y >> gradR.z;
+                else if (channel == 1)
+                    gradStream >> gradG.x >> gradG.y >> gradG.z;
+                else
+                    gradStream >> gradB.x >> gradB.y >> gradB.z;
+            }
+            grid.probesSHCoeffsGradients[probeIdx * numBasis + basisIdx] = {gradR, gradG, gradB};
+            std::getline(file, line); // skip empty line
+        }
+
+        //Read Hessians
+        std::getline(file, line); // skip "*** Hessian: (each 3 lines corresponds to r, g, b channel respectively) ***"
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            std::getline(file, line); // skip " *** of coeff X ***"
+            float3x3 hessR, hessG, hessB;
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                for (int row = 0; row < 3; ++row)
+                {
+                    std::getline(file, line); // get hessian lines
+                    std::istringstream hessStream(line);
+                    if (channel == 0)
+                        hessStream >> hessR[row][0] >> hessR[row][1] >> hessR[row][2];
+                    else if (channel == 1)
+                        hessStream >> hessG[row][0] >> hessG[row][1] >> hessG[row][2];
+                    else
+                        hessStream >> hessB[row][0] >> hessB[row][1] >> hessB[row][2];
+                }
+                std::getline(file, line); // skip empty line
+            }
+            grid.probesSHCoeffsHessians[probeIdx * numBasis + basisIdx] = {hessR, hessG, hessB};
+        }
+    }
+
+    computeProbesPos(grid);
+    file.close();
+    return grid.probesSHCoeffs.size() == numProbes;
 }
 
 bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
@@ -703,9 +903,9 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
     // Skip "# Probes (SH Coefficients per Probe)"
     std::getline(file, line);
 
-    grid.probesSH.clear();
+    grid.probesSHCoeffs.clear();
     int numProbes = grid.resolution.x * grid.resolution.y * grid.resolution.z;
-    grid.probesSH.resize(numProbes*numBasis);
+    grid.probesSHCoeffs.resize(numProbes*numBasis);
 
     for (int probeIndex = 0; probeIndex < numProbes; ++probeIndex)
     {
@@ -718,14 +918,14 @@ bool loadProbeGridFromFile(ProbeGrid& grid, const std::string& path)
             std::istringstream coeffStream(line);
             float4 coeff;
             coeffStream >> coeff.x >> coeff.y >> coeff.z >> coeff.w;
-            grid.probesSH[probeIndex * numBasis + i] = coeff;
+            grid.probesSHCoeffs[probeIndex * numBasis + i] = coeff;
         }
 
         std::getline(file, line); // empty line
     }
 
     computeProbesPos(grid);
-    return grid.probesSH.size() == numProbes;
+    return grid.probesSHCoeffs.size() == numProbes;
 }
 
 std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
@@ -791,57 +991,7 @@ float3 gradOmega(float3 s, float3 x, float3 n, float N)
     return grad;
 }
 
-// Notes:
-//   - gradOmega() computes ∇Ω_i (geometry term derivative).
-//   - gradY_lm() provides ∇Y_l^m(ω_i) in direction space.
-//   - ∂ω/∂x = -(I - ωω^T) / r maps direction derivative to spatial domain.
-//   - Numerical guards in gradOmega() handle small r or cosξ cases.
-//   - Typically used for SH grid refinement or Hessian computation.
-//-------------------------------------------------------------------------------
-float3 gradSHCoeffLM(
-    float3 x,
-    const float3* s_list,
-    const float3* n_list,
-    const float* L_list,
-    int N,
-    int l,
-    int m,
-    const float* const SHBasisTable,
-    const float3* const SHGradientTable
-)
-{
-    float3 grad_f = float3(0.0, 0.0, 0.0);
 
-    for (int i = 0; i < N; ++i)
-    {
-        float3 s = s_list[i];
-        float3 n = n_list[i];
-        float L = L_list[i];
-
-        // Geometry and direction
-        float3 q = s - x;
-        float r = length(q);
-        float3 omega_i = normalize(q); // note: omega_i points from x to s to evaluate SH basis
-
-        // Solid angle (uniform per patch)
-        float Omega_i = (4.0f * M_PI) / N;
-
-        // Spatial derivative of Ω_i (geometry-dependent)
-        float3 dOmega = gradOmega(s, x, n, N);
-
-        // SH basis and derivative in direction space
-        int numBasis = (l + 1) * (l + 1);
-        int sampleIdx = i;
-        int basisIdx = l * (l + 1) + m;
-        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
-        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
-        // Contribution of this sample to ∇f_l^m
-        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        grad_f += L * (dOmega * Ylm + Omega_i * gradYlm);
-    }
-
-    return grad_f;
-}
 
 float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, int N)
 {
@@ -886,37 +1036,91 @@ float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, in
     return H;
 }
 
-float3x3 hessianSHCoeffLM(
+// Notes:
+//   - gradOmega() computes ∇Ω_i (geometry term derivative).
+//   - gradY_lm() provides ∇Y_l^m(ω_i) in direction space.
+//   - ∂ω/∂x = -(I - ωω^T) / r maps direction derivative to spatial domain.
+//   - Numerical guards in gradOmega() handle small r or cosξ cases.
+//   - Typically used for SH grid refinement or Hessian computation.
+//-------------------------------------------------------------------------------
+void calculateGradAndHessianSHCoeffLM(
     const float3& x,
-    const float3* s_list,
-    const float3* n_list,
-    const float* L_list,
-    int N,
-    int l,
-    int m,
-    const float* const SHBasisTable,
-    const float3* const SHGradientTable,
-    const float3x3* const SHHessianTable
+    const std::vector<ProbeSampleData>& samplingData,
+    const int& basisIdx,
+    GradSHCoeff& outGrad,
+    HessianSHCoeff& outHessian
 )
 {
-    float3x3 HessianCoeffLM = float3x3::zeros();
-
-    int numBasis = (l + 1) * (l + 1);
-    int basisIdx = l * (l + 1) + m;
-    for (int sampleIdx = 0; sampleIdx < N; ++sampleIdx)
+    outGrad = {float3(0), float3(0), float3(0)};
+    outHessian = {float3x3::zeros(), float3x3::zeros(), float3x3::zeros()};
+    int samplingSize = samplingData.size();
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
     {
-        float3 s = s_list[sampleIdx];
-        float3 n = n_list[sampleIdx];
-        float L = L_list[sampleIdx];
+        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
+            continue;
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
+
+        // Geometry and direction
+        float3 q = s - x;
+        float r = length(q);
+
+        // Solid angle (uniform per patch)
+        float Omega_i = (4.0f * M_PI) / samplingSize;
+
+        // Spatial derivative of Ω_i (geometry-dependent)
+        float3 dOmega = gradOmega(s, x, n, samplingSize);
+
+        // SH basis and derivative in direction space
+        int numBasis = 9;
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        // Contribution of this sample to ∇f_l^m
+        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
+        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        outGrad.r += L.r * contrib;
+        outGrad.g += L.g * contrib;
+        outGrad.b += L.b * contrib;
+
+        float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
+        float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+        // Accumulate Hessian of f_l^m
+        // ∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j )Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                float contribH = H_Omega[j][k] * Ylm + dOmega[j] * gradYlm[k] + dOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
+                outHessian.r[j][k] += L.x * contribH;
+                outHessian.g[j][k] += L.y * contribH;
+                outHessian.b[j][k] += L.z * contribH;
+            }
+        }
+    }
+}
+
+HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const int& basisIdx)
+{
+    HessianSHCoeff H = {float3x3::zeros(), float3x3::zeros(), float3x3::zeros()};
+
+    int numBasis = 9;
+    int samplingSize = samplingData.size();
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
+    {
+        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
+            continue;
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
         float3 q = s - x;
         float r = length(q);
-        float3 omega_i = normalize(q);
-        float Omega_i = (4.0f * M_PI) / N;
+        float Omega_i = (4.0f * M_PI) / samplingSize;
 
         // Gradients and Hessian of Omega_i
-        float3 gOmega = gradOmega(s, x, n, N);
-        float3x3 H_Omega = grad2OmegaHessian(s, x, n, N);
+        float3 gOmega = gradOmega(s, x, n, samplingSize);
+        float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
 
          // SH basis and derivatives
         float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
@@ -929,12 +1133,16 @@ float3x3 hessianSHCoeffLM(
         {
             for (int k = 0; k < 3; ++k)
             {
-                HessianCoeffLM[j][k] += L * (H_Omega[j][k] * Ylm + gOmega[j] * gradYlm[k] + gOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k]);
+                float contrib = H_Omega[j][k] * Ylm + gOmega[j] * gradYlm[k] + gOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
+                H.r[j][k] += L.x * contrib;
+                H.g[j][k] += L.y * contrib;
+                H.b[j][k] += L.z * contrib;
+               // HessianCoeffLM[j][k] += L * (H_Omega[j][k] * Ylm + gOmega[j] * gradYlm[k] + gOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k]);
             }
         }
     }
 
-    return HessianCoeffLM;
+    return H;
 }
 
 

@@ -160,15 +160,17 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
     //   2 |   1   |   7    | Y_2^1  = 1.092548 * xz
     //   2 |   2   |   8    | Y_2^2  = 0.546274 * (x^2 - y^2)
     // ============================================================
-    
+
+    //with Condon–Shortley phase(-1) ^ m to match Iwasaki sensei code convention
     // Band 0
     float Y0 = 0.2820947917738781f; // l=0, m=0
 
-     //Band 1 with Condon–Shortley phase (-1)^m to match Iwasaki sensei code convention
+     //Band 1
     float Y1 = -0.4886025119029200f * y;  // l=1, m=-1
     float Y2 = 0.4886025119029200f * z;   // l=1, m=0
     float Y3 = -0.4886025119029200f * x; // l=1, m=1
 
+    // Band 2
     float Y4 = 1.0925484305920792f * x * y;       // l=2, m=-2
     float Y5 = -1.0925484305920792f * y * z;      // l=2, m=-1
     float Y6 = 0.9461746957575601f * z * z - 0.3153915652525200f; // l=2, m=0
