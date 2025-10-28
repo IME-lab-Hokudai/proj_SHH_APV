@@ -1,4 +1,5 @@
 import Scene.Raster; // Imports defaultVS.
+#include "Utils/Math/MathConstants.slangh"
 
 SamplerState gLinearSampler;
 #define MAX_SH_BASIS 9
@@ -132,41 +133,47 @@ void sampleSHAtPosition(float3 worldPos, out float4 outSH[MAX_SH_BASIS])
 // Evaluate 9 SH basis functions at direction n
 float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
 {
-    // SH basis function indexing and formulas:
-    // Index | l (band) | m (order) | SH function          | Formula (Cartesian coords)
-    // -------------------------------------------------------------------------------------
-    // 0     | 0        |  0        | Y_0^0                | 0.282095
-    // 1     | 1        | -1        | Y_1^-1               | 0.488603 * y       // ~ sqrt(3/(4π)) * y/r * sin(φ)
-    // 2     | 1        |  0        | Y_1^0                | 0.488603 * z       // ~ sqrt(3/(4π)) * z/r
-    // 3     | 1        |  1        | Y_1^1                | 0.488603 * x       // ~ sqrt(3/(4π)) * x/r * cos(φ)
-    // 4     | 2        | -2        | Y_2^-2               | 1.092548 * x * y   // ~ sqrt(15/(4π)) * xy/r² * sin(2φ)
-    // 5     | 2        | -1        | Y_2^-1               | 1.092548 * y * z   // ~ sqrt(15/(4π)) * yz/r² * sin(φ)
-    // 6     | 2        |  0        | Y_2^0                | 0.315392 * (-x*x - y*y + 2*z*z) // ~ 0.315392 * (3z² - 1)
-    // 7     | 2        |  1        | Y_2^1                | 1.092548 * x * z   // ~ sqrt(15/(4π)) * xz/r² * cos(φ)
-    // 8     | 2        |  2        | Y_2^2                | 0.546274 * (x*x - y*y)  // ~ 0.546274 * (x² - y²)/r² * cos(2φ)
+    // Real Spherical Harmonics up to band 2
+    // Coordinate convention: x = forward, y = right, z = up
+    // so we need to remap falcor coords (Y-up) to polar coords (Z-up)
+    float x = n.z;
+    float y = n.x;
+    float z = n.y;
 
-    // Falcor Y-up coordinates
-    float x = n.x; // right
-    float y = n.y; // up, polar axis
-    float z = n.z; // forward
-
+    // ============================================================
+    // Real Spherical Harmonics up to l = 2
+    // Convention: Y_l^m, index = l(l + 1) + m
+    // Coordinate system: (x, y, z)
+    // ============================================================
+    //
+    //  Index layout table:
+    //
+    //   l |   m   | index |       Expression
+    //  ----|-------|--------|------------------------------------
+    //   0 |   0   |   0    | Y_0^0  = 0.282095
+    //   1 |  -1   |   1    | Y_1^-1 = 0.488603 * y
+    //   1 |   0   |   2    | Y_1^0  = 0.488603 * z
+    //   1 |   1   |   3    | Y_1^1  = 0.488603 * x
+    //   2 |  -2   |   4    | Y_2^-2 = 1.092548 * xy
+    //   2 |  -1   |   5    | Y_2^-1 = 1.092548 * yz
+    //   2 |   0   |   6    | Y_2^0  = 0.946175 * z^2 - 0.315392
+    //   2 |   1   |   7    | Y_2^1  = 1.092548 * xz
+    //   2 |   2   |   8    | Y_2^2  = 0.546274 * (x^2 - y^2)
+    // ============================================================
+    
     // Band 0
-    float Y0 = 0.282095f;
+    float Y0 = 0.2820947917738781f; // l=0, m=0
 
-    // Band 1
-    // m = -1 -> sin(phi) term in x–z plane -> corresponds to forward (z)
-    // m = 0  -> polar axis -> y
-    // m = 1  -> cos(phi) term in x–z plane -> x
-    float Y1 = 0.488603f * z; // Y_1^-1
-    float Y2 = 0.488603f * y; // Y_1^0
-    float Y3 = 0.488603f * x; // Y_1^1
+     //Band 1 with Condon–Shortley phase (-1)^m to match Iwasaki sensei code convention
+    float Y1 = -0.4886025119029200f * y;  // l=1, m=-1
+    float Y2 = 0.4886025119029200f * z;   // l=1, m=0
+    float Y3 = -0.4886025119029200f * x; // l=1, m=1
 
-    // Band 2
-    float Y4 = 1.092548f * x * z;                 // Y_2^-2 = sin(2φ) xy-plane -> x*z
-    float Y5 = 1.092548f * z * y;                 // Y_2^-1 = sin(φ) * P -> z*y
-    float Y6 = 0.315392f * (3.0f * y * y - 1.0f); // Y_2^0 = along polar axis
-    float Y7 = 1.092548f * x * y;                 // Y_2^1 = cos(φ) * P -> x*y
-    float Y8 = 0.546274f * (x * x - z * z);       // Y_2^2 = cos(2φ) in x–z plane
+    float Y4 = 1.0925484305920792f * x * y;       // l=2, m=-2
+    float Y5 = -1.0925484305920792f * y * z;      // l=2, m=-1
+    float Y6 = 0.9461746957575601f * z * z - 0.3153915652525200f; // l=2, m=0
+    float Y7 = -1.0925484305920792f * x * z;                 // l=2, m=1
+    float Y8 = 0.546274f * (x * x - y * y);       // l=2, m=2
 
     // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
     float A[3] = { 3.141593f, 2.094395f, 0.785398f };
@@ -216,13 +223,13 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   sampleSHAtPosition(shadingData.posW, shCoeffs);
   vsOut.irradiance = evaluateIrradiance(normalize(shadingData.faceN), shCoeffs);
 
-  float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb / 3.14159265;
-  //float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
- // float3 emissiveColor = emissiveSample.rgb;
- //  float3 litColor = diffuseColor + emissiveColor;
-  float3 litColor = diffuseColor;
+  float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb / M_PI;
+ // float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
+  float3 emissiveColor = emissiveSample.rgb;
+  float3 litColor = diffuseColor + emissiveColor;
+  //float3 litColor = diffuseColor;
   // float3 litColor = normalSampleW;
   // float3 litColor = shadingData.faceN;
-  //float3 litColor = vsOut.irradiance.rgb;
+    //float3 litColor = vsOut.irradiance.rgb;
     return float4(litColor,1.0f);
 }

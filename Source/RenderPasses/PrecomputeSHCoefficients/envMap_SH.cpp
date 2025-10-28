@@ -228,7 +228,7 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
     }
 }
 
-void decomposeSH(
+void calculateSHCoeffs(
     std::vector<float4>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
@@ -236,7 +236,7 @@ void decomposeSH(
 {
     if (shOrder == -1 || SHBasisTable == nullptr)
     {
-        logError("call initSHTable before decomposeSH!");
+        logError("call initSHTable before calculate SH coeffs!");
         return;
     }
 
@@ -733,21 +733,32 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
     std::vector<ProbeDirSample> samples;
     samples.reserve(sampleCount);
 
-    std::mt19937 rng(12345);
+    std::mt19937 rng(12345); // fixed seed for reproducibility
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
     float dOmega = 4.0f * float(M_PI) / float(sampleCount); // Uniform solid angle per sample
 
     for (int i = 0; i < sampleCount; ++i)
     {
-        float y = 1.0f - 2.0f * dist(rng);
-        float phi = 2.0f * float(M_PI) * dist(rng);
-        float h = sqrtf(1.0f - y * y);
+        //float y = 1.0f - 2.0f * dist(rng);
+        //float phi = 2.0f * float(M_PI) * dist(rng);
+        //float h = sqrtf(1.0f - y * y);
 
-        //float3 dir = {r * cosf(phi), r * sinf(phi), z};
-        // Falcor Y-up: y = z, z = r*sin(phi)
-        float3 dir = {h * cosf(phi), y, h * sinf(phi)}; // x, y, z
-        //float3 dir = {h * sinf(phi), y, h * cosf(phi)}; // x, y, z
+        ////float3 dir = {r * cosf(phi), r * sinf(phi), z};
+        //// Falcor Y-up: y = z, z = r*sin(phi)
+        //float3 dir = {h * cosf(phi), y, h * sinf(phi)}; // x, y, z
+        ////float3 dir = {h * sinf(phi), y, h * cosf(phi)}; // x, y, z
+
+        // Generate in standard polar coordinates z -up, y -right, x -forward
+        float z = 1.0f - 2.0f * dist(rng);          // up 
+        float phi = 2.0f * float(M_PI) * dist(rng); // azimuth
+        float h = sqrtf(1.0f - z * z);              // radius in xy-plane
+
+        
+        float x = h * cosf(phi); // forward
+        float y = h * sinf(phi); // right
+
+        float3 dir = {x, y, z};  // x, y, z
         samples.push_back({dir, dOmega});
     }
     return samples;

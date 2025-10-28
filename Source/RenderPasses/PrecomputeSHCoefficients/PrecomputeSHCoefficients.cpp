@@ -157,14 +157,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             {
                 int offset = probeIdx * numSamplePerProbe;
                 std::vector<float4> shCoeffs;
-                std::vector<ProbeSampleData> probeSamples;
-                probeSamples.clear();
-                probeSamples.reserve(numSamplePerProbe);
+                std::vector<ProbeSampleData> probeSamplingResults;
+                probeSamplingResults.clear();
+                probeSamplingResults.reserve(numSamplePerProbe);
                 for (int i = 0; i < numSamplePerProbe; i++)
                 {
-                    probeSamples.push_back(samplingData[offset + i]);
+                    probeSamplingResults.push_back(samplingData[offset + i]);
                 }
-                decomposeSH(shCoeffs, probeSamples, numSamplePerProbe);
+                calculateSHCoeffs(shCoeffs, probeSamplingResults, numSamplePerProbe);
                 mProbeGrid.probesSH.insert(mProbeGrid.probesSH.end(), shCoeffs.begin(), shCoeffs.end());
             }
 
@@ -177,14 +177,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                  saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
             }
 
-            mpGridSHBuffer = mpDevice->createStructuredBuffer(
+            mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float4),
                 mProbeGrid.numBasis * numProbe,
                 ResourceBindFlags::ShaderResource,
                 MemoryType::DeviceLocal,
                 mProbeGrid.probesSH.data()
             );
-            mpGridSHBuffer->setName("SH Grid Coeffs");
+            mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
 
             mbFinishSHPrecompute = true;
             delete[] samplingData;
@@ -197,21 +197,23 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
              auto shShaderRootVar = mpVars->getRootVar();
              shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-             shShaderRootVar["gSHCoeffs"] = mpGridSHBuffer;
+             shShaderRootVar["gSHCoeffs"] = mpGridSHCoeffsBuffer;
              shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
              shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
              shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
              shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
 
              mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
-             if (mbShowSHGrid)
-             {
-                mpProbeVisualizePass->setCameraData(
-                    mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
-                );
-                mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
-                mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-             }
+
+            // TODO: rework grid visualization pass
+             //if (mbShowSHGrid)
+             //{
+             //   mpProbeVisualizePass->setCameraData(
+             //       mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
+             //   );
+             //   mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
+             //   mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+             //}
         }
     }
 }
@@ -381,26 +383,26 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                //initSHTable(order, dirSamples);
                initSHBasisGradientAndHessianTables(dirSamples);
                int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-               mpGridSHBuffer = mpDevice->createStructuredBuffer(
+               mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
                    sizeof(float4),
                    mProbeGrid.numBasis * numProbes,
                    ResourceBindFlags::ShaderResource,
                    MemoryType::DeviceLocal,
                    mProbeGrid.probesSH.data()
                );
-               mpGridSHBuffer->setName("SH Grid Coeffs");
+               mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
 
-               std::vector<float4> reconstructedData;
-               reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
+               //std::vector<float4> reconstructedData;
+               //reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
 
-               mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                   sizeof(float4),
-                   numSamplePerProbe * numProbes,
-                   ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                   MemoryType::DeviceLocal,
-                   reconstructedData.data()
-               );
-               mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+               //mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+               //    sizeof(float4),
+               //    numSamplePerProbe * numProbes,
+               //    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+               //    MemoryType::DeviceLocal,
+               //    reconstructedData.data()
+               //);
+               //mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
            }
            // program
            ProgramDesc desc;

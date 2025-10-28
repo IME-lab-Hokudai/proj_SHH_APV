@@ -22,7 +22,7 @@ struct ProbeGrid
 
 // for probe sampling using ray tracing
 void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples);
-void decomposeSH(
+void calculateSHCoeffs(
     std::vector<float4>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe

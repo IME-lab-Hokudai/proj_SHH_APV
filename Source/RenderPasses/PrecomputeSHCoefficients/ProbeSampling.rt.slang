@@ -264,11 +264,19 @@ void rayGen()
     uint probeIdx = DispatchRaysIndex().y;
 
     float3 probePos = gProbePositions[probeIdx];
-    float3 dir = normalize(gProbeDirSamples[dirIdx].dir);
+    float3 dir = gProbeDirSamples[dirIdx].dir;
+
+    // we generated dir samples and calculate SH basis, gradient, hessian in Polar coordinates so we need to convert them to Falcor's right -handed Y-up coordinate system
+    //Convert to Falcor coordinates
+    float3 dirFalcor;
+    dirFalcor.x = dir.y; // right
+    dirFalcor.y = dir.z; // up
+    dirFalcor.z = dir.x; // forward
 
     RayDesc ray;
     ray.Origin = probePos;
-    ray.Direction = dir;
+    //ray.Direction = dir;
+    ray.Direction = dirFalcor;
     ray.TMin = 0.001f;
     ray.TMax = 100.f;
 
