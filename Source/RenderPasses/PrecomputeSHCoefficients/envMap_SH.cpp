@@ -1100,6 +1100,60 @@ void calculateGradAndHessianSHCoeffLM(
     }
 }
 
+void calculateChannelRGradAndHessianSHCoeffLM(
+    const float3& x,
+    const std::vector<ProbeSampleData>& samplingData,
+    const int& basisIdx,
+    float& outGrad,
+    float& outHessian
+)
+{
+    outGrad = 0.0f;
+    outHessian = 0.0f;
+    int samplingSize = samplingData.size();
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
+    {
+        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
+            continue;
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
+
+        // Geometry and direction
+        float3 q = s - x;
+        float r = length(q);
+
+        // Solid angle (uniform per patch)
+        float Omega_i = (4.0f * M_PI) / samplingSize;
+
+        // Spatial derivative of Ω_i (geometry-dependent)
+        float3 dOmega = gradOmega(s, x, n, samplingSize);
+
+        // SH basis and derivative in direction space
+        int numBasis = 9;
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        // Contribution of this sample to ∇f_l^m
+        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
+        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        outGrad += (L.r * contrib).r;
+
+        //float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
+        //float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+        // Accumulate Hessian of f_l^m
+        // ∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j
+        // )Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
+        //for (int j = 0; j < 3; ++j)
+        //{
+        //    for (int k = 0; k < 3; ++k)
+        //    {
+        //        float contribH = H_Omega[j][k] * Ylm + dOmega[j] * gradYlm[k] + dOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
+        //        outHessian.r[j][k] += L.x * contribH;
+        //    }
+        //}
+    }
+}
+
 HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const int& basisIdx)
 {
     HessianSHCoeff H = {float3x3::zeros(), float3x3::zeros(), float3x3::zeros()};
@@ -1143,6 +1197,55 @@ HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleDa
     }
 
     return H;
+}
+
+std::vector<float3> generateVerificationPositions(float y, float extent, uint32_t resolution, float h)
+{
+    std::vector<float3> positions;
+    positions.reserve(resolution * resolution * 3);
+
+    double step = (2.0 * extent) / (double)(resolution - 1);
+
+    for (uint32_t i = 0; i < resolution; ++i)
+    {
+        double z = -extent + step * (double)i;
+
+        for (uint32_t j = 0; j < resolution; ++j)
+        {
+            double x = -extent + step * (double)j;
+
+            positions.push_back(float3((float)x, y, (float)z));       // center
+            positions.push_back(float3((float)(x + h), y, (float)z)); // +h
+            positions.push_back(float3((float)(x - h), y, (float)z)); // -h
+        }
+    }
+
+    return positions;
+}
+
+float calculateChannelRSHCoeffLM(int basisIdx, const std::vector<ProbeSampleData>& probeSamplingResults)
+{
+    if (shOrder == -1 || SHBasisTable == nullptr)
+    {
+        logError("call initSHTable before calculate SH coeffs!");
+        return -1;
+    }
+
+    int num_basis = (shOrder + 1) * (shOrder + 1);
+    int numSamplePerProbe = probeSamplingResults.size();
+    float weight = 4.0f * float(M_PI) / float(numSamplePerProbe); // because uniform sampling
+
+    float r = 0.0;
+    // For each direction sample
+    for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
+    {
+        const float4& sample = probeSamplingResults[sampleIdx].Li;
+        float shY = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
+
+        r += sample.x * shY * weight;
+    }
+
+    return r;
 }
 
 

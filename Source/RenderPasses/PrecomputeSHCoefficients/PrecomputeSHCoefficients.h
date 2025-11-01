@@ -99,5 +99,9 @@ private:
     EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform; ///< Emissive light sampler to use for NEE.
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler; ///< Emissive light sampler or nullptr if not used.
     mutable LightBVHSampler::Options mLightBVHOptions; ///< Current options for the light BVH sampler. not used yet. just here to compile the code
+    
     //ref<SampleGenerator> mpSampleGenerator;            ///< GPU pseudo-random sample generator.
+
+    bool mbVerify = true;
+    std::vector<float3> verificationPositions;
 };

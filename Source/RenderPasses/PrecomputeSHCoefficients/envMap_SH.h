@@ -182,3 +182,20 @@ HessianSHCoeff hessianSHCoeffLM(
     const std::vector<ProbeSampleData>& samplingData,
     const int& basisIdx
 );
+
+
+// ****functions for verifying SH gradient and hessian calculation using numerical finite differentiation****
+
+// Generate a single vector containing all positions needed for ∂f/∂x finite difference
+// Order per sample: [center, +h, -h]
+std::vector<float3> generateVerificationPositions(float y = 0.2f, float extent = 0.25f, uint32_t resolution = 64, float h = 1e-3f );
+
+// we evaluate coeff for just one basis and channel R for verification purpose
+float calculateChannelRSHCoeffLM(int basisIdx, const std::vector<ProbeSampleData>& probeSamplingResults);
+void calculateChannelRGradAndHessianSHCoeffLM(
+    const float3& x,
+    const std::vector<ProbeSampleData>& samplingData,
+    const int& basisIdx,
+    float& outGrad,
+    float& outHessian
+);
