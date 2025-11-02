@@ -193,6 +193,7 @@ void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples)
 void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples)
 {
     shOrder = 2; // fixed to L2 for now
+    int numBasis = 9;
     std::array<float3, 9> glm;
     std::array<float3x3, 9> hlm;
     std::array<float, 9> ylm; // local storage for SH values
@@ -211,19 +212,19 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
         delete[] SHHessianTable;
       SHHessianTable = new float3x3[9 * numSamplesPerProbe];
 
-    for (int i = 0; i < numSamplesPerProbe; ++i)
+    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
     {
-        const float3& dir = dirSamples[i].dir;
+        const float3& dir = dirSamples[sampleIdx].dir;
 
         // compute SH gradients for this direction
         SHGradientAndHessianL2(dir, ylm, glm, hlm);
 
         // store into SHGradientTable
-        for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
         {
-            SHBasisTable[i * 9 + basisIdx] = ylm[basisIdx];
-            SHGradientTable[i * 9 + basisIdx] = glm[basisIdx];
-            SHHessianTable[i * 9 + basisIdx] = hlm[basisIdx];
+            SHBasisTable[sampleIdx * numBasis + basisIdx] = ylm[basisIdx];
+            SHGradientTable[sampleIdx * numBasis + basisIdx] = glm[basisIdx];
+            SHHessianTable[sampleIdx * numBasis + basisIdx] = hlm[basisIdx];
         }
     }
 }
@@ -240,7 +241,7 @@ void calculateSHCoeffs(
         return;
     }
 
-    int num_basis = (shOrder + 1) * (shOrder + 1);
+    int num_basis = 9;
     out.clear();
     out.resize(num_basis);
 
@@ -959,6 +960,7 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
         float y = h * sinf(phi); // right
 
         float3 dir = {x, y, z};  // x, y, z
+        dir = math::normalize(dir);
         samples.push_back({dir, dOmega});
     }
     return samples;
@@ -976,11 +978,11 @@ float3 gradOmega(float3 s, float3 x, float3 n, float N)
     float cosXi = -(dot(n, q)) / r;
 
     // Numerical guard to avoid division by zero or near-zero values
-    if (abs(cosXi) < 1e-6 || r < 1e-6)
-        return float3(0.0, 0.0, 0.0);
+    //if (abs(cosXi) < 1e-6 || r < 1e-6)
+        //return float3(0.0, 0.0, 0.0);
 
     // Use uniform sampling with N samples
-    float factor = 4.0 * M_PI / N;
+    float factor = 4.0f * M_PI / float(N);
 
     // Element-wise computation:
     // ∂xΩ_i = factor * (n_x * r + 3 * q_x * cosξ) / (r² * cosξ)
@@ -1002,9 +1004,9 @@ float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, in
     // cosξ = -(n.q)/r
     float cosXi = -(dot(n, q)) / r;
 
-    const float eps = 1e-6f;
-    if (fabs(cosXi) < eps)
-        cosXi = (cosXi < 0 ? -eps : eps);
+    //const float eps = 1e-6f;
+    //if (fabs(cosXi) < eps)
+    //    cosXi = (cosXi < 0 ? -eps : eps);
 
     // Precompute powers of r
     float r2 = r * r;
@@ -1012,14 +1014,14 @@ float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, in
     float r4 = r2 * r2;
 
     // Pure second derivatives
-    float d2Omega_xx = -(4.0f * M_PI / N) * (6.0f * n.x * qx * r - 3.0f * cosXi * (r2 - 5.0f * qx * qx)) / (r4 * cosXi);
-    float d2Omega_yy = -(4.0f * M_PI / N) * (6.0f * n.y * qy * r - 3.0f * cosXi * (r2 - 5.0f * qy * qy)) / (r4 * cosXi);
-    float d2Omega_zz = -(4.0f * M_PI / N) * (6.0f * n.z * qz * r - 3.0f * cosXi * (r2 - 5.0f * qz * qz)) / (r4 * cosXi);
+    float d2Omega_xx = -(4.0f * M_PI / (float)N) * (6.0f * n.x * qx * r - 3.0f * cosXi * (r2 - 5.0f * qx * qx)) / (r4 * cosXi);
+    float d2Omega_yy = -(4.0f * M_PI / (float)N) * (6.0f * n.y * qy * r - 3.0f * cosXi * (r2 - 5.0f * qy * qy)) / (r4 * cosXi);
+    float d2Omega_zz = -(4.0f * M_PI / (float)N) * (6.0f * n.z * qz * r - 3.0f * cosXi * (r2 - 5.0f * qz * qz)) / (r4 * cosXi);
 
     // Mixed derivatives (symmetric)
-    float d2Omega_xy = -(4.0f * M_PI / N) * (((3.0f * n.x * qy + 3.0f * qx * n.y) / (r3 * cosXi)) + (15.0f * qx * qy / r4));
-    float d2Omega_xz = -(4.0f * M_PI / N) * (((3.0f * n.x * qz + 3.0f * qx * n.z) / (r3 * cosXi)) + (15.0f * qx * qz / r4));
-    float d2Omega_yz = -(4.0f * M_PI / N) * (((3.0f * n.y * qz + 3.0f * qy * n.z) / (r3 * cosXi)) + (15.0f * qy * qz / r4));
+    float d2Omega_xy = -(4.0f * M_PI / (float)N) * (((3.0f * n.x * qy + 3.0f * qx * n.y) / (r3 * cosXi)) + (15.0f * qx * qy / r4));
+    float d2Omega_xz = -(4.0f * M_PI / (float)N) * (((3.0f * n.x * qz + 3.0f * qx * n.z) / (r3 * cosXi)) + (15.0f * qx * qz / r4));
+    float d2Omega_yz = -(4.0f * M_PI / (float)N) * (((3.0f * n.y * qz + 3.0f * qy * n.z) / (r3 * cosXi)) + (15.0f * qy * qz / r4));
 
     // Assemble symmetric Hessian
     float3x3 H = float3x3::zeros();
@@ -1100,59 +1102,7 @@ void calculateGradAndHessianSHCoeffLM(
     }
 }
 
-void calculateChannelRGradAndHessianSHCoeffLM(
-    const float3& x,
-    const std::vector<ProbeSampleData>& samplingData,
-    const int& basisIdx,
-    float& outGrad,
-    float& outHessian
-)
-{
-    outGrad = 0.0f;
-    outHessian = 0.0f;
-    int samplingSize = samplingData.size();
-    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
-    {
-        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
-            continue;
-        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
-        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
-        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
-        // Geometry and direction
-        float3 q = s - x;
-        float r = length(q);
-
-        // Solid angle (uniform per patch)
-        float Omega_i = (4.0f * M_PI) / samplingSize;
-
-        // Spatial derivative of Ω_i (geometry-dependent)
-        float3 dOmega = gradOmega(s, x, n, samplingSize);
-
-        // SH basis and derivative in direction space
-        int numBasis = 9;
-        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
-        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
-        // Contribution of this sample to ∇f_l^m
-        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
-        outGrad += (L.r * contrib).r;
-
-        //float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
-        //float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
-        // Accumulate Hessian of f_l^m
-        // ∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j
-        // )Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
-        //for (int j = 0; j < 3; ++j)
-        //{
-        //    for (int k = 0; k < 3; ++k)
-        //    {
-        //        float contribH = H_Omega[j][k] * Ylm + dOmega[j] * gradYlm[k] + dOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
-        //        outHessian.r[j][k] += L.x * contribH;
-        //    }
-        //}
-    }
-}
 
 HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const int& basisIdx)
 {
@@ -1231,21 +1181,73 @@ float calculateChannelRSHCoeffLM(int basisIdx, const std::vector<ProbeSampleData
         return -1;
     }
 
-    int num_basis = (shOrder + 1) * (shOrder + 1);
+    int num_basis = 9;
     int numSamplePerProbe = probeSamplingResults.size();
     float weight = 4.0f * float(M_PI) / float(numSamplePerProbe); // because uniform sampling
 
-    float r = 0.0;
+    float coeffR = 0.0f;
     // For each direction sample
     for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
     {
         const float4& sample = probeSamplingResults[sampleIdx].Li;
         float shY = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
 
-        r += sample.x * shY * weight;
+        coeffR += sample.r * shY * weight;
     }
 
-    return r;
+    return coeffR;
 }
 
+void calculateChannelRGradAndHessianSHCoeffLM(
+    const float3& x,
+    const std::vector<ProbeSampleData>& samplingData,
+    const int& basisIdx,
+    float3& outGrad,
+    float& outHessian
+)
+{
+    outGrad = float3(0.0f, 0.0f, 0.0f);
+    outHessian = 0.0f;
+    int samplingSize = samplingData.size();
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
+    {
+        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
+            continue;
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
+        // Geometry and direction
+        float3 q = s - x;
+        float r = length(q);
+
+        // Solid angle (uniform per patch)
+        float Omega_i = (4.0f * M_PI) / samplingSize;
+
+        // Spatial derivative of Ω_i (geometry-dependent)
+        float3 dOmega = gradOmega(s, x, n, samplingSize);
+
+        // SH basis and derivative in direction space
+        int numBasis = 9;
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        // Contribution of this sample to ∇f_l^m
+        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
+        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        outGrad += (L.r * contrib);
+
+        // float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
+        // float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+        //  Accumulate Hessian of f_l^m
+        //  ∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j
+        //  )Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
+        // for (int j = 0; j < 3; ++j)
+        //{
+        //     for (int k = 0; k < 3; ++k)
+        //     {
+        //         float contribH = H_Omega[j][k] * Ylm + dOmega[j] * gradYlm[k] + dOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
+        //         outHessian.r[j][k] += L.x * contribH;
+        //     }
+        // }
+    }
+}

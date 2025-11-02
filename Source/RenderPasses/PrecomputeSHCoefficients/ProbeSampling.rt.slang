@@ -247,6 +247,11 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     hitData.color = float4(color, 1.0f);
     hitData.s = sd.posW;
     hitData.n = normalize(sd.faceN);
+    if(!sd.frontFacing)
+    {
+        hitData.n = -hitData.n;
+    }
+
     hitData.hitT = hitT;
 }
 
@@ -269,11 +274,10 @@ void rayGen()
     uint dirIdx = DispatchRaysIndex().x;
     uint probeIdx = DispatchRaysIndex().y;
 
-    float3 probePos = gProbePositions[probeIdx];
-    float3 dir = gProbeDirSamples[dirIdx].dir;
+    float3 probePos = gProbePositions[probeIdx]; // generated in Falcor coord system
+    float3 dir = gProbeDirSamples[dirIdx].dir;   // generated in Polar coord system Z - up
 
-    // we generated dir samples and calculate SH basis, gradient, hessian in Polar coordinates so we need to convert them to Falcor's right -handed Y-up coordinate system
-    //Convert to Falcor coordinates
+    // Convert sampling dir generated in Polar coord system Z - up to Falcor coordinates
     float3 dirFalcor;
     dirFalcor.x = dir.y; // right
     dirFalcor.y = dir.z; // up
@@ -291,9 +295,23 @@ void rayGen()
 
     TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
 
+    // convert back to Polar coord system for storage
+    float3 nFalcor = hitData.n;
+    float3 nPolar;
+    nPolar.x = nFalcor.z; // forward
+    nPolar.y = nFalcor.x; // right
+    nPolar.z = nFalcor.y; // up
+
+    float3 sFalcor = hitData.s;
+    float3 sPolar;
+    sPolar.x = sFalcor.z; // forward
+    sPolar.y = sFalcor.x; // right
+    sPolar.z = sFalcor.y; // up
+
+
     // Store result in a 2D (flattened) buffer
     gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].Li = hitData.color;
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].n = float4(hitData.n, 1.0f);
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].s = float4(hitData.s, 1.0f);
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].n = float4(nPolar, 1.0f);
+    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].s = float4(sPolar, 1.0f);
     gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].hitT = hitData.hitT;
 }

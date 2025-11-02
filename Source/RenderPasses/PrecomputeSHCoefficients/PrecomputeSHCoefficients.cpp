@@ -35,8 +35,12 @@
 #include "Scene/SceneBuilder.h"
 #include "Scene/TriangleMesh.h"
 #include "ProbeSamplingData.slang"
-const int numSamplePerProbe = 4096;
-
+//const int numSamplePerProbe = 4096;
+const int numSamplePerProbe = 4096*2;
+const int verificationRes = 32;
+const float verificationH = 0.01f;
+const float verificationY = 0.2f;
+const float verificationExtent = 0.25f;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -138,7 +142,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            int numProbe = 64*64*3;
+            int numProbe = verificationRes*verificationRes*3;
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
 
             ProbeSampleData* samplingData = new ProbeSampleData[numSamplePerProbe * numProbe];
@@ -169,11 +173,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             finiteDifferenceGrads.clear();
             finiteDifferenceGrads.reserve(numProbe/3);
 
-            std::vector<float> analyticGrads;
+            std::vector<float3> analyticGrads;
             analyticGrads.clear();
             analyticGrads.reserve(numProbe / 3);
 
-            float h = 1e-3f;
             for (int probeIdx = 0; probeIdx < numProbe; probeIdx += 3)
             {
                 int offset = probeIdx * numSamplePerProbe;
@@ -184,16 +187,20 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 {
                     probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
                 }
-                float finiteDifGrad = (coeffVec[probeIdx + 1] - coeffVec[probeIdx + 2]) / (2.0f * h); //Order per sample: [center, +h, -h] ∂f/∂x≈(f(x+h)-f(x-h))/2h
+                float finiteDifGrad = (coeffVec[probeIdx + 1] - coeffVec[probeIdx + 2]) / (2.0f * verificationH); //Order per sample: [center, +h, -h] ∂f/∂x≈(f(x+h)-f(x-h))/2h
                 finiteDifferenceGrads.push_back(finiteDifGrad);
 
-                float analyticGrad = 0.0f;
+                float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
                 float analyticHess = 0.0f;
                 // compute analytic grad
-                calculateChannelRGradAndHessianSHCoeffLM(verificationPositions[probeIdx], probeSamplingResults, basisIdx, analyticGrad, analyticHess);
+                float3 xPolar;
+                xPolar.x = verificationPositions[probeIdx].z; 
+                xPolar.y = verificationPositions[probeIdx].x;
+                xPolar.z = verificationPositions[probeIdx].y;
+                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
                 analyticGrads.push_back(analyticGrad);
             }
-
+            mbVerify = false;
             delete[] samplingData;
         }
 
@@ -343,7 +350,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                //std::vector<float3> verificationPositions;
                if (sceneName == "cornell")
                {
-                   verificationPositions = generateVerificationPositions(); // Order per sample: [center, +h, -h]
+                   verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Note that pos here is in Falcor coord system. Order per sample: [center, +h, -h]
                    int numProbes = verificationPositions.size();
                    mpProbePosBuffer = mpDevice->createStructuredBuffer(
                        sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
