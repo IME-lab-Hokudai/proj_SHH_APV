@@ -35,8 +35,8 @@
 #include "Scene/SceneBuilder.h"
 #include "Scene/TriangleMesh.h"
 #include "ProbeSamplingData.slang"
-//const int numSamplePerProbe = 4096;
-const int numSamplePerProbe = 4096*2;
+const int numSamplePerProbe = 4096;
+//const int numSamplePerProbe = 4096*2;
 const int verificationRes = 32;
 const float verificationH = 0.01f;
 const float verificationY = 0.2f;
@@ -130,81 +130,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //envMapShaderRootVar["PerFrameCB"]["showReconstructedEnvMap"] = mbShowReconstructedEnvMap;
         //mpFullScreenPass->execute(pRenderContext, mpFbo);
 
-        if (mbVerify)
-        {
-            auto rtVar = mpRtVars->getRootVar();
-            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-            rtVar["gProbePositions"] = mpProbePosBuffer;
-
-            if (mpEmissiveSampler)
-                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
-            rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            int numProbe = verificationRes*verificationRes*3;
-            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
-
-            ProbeSampleData* samplingData = new ProbeSampleData[numSamplePerProbe * numProbe];
-            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe * numProbe * sizeof(ProbeSampleData));
-
-            int basisIdx = 6; // l=2, m=1 l(l+1)+m = 2*3+1=7
-            std::vector<float> coeffVec;
-            coeffVec.clear();
-            coeffVec.reserve(numProbe);
-
-            // calculate SH coeffs for all verification positions
-            for (int probeIdx = 0; probeIdx < numProbe; ++probeIdx)
-            {
-                int offset = probeIdx * numSamplePerProbe;
-                std::vector<ProbeSampleData> probeSamplingResults;
-                probeSamplingResults.clear();
-                probeSamplingResults.reserve(numSamplePerProbe);
-                for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; sampleIdx++)
-                {
-                    probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
-                }
-                float coeffR = calculateChannelRSHCoeffLM(basisIdx, probeSamplingResults);
-                coeffVec.push_back(coeffR);
-            }
-
-            // calculate finite difference gradient and analytic gradient and compare
-            std::vector<float> finiteDifferenceGrads;
-            finiteDifferenceGrads.clear();
-            finiteDifferenceGrads.reserve(numProbe/3);
-
-            std::vector<float3> analyticGrads;
-            analyticGrads.clear();
-            analyticGrads.reserve(numProbe / 3);
-
-            for (int probeIdx = 0; probeIdx < numProbe; probeIdx += 3)
-            {
-                int offset = probeIdx * numSamplePerProbe;
-                std::vector<ProbeSampleData> probeSamplingResults;
-                probeSamplingResults.clear();
-                probeSamplingResults.reserve(numSamplePerProbe);
-                for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; sampleIdx++)
-                {
-                    probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
-                }
-                float finiteDifGrad = (coeffVec[probeIdx + 1] - coeffVec[probeIdx + 2]) / (2.0f * verificationH); //Order per sample: [center, +h, -h] ∂f/∂x≈(f(x+h)-f(x-h))/2h
-                finiteDifferenceGrads.push_back(finiteDifGrad);
-
-                float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
-                float analyticHess = 0.0f;
-                // compute analytic grad
-                float3 xPolar;
-                xPolar.x = verificationPositions[probeIdx].z; 
-                xPolar.y = verificationPositions[probeIdx].x;
-                xPolar.z = verificationPositions[probeIdx].y;
-                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
-                analyticGrads.push_back(analyticGrad);
-            }
-            mbVerify = false;
-            delete[] samplingData;
-        }
-
-        //if (!mbFinishSHPrecompute)
+        //if (mbVerify)
         //{
         //    auto rtVar = mpRtVars->getRootVar();
         //    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
@@ -216,85 +142,160 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
         //    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
         //    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-        //    int numProbe = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+        //    //int numProbe = verificationRes*verificationRes*3;
+        //    int numProbe = 3;
         //    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
-
-        //    // Map the buffer for reading
-        //   //float4* samplingData = new float4[numSamplePerProbe * numProbe];
-        //    //mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe*numProbe*sizeof(float4));
 
         //    ProbeSampleData* samplingData = new ProbeSampleData[numSamplePerProbe * numProbe];
         //    mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe * numProbe * sizeof(ProbeSampleData));
 
-        //    //// Now pData points to your results, size is sampleCount
-        //    //for (int i = 0; i < sampleCount; ++i)
-        //    //{
-        //    //    float4 result = pData[i];
-        //    //    // Process result as needed
-        //    //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
-        //    //}
+        //    int basisIdx = 6; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+        //    std::vector<float> coeffVec;
+        //    coeffVec.clear();
+        //    coeffVec.reserve(numProbe);
 
-        //    mProbeGrid.probesSHCoeffs.clear();
-        //    mProbeGrid.probesSHCoeffs.reserve(mProbeGrid.numBasis*numProbe);
-
-        //    mProbeGrid.probesSHCoeffsGradients.clear();
-        //    mProbeGrid.probesSHCoeffsGradients.reserve(mProbeGrid.numBasis * numProbe);
-
-
-        //    mProbeGrid.probesSHCoeffsHessians.clear();
-        //    mProbeGrid.probesSHCoeffsHessians.reserve(mProbeGrid.numBasis * numProbe);
-
+        //    // calculate SH coeffs for all verification positions
         //    for (int probeIdx = 0; probeIdx < numProbe; ++probeIdx)
         //    {
         //        int offset = probeIdx * numSamplePerProbe;
-        //        std::vector<float4> shCoeffs;
         //        std::vector<ProbeSampleData> probeSamplingResults;
         //        probeSamplingResults.clear();
         //        probeSamplingResults.reserve(numSamplePerProbe);
-        //        for (int i = 0; i < numSamplePerProbe; i++)
+        //        for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; sampleIdx++)
         //        {
-        //            probeSamplingResults.push_back(samplingData[offset + i]);
+        //            probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
         //        }
-        //        calculateSHCoeffs(shCoeffs, probeSamplingResults, numSamplePerProbe);
-
-        //        std::vector<GradSHCoeff> shCoeffsGradients;
-        //        std::vector<HessianSHCoeff> shCoeffsHessians;
-        //        calculateSHCoeffsGradientsAndHessians(shCoeffsGradients, shCoeffsHessians, mProbeGrid.probesPos[probeIdx], probeSamplingResults);
-        //        mProbeGrid.probesSHCoeffs.insert(mProbeGrid.probesSHCoeffs.end(), shCoeffs.begin(), shCoeffs.end());
-        //        mProbeGrid.probesSHCoeffsGradients.insert(mProbeGrid.probesSHCoeffsGradients.end(), shCoeffsGradients.begin(), shCoeffsGradients.end());
-        //        mProbeGrid.probesSHCoeffsHessians.insert(mProbeGrid.probesSHCoeffsHessians.end(), shCoeffsHessians.begin(), shCoeffsHessians.end());
+        //        float coeffR = calculateChannelRSHCoeffLM(basisIdx, probeSamplingResults);
+        //        coeffVec.push_back(coeffR);
         //    }
 
-        //    //if (sceneName == "arcade")
-        //    //{
-        //    //    saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
-        //    //}
-        //    //else
-        //    //{
-        //    //     saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
-        //    //}
+        //    // calculate finite difference gradient and analytic gradient and compare
+        //    std::vector<float> finiteDifferenceGrads;
+        //    finiteDifferenceGrads.clear();
+        //    finiteDifferenceGrads.reserve(numProbe/3);
 
-        //    if (sceneName == "arcade")
+        //    std::vector<float3> analyticGrads;
+        //    analyticGrads.clear();
+        //    analyticGrads.reserve(numProbe / 3);
+
+        //    for (int probeIdx = 0; probeIdx < numProbe; probeIdx += 3)
         //    {
-        //        saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
-        //    }
-        //    else
-        //    {
-        //        saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
-        //    }
+        //        int offset = probeIdx * numSamplePerProbe;
+        //        std::vector<ProbeSampleData> probeSamplingResults;
+        //        probeSamplingResults.clear();
+        //        probeSamplingResults.reserve(numSamplePerProbe);
+        //        for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; sampleIdx++)
+        //        {
+        //            probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
+        //        }
+        //        float finiteDifGrad = (coeffVec[probeIdx + 1] - coeffVec[probeIdx + 2]) / (2.0f * verificationH); //Order per sample: [center, +h, -h] ∂f/∂x≈(f(x+h)-f(x-h))/2h
+        //        finiteDifferenceGrads.push_back(finiteDifGrad);
 
-        //    mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
-        //        sizeof(float4),
-        //        mProbeGrid.numBasis * numProbe,
-        //        ResourceBindFlags::ShaderResource,
-        //        MemoryType::DeviceLocal,
-        //        mProbeGrid.probesSHCoeffs.data()
-        //    );
-        //    mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
-
-        //    mbFinishSHPrecompute = true;
+        //        float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
+        //        float analyticHess = 0.0f;
+        //        // compute analytic grad
+        //        float3 xPolar;
+        //        xPolar.x = verificationPositions[probeIdx].z; 
+        //        xPolar.y = verificationPositions[probeIdx].x;
+        //        xPolar.z = verificationPositions[probeIdx].y;
+        //        calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
+        //        analyticGrads.push_back(analyticGrad);
+        //    }
+        //    mbVerify = false;
         //    delete[] samplingData;
         //}
+
+        if (!mbFinishSHPrecompute)
+        {
+            auto rtVar = mpRtVars->getRootVar();
+            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+            rtVar["gProbePositions"] = mpProbePosBuffer;
+
+            if (mpEmissiveSampler)
+                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplePerProbe;
+            rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+            int numProbe = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplePerProbe, numProbe, 1));
+
+            ProbeSampleData* samplingData = new ProbeSampleData[numSamplePerProbe * numProbe];
+            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplePerProbe * numProbe * sizeof(ProbeSampleData));
+
+            //// Now pData points to your results, size is sampleCount
+            //for (int i = 0; i < sampleCount; ++i)
+            //{
+            //    float4 result = pData[i];
+            //    // Process result as needed
+            //    logInfo(fmt::format("AAAA: {:.3f} {:.3f} {:.3f}", result.x, result.y, result.z));
+            //}
+
+            mProbeGrid.probesSHCoeffs.clear();
+            mProbeGrid.probesSHCoeffs.reserve(mProbeGrid.numBasis*numProbe);
+
+            mProbeGrid.probesSHCoeffsGradients.clear();
+            mProbeGrid.probesSHCoeffsGradients.reserve(mProbeGrid.numBasis * numProbe);
+
+
+            mProbeGrid.probesSHCoeffsHessians.clear();
+            mProbeGrid.probesSHCoeffsHessians.reserve(mProbeGrid.numBasis * numProbe);
+
+            for (int probeIdx = 0; probeIdx < numProbe; ++probeIdx)
+            {
+                int offset = probeIdx * numSamplePerProbe;
+                std::vector<float4> shCoeffs;
+                std::vector<ProbeSampleData> probeSamplingResults;
+                probeSamplingResults.clear();
+                probeSamplingResults.reserve(numSamplePerProbe);
+                for (int i = 0; i < numSamplePerProbe; i++)
+                {
+                    probeSamplingResults.push_back(samplingData[offset + i]);
+                }
+                calculateSHCoeffs(shCoeffs, probeSamplingResults, numSamplePerProbe);
+
+                std::vector<GradSHCoeff> shCoeffsGradients;
+                std::vector<HessianSHCoeff> shCoeffsHessians;
+                float3 xPolar;
+                xPolar.x = mProbeGrid.probesPos[probeIdx].z;
+                xPolar.y = mProbeGrid.probesPos[probeIdx].x;
+                xPolar.z = mProbeGrid.probesPos[probeIdx].y;
+                calculateSHCoeffsGradientsAndHessians(shCoeffsGradients, shCoeffsHessians, xPolar, probeSamplingResults);
+                mProbeGrid.probesSHCoeffs.insert(mProbeGrid.probesSHCoeffs.end(), shCoeffs.begin(), shCoeffs.end());
+                mProbeGrid.probesSHCoeffsGradients.insert(mProbeGrid.probesSHCoeffsGradients.end(), shCoeffsGradients.begin(), shCoeffsGradients.end());
+                mProbeGrid.probesSHCoeffsHessians.insert(mProbeGrid.probesSHCoeffsHessians.end(), shCoeffsHessians.begin(), shCoeffsHessians.end());
+            }
+
+            //if (sceneName == "arcade")
+            //{
+            //    saveProbeGridToFile(mProbeGrid, "ProbeGridArcade.txt");
+            //}
+            //else
+            //{
+            //     saveProbeGridToFile(mProbeGrid, "ProbeGridCornell.txt");
+            //}
+
+            if (sceneName == "arcade")
+            {
+                saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
+            }
+            else
+            {
+                saveProbeGridToFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
+            }
+
+            mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float4),
+                mProbeGrid.numBasis * numProbe,
+                ResourceBindFlags::ShaderResource,
+                MemoryType::DeviceLocal,
+                mProbeGrid.probesSHCoeffs.data()
+            );
+            mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
+
+            mbFinishSHPrecompute = true;
+            delete[] samplingData;
+        }
 
         // visualize probes
         if (mbFinishSHPrecompute)
@@ -338,164 +339,71 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-           auto dirSamples = generateUniformSphereDirSamples(numSamplePerProbe);
+           auto dirSamples = generateUniformSphereDirSamples(numSamplePerProbe); //polar z-up
             mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeDirSample), numSamplePerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
             );
            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
             initSHBasisGradientAndHessianTables(dirSamples);
+
         //generate verification data
-           if (mbVerify)
-           {
-               //std::vector<float3> verificationPositions;
-               if (sceneName == "cornell")
-               {
-                   verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Note that pos here is in Falcor coord system. Order per sample: [center, +h, -h]
-                   int numProbes = verificationPositions.size();
-                   mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                       sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
-                   );
-                   mpProbePosBuffer->setName("probes world pos");
-
-                    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                    sizeof(ProbeSampleData),
-                       numSamplePerProbe * numProbes,
-                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                    MemoryType::DeviceLocal
-                    );
-                    mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
-               }
-               ProgramDesc rtProgDesc;
-               rtProgDesc.addShaderModules(mpScene->getShaderModules());
-               rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-               rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-                                                        // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-                                                        // tracing a shadow ray
-               rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-                                                        // should be set as small as possible for maximum performance.
-               rtProgDesc.setMaxAttributeSize(8);
-               // Add global type conformances.
-               rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
-
-               ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-               sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-               sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-               // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-               auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-               // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
-
-               sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-               //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
-
-               const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
-                                                                                   // upon first call to this.
-               if (mpScene->useEmissiveLights())
-               {
-                   if (!mpEmissiveSampler)
-                   {
-                       FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-                       FALCOR_ASSERT(!mpEmissiveSampler);
-
-                       switch (mEmissiveSamplerType)
-                       {
-                       case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-                           mpEmissiveSampler =
-                               std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                           break;
-                       case EmissiveLightSamplerType::LightBVH:
-                           mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-                               pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-                           );
-                           break;
-                       case EmissiveLightSamplerType::Power:
-                           mpEmissiveSampler =
-                               std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                           break;
-                       default:
-                           FALCOR_THROW("Unknown emissive light sampler type");
-                       }
-                   }
-               }
-
-               mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
-
-               if (mpEmissiveSampler)
-               {
-                   auto defines = mpEmissiveSampler->getDefines();
-                   mpRtProgram->addDefines(defines);
-               }
-
-               DefineList lightRelatedDefines;
-               lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-               lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
-
-               mpRtProgram->addDefines(lightRelatedDefines);
-
-               mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
-           }
-
-           //if (!mbFinishSHPrecompute) // config for precomputing SH coefficients
+           //if (mbVerify)
            //{
-           //    AABB sceneBounds = mpScene->getSceneBounds();
-           //    float3 minBound = sceneBounds.minPoint;
-           //    float3 maxBound = sceneBounds.maxPoint;
-           //    float3 sceneCenter = sceneBounds.center();
-           //    float3 sceneSize = maxBound - minBound;
-           //   
-           //    int order = 2; // SH order
-           //    //initSHTable(order, dirSamples);
-           //    initSHBasisGradientAndHessianTables(dirSamples);
-           //    // Decide spacing between probes
-           //    //float3 spacing = float3(2.f, 2.f, 2.f);
-           //    //float3 spacing = float3(2.f, 2.f, 2.f);
-           //    //float3 spacing = float3(1.5f, 1.5f, 1.5f);
-           //    float3 spacing = float3(1.f, 1.f, 1.f);
-           //    //float3 spacing = float3(.2f, .2f, .2f);
-           //    //float3 spacing = float3(.15f, .15f, .15f);
-           //    //float3 spacing = float3(.3f, .3f, .3f);
-
-           //    if (sceneName == "arcade")
+           //    //std::vector<float3> verificationPositions;
+           //    if (sceneName == "cornell")
            //    {
-           //        spacing = float3(1.f, 1.f, 1.f);
-           //     }
-           //     else
-           //     {
-           //         spacing = float3(.15f, .15f, .15f);
+           //        AABB sceneBounds = mpScene->getSceneBounds();
+           //        float3 minBound = sceneBounds.minPoint;
+           //        float3 maxBound = sceneBounds.maxPoint;
+           //        float3 sceneCenter = sceneBounds.center();
+           //        float3 sceneSize = maxBound - minBound;
+
+           //       float3 spacing = float3(.15f, .15f, .15f);
+           //       // Number of probes in each dimension
+           //        int3 resolution;
+           //        resolution.x = (int)ceil(sceneSize.x / spacing.x);
+           //        resolution.y = (int)ceil(sceneSize.y / spacing.y);
+           //        resolution.z = (int)ceil(sceneSize.z / spacing.z);
+
+           //       // resolution = int3(1, 1, 1); // for testing
+
+           //        float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
+           //        // resolution = int3(1, 1, 1);
+           //        mProbeGrid.origin = sceneCenter - halfSize;
+           //        mProbeGrid.origin += 0.025f;
+
+           //        // mProbeGrid.origin = sceneCenter;
+           //        mProbeGrid.spacing = spacing;
+           //        mProbeGrid.resolution = resolution;
+           //        mProbeGrid.numBasis = 9; // number of SH coefficients per probe
+           //        computeProbesPos(mProbeGrid);
+
+           //        //verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord. Order per sample: [center, +h, -h]
+
+           //        verificationPositions.clear();
+           //        verificationPositions.reserve(3);
+
+           //        float3 tmpX = mProbeGrid.probesPos[0];
+           //        float3 tmpXForward = tmpX + float3(verificationH, 0.0f, 0.0f);
+           //        float3 tmpXBackward = tmpX - float3(verificationH, 0.0f, 0.0f);
+           //        verificationPositions.push_back(tmpX);
+           //        verificationPositions.push_back(tmpXForward);
+           //        verificationPositions.push_back(tmpXBackward);
+
+           //        int numProbes = verificationPositions.size();
+           //        mpProbePosBuffer = mpDevice->createStructuredBuffer(
+           //            sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
+           //        );
+           //        mpProbePosBuffer->setName("probes world pos");
+
+           //         mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+           //         sizeof(ProbeSampleData),
+           //            numSamplePerProbe * numProbes,
+           //         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+           //         MemoryType::DeviceLocal
+           //         );
+           //         mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
            //    }
-           //    // Number of probes in each dimension
-           //    int3 resolution;
-           //    resolution.x = (int)ceil(sceneSize.x / spacing.x);
-           //    resolution.y = (int)ceil(sceneSize.y / spacing.y);
-           //    resolution.z = (int)ceil(sceneSize.z / spacing.z);
-
-           //   // resolution = int3(1, 1, 1); // for testing
-
-           //    float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
-           //    // resolution = int3(1, 1, 1);
-           //    mProbeGrid.origin = sceneCenter - halfSize;
-           //    mProbeGrid.origin += 0.025f;
-
-           //    // mProbeGrid.origin = sceneCenter;
-           //    mProbeGrid.spacing = spacing;
-           //    mProbeGrid.resolution = resolution;
-           //    mProbeGrid.numBasis = (order + 1) * (order + 1); // number of SH coefficients per probe
-           //    int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-           //    computeProbesPos(mProbeGrid);
-
-           //    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-           //        sizeof(ProbeSampleData),
-           //        numSamplePerProbe * numProbes,
-           //        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-           //        MemoryType::DeviceLocal
-           //    );
-           //    mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
-
-           //    mpProbePosBuffer = mpDevice->createStructuredBuffer(
-           //        sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, mProbeGrid.probesPos.data()
-           //    );
-           //    mpProbePosBuffer->setName("probes world pos");
-
-           //            // ray tracing program to sample probes
            //    ProgramDesc rtProgDesc;
            //    rtProgDesc.addShaderModules(mpScene->getShaderModules());
            //    rtProgDesc.addShaderLibrary(kProbeSamplingFile);
@@ -518,7 +426,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            //    sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
            //    //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-           //    const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is created upon first call to this.
+           //    const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
+           //                                                                        // upon first call to this.
            //    if (mpScene->useEmissiveLights())
            //    {
            //        if (!mpEmissiveSampler)
@@ -528,27 +437,27 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
            //            switch (mEmissiveSamplerType)
            //            {
-           //                case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-           //                    mpEmissiveSampler =
-           //                        std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                    break;
-           //                case EmissiveLightSamplerType::LightBVH:
-           //                    mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-           //                        pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-           //                    );
-           //                    break;
-           //                case EmissiveLightSamplerType::Power:
-           //                    mpEmissiveSampler =
-           //                        std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                    break;
-           //                default:
-           //                    FALCOR_THROW("Unknown emissive light sampler type");
+           //            case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+           //                mpEmissiveSampler =
+           //                    std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+           //                break;
+           //            case EmissiveLightSamplerType::LightBVH:
+           //                mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+           //                    pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+           //                );
+           //                break;
+           //            case EmissiveLightSamplerType::Power:
+           //                mpEmissiveSampler =
+           //                    std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+           //                break;
+           //            default:
+           //                FALCOR_THROW("Unknown emissive light sampler type");
            //            }
            //        }
            //    }
 
-           //   mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
-           //   
+           //    mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+
            //    if (mpEmissiveSampler)
            //    {
            //        auto defines = mpEmissiveSampler->getDefines();
@@ -563,53 +472,177 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
            //    mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
            //}
-           //else // config to render scene with resulting SH grid stored in file
-           //{
-           //    //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
-           //    //loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
-           //    //if (sceneName == "arcade")
-           //    //{
-           //    //    loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
-           //    //}
-           //    //else
-           //    //{
-           //    //    loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
-           //    //}
 
-           //    if (sceneName == "arcade")
-           //    {
-           //        loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
-           //    }
-           //    else
-           //    {
-           //        loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
-           //    }
+           if (!mbFinishSHPrecompute) // config for precomputing SH coefficients
+           {
+               AABB sceneBounds = mpScene->getSceneBounds();
+               float3 minBound = sceneBounds.minPoint;
+               float3 maxBound = sceneBounds.maxPoint;
+               float3 sceneCenter = sceneBounds.center();
+               float3 sceneSize = maxBound - minBound;
+              
+               int order = 2; // SH order
 
-           //    //int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
-           //    //initSHTable(order, dirSamples);
-           //    //initSHBasisGradientAndHessianTables(dirSamples);
-           //    int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
-           //    mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
-           //        sizeof(float4),
-           //        mProbeGrid.numBasis * numProbes,
-           //        ResourceBindFlags::ShaderResource,
-           //        MemoryType::DeviceLocal,
-           //        mProbeGrid.probesSHCoeffs.data()
-           //    );
-           //    mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
+               initSHBasisGradientAndHessianTables(dirSamples);
 
-           //    //std::vector<float4> reconstructedData;
-           //    //reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
+               float3 spacing = float3(1.f, 1.f, 1.f);
 
-           //    //mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-           //    //    sizeof(float4),
-           //    //    numSamplePerProbe * numProbes,
-           //    //    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-           //    //    MemoryType::DeviceLocal,
-           //    //    reconstructedData.data()
-           //    //);
-           //    //mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
-           //}
+               if (sceneName == "arcade")
+               {
+                   spacing = float3(1.f, 1.f, 1.f);
+                }
+                else
+                {
+                    spacing = float3(.15f, .15f, .15f);
+               }
+               // Number of probes in each dimension
+               int3 resolution;
+               resolution.x = (int)ceil(sceneSize.x / spacing.x);
+               resolution.y = (int)ceil(sceneSize.y / spacing.y);
+               resolution.z = (int)ceil(sceneSize.z / spacing.z);
+
+              // resolution = int3(1, 1, 1); // for testing
+
+               float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
+               // resolution = int3(1, 1, 1);
+               mProbeGrid.origin = sceneCenter - halfSize;
+               mProbeGrid.origin += 0.025f;
+
+               // mProbeGrid.origin = sceneCenter;
+               mProbeGrid.spacing = spacing;
+               mProbeGrid.resolution = resolution;
+               mProbeGrid.numBasis = (order + 1) * (order + 1); // number of SH coefficients per probe
+               int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+               computeProbesPos(mProbeGrid);
+
+               mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(ProbeSampleData),
+                   numSamplePerProbe * numProbes,
+                   ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                   MemoryType::DeviceLocal
+               );
+               mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+
+               mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, mProbeGrid.probesPos.data()
+               );
+               mpProbePosBuffer->setName("probes world pos");
+
+                       // ray tracing program to sample probes
+               ProgramDesc rtProgDesc;
+               rtProgDesc.addShaderModules(mpScene->getShaderModules());
+               rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+               rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+                                                        // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+                                                        // tracing a shadow ray
+               rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+                                                        // should be set as small as possible for maximum performance.
+               rtProgDesc.setMaxAttributeSize(8);
+               // Add global type conformances.
+               rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+
+               ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+               sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+               sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+               // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+               auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+               // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+
+               sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+               //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+
+               const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is created upon first call to this.
+               if (mpScene->useEmissiveLights())
+               {
+                   if (!mpEmissiveSampler)
+                   {
+                       FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+                       FALCOR_ASSERT(!mpEmissiveSampler);
+
+                       switch (mEmissiveSamplerType)
+                       {
+                           case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+                               mpEmissiveSampler =
+                                   std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                               break;
+                           case EmissiveLightSamplerType::LightBVH:
+                               mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+                                   pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+                               );
+                               break;
+                           case EmissiveLightSamplerType::Power:
+                               mpEmissiveSampler =
+                                   std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                               break;
+                           default:
+                               FALCOR_THROW("Unknown emissive light sampler type");
+                       }
+                   }
+               }
+
+              mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+              
+               if (mpEmissiveSampler)
+               {
+                   auto defines = mpEmissiveSampler->getDefines();
+                   mpRtProgram->addDefines(defines);
+               }
+
+               DefineList lightRelatedDefines;
+               lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+               lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+
+               mpRtProgram->addDefines(lightRelatedDefines);
+
+               mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+           }
+           else // config to render scene with resulting SH grid stored in file
+           {
+               //loadProbeGridFromFile(mProbeGrid, "ProbeGrid.txt");
+               //loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               //if (sceneName == "arcade")
+               //{
+               //    loadProbeGridFromFile(mProbeGrid, "ProbeGridArcade.txt");
+               //}
+               //else
+               //{
+               //    loadProbeGridFromFile(mProbeGrid, "ProbeGridCornell.txt");
+               //}
+
+               if (sceneName == "arcade")
+               {
+                   loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianArcade.txt");
+               }
+               else
+               {
+                   loadProbeGridFromFileWithGradAndHessian(mProbeGrid, "ProbeGridWithGradAndHessianCornell.txt");
+               }
+
+               //int order = (int)sqrt(mProbeGrid.numBasis) - 1; // SH order
+               //initSHTable(order, dirSamples);
+               //initSHBasisGradientAndHessianTables(dirSamples);
+               int numProbes = mProbeGrid.resolution.x * mProbeGrid.resolution.y * mProbeGrid.resolution.z;
+               mpGridSHCoeffsBuffer = mpDevice->createStructuredBuffer(
+                   sizeof(float4),
+                   mProbeGrid.numBasis * numProbes,
+                   ResourceBindFlags::ShaderResource,
+                   MemoryType::DeviceLocal,
+                   mProbeGrid.probesSHCoeffs.data()
+               );
+               mpGridSHCoeffsBuffer->setName("SH Grid Coeffs");
+
+               //std::vector<float4> reconstructedData;
+               //reconstructSH(mProbeGrid, numSamplePerProbe, reconstructedData);
+
+               //mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+               //    sizeof(float4),
+               //    numSamplePerProbe * numProbes,
+               //    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+               //    MemoryType::DeviceLocal,
+               //    reconstructedData.data()
+               //);
+               //mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+           }
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());

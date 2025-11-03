@@ -89,7 +89,7 @@ private:
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
 
-    bool mbFinishSHPrecompute = true;
+    bool mbFinishSHPrecompute = false;
     //bool mbFinishSHPrecompute = false;
     //std::string sceneName = "arcade";
     std::string sceneName = "cornell";

@@ -1081,6 +1081,7 @@ void calculateGradAndHessianSHCoeffLM(
         // Contribution of this sample to ∇f_l^m
         // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
         float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        //float3 contrib = Omega_i * gradYlm;
         outGrad.r += L.r * contrib;
         outGrad.g += L.g * contrib;
         outGrad.b += L.b * contrib;
@@ -1217,24 +1218,22 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
         float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
-        // Geometry and direction
-        float3 q = s - x;
-        float r = length(q);
-
         // Solid angle (uniform per patch)
-        float Omega_i = (4.0f * M_PI) / samplingSize;
+        float Omega_i = (4.0f * M_PI) / (float)samplingSize;
 
-        // Spatial derivative of Ω_i (geometry-dependent)
+        // Gradient ∂_x Ω_i
         float3 dOmega = gradOmega(s, x, n, samplingSize);
 
         // SH basis and derivative in direction space
         int numBasis = 9;
         float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
         float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+
         // Contribution of this sample to ∇f_l^m
         // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
-        outGrad += (L.r * contrib);
+        //float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        float3 contrib = Omega_i * gradYlm;
+        outGrad += (L.r* contrib);
 
         // float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
         // float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];

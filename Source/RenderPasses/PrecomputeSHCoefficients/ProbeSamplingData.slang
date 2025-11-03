@@ -43,8 +43,8 @@ struct ProbeDirSample {
 struct ProbeSampleData
 {
     float4 Li; // incoming radiance L_i
-    float4 s;  // Sample position s_i (world-space)
-    float4 n;  // Sample normal n_i (world-space)
+    float4 s;  // Sample position s_i  Polar coord
+    float4 n;  // Sample normal n_i Polar coord
     float hitT; // Ray hit distance t_i to check ray miss/hit
 };
 
