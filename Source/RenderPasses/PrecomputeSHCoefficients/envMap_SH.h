@@ -57,8 +57,17 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
 //the code is generated using https://github.com/kiwasaki/shh_code_generator
 // note: it is for SH basis (Ylm) NOT for SH coefficients (Flm). Hlm and Glm are used in equation 2 and 4 
 void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, std::array<float3, 9>& glm, std::array<float3x3, 9>& hlm);
-// note that we calculate up to l = 2 only 
+
+// note that we calculate up to l = 2 only
 void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples);
+
+// this is used in testing using finite difference
+void initSHBasisGradientAndHessianTables(
+    const std::vector<float3>& dirSamples,
+    float*  SHBasisTableXPrime,
+    float3*  SHGradientTableXPrime,
+    float3x3*  SHHessianTableXPrime
+);
 
 float4* TranposeData(float4* data, int width, int height);
 
@@ -101,7 +110,7 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount);
 //   - The direction of q (from x → s) follows the convention of incoming radiance.
 //-------------------------------------------------------------------------------
 
-float3 gradOmega(float3 s, float3 x, float3 n, float N);
+float3 gradientOmega(float3 s, float3 x, float3 n, float N);
 
 
 //-------------------------------------------------------------------------------
@@ -199,3 +208,5 @@ void calculateChannelRGradAndHessianSHCoeffLM(
     float3& outGrad,
     float& outHessian
 );
+
+float3 testComputeSHGrad();

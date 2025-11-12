@@ -229,6 +229,34 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
     }
 }
 
+void initSHBasisGradientAndHessianTables(const std::vector<float3>& dirSamples,
+    float*  SHBasisTableXPrime,
+    float3*  SHGradientTableXPrime,
+    float3x3*  SHHessianTableXPrime)
+{
+    int numBasis = 9;
+    std::array<float3, 9> glm;
+    std::array<float3x3, 9> hlm;
+    std::array<float, 9> ylm; // local storage for SH values
+    int numSamplesPerProbe = (int)dirSamples.size();
+
+    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
+    {
+        const float3& dir = dirSamples[sampleIdx];
+
+        // compute SH gradients for this direction
+        SHGradientAndHessianL2(dir, ylm, glm, hlm);
+
+        // store into SHGradientTable
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            SHBasisTableXPrime[sampleIdx * numBasis + basisIdx] = ylm[basisIdx];
+            SHGradientTableXPrime[sampleIdx * numBasis + basisIdx] = glm[basisIdx];
+            SHHessianTableXPrime[sampleIdx * numBasis + basisIdx] = hlm[basisIdx];
+        }
+    }
+}
+
 void calculateSHCoeffs(
     std::vector<float4>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
@@ -966,7 +994,7 @@ std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount)
     return samples;
 }
 
-float3 gradOmega(float3 s, float3 x, float3 n, float N)
+float3 gradientOmega(float3 s, float3 x, float3 n, float N)
 {
     // q = s - x
     float3 q = s - x;
@@ -1072,7 +1100,7 @@ void calculateGradAndHessianSHCoeffLM(
         float Omega_i = (4.0f * M_PI) / samplingSize;
 
         // Spatial derivative of Ω_i (geometry-dependent)
-        float3 dOmega = gradOmega(s, x, n, samplingSize);
+        float3 dOmega = gradientOmega(s, x, n, samplingSize);
 
         // SH basis and derivative in direction space
         int numBasis = 9;
@@ -1124,7 +1152,7 @@ HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleDa
         float Omega_i = (4.0f * M_PI) / samplingSize;
 
         // Gradients and Hessian of Omega_i
-        float3 gOmega = gradOmega(s, x, n, samplingSize);
+        float3 gOmega = gradientOmega(s, x, n, samplingSize);
         float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
 
          // SH basis and derivatives
@@ -1222,7 +1250,7 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         float Omega_i = (4.0f * M_PI) / (float)samplingSize;
 
         // Gradient ∂_x Ω_i
-        float3 dOmega = gradOmega(s, x, n, samplingSize);
+        float3 gradOmega = gradientOmega(s, x, n, samplingSize);
 
         // SH basis and derivative in direction space
         int numBasis = 9;
@@ -1231,8 +1259,7 @@ void calculateChannelRGradAndHessianSHCoeffLM(
 
         // Contribution of this sample to ∇f_l^m
         // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        //float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
-        float3 contrib = Omega_i * gradYlm;
+        float3 contrib = gradOmega * Ylm + Omega_i * gradYlm;
         outGrad += (L.r* contrib);
 
         // float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);
@@ -1249,4 +1276,24 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         //     }
         // }
     }
+}
+
+float3 testComputeSHGrad()
+{
+     float3 testS = float3(1.0f, 0.0f, 0.0f);
+     float3 testX = float3(0.0f, 0.0f, 0.0f);
+     float3 testNormal = float3(-1.0f, 0.0f, 0.0f);
+     int N = 4096;
+     float3 gradOmega = gradientOmega(testS, testX, testNormal, N);
+
+       // SH basis and derivative in direction space
+     int numBasis = 9;
+     /*float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+     float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];*/
+     float Ylm = 0.282094792f;
+     float L = 2.0f;
+     float3 gradYlm = float3(0.0f, 0.0f, 0.0f); // for l=0, m=0, gradient is zero
+    float Omega_i = (4.0f * M_PI) / (float)N;
+     float3 contrib = gradOmega * Ylm + Omega_i * gradYlm;
+    return L*contrib;
 }
