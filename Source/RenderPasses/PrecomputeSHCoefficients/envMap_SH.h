@@ -64,9 +64,9 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
 // this is used in testing using finite difference
 void initSHBasisGradientAndHessianTables(
     const std::vector<float3>& dirSamples,
-    float*  SHBasisTableXPrime,
-    float3*  SHGradientTableXPrime,
-    float3x3*  SHHessianTableXPrime
+    std::vector<float>& SHBasisTableXPrime,
+    std::vector<float3>& SHGradientTableXPrime,
+    std::vector<float3x3>& SHHessianTableXPrime
 );
 
 float4* TranposeData(float4* data, int width, int height);

@@ -247,10 +247,10 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     hitData.color = float4(color, 1.0f);
     hitData.s = sd.posW;
     hitData.n = normalize(sd.faceN);
-    if(!sd.frontFacing)
-    {
-        hitData.n = -hitData.n;
-    }
+    //if(!sd.frontFacing)
+    //{
+    //    hitData.n = -hitData.n;
+    //}
 
     hitData.hitT = hitT;
 }

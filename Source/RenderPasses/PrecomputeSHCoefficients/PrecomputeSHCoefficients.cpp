@@ -36,7 +36,6 @@
 #include "Scene/TriangleMesh.h"
 #include "ProbeSamplingData.slang"
 const int numSamplesPerProbe = 4096;
-//const int numSamplePerProbe = 4096*2;
 const int verificationRes = 32;
 const float verificationH = 0.005f;
 const float verificationY = 0.2f;
@@ -142,14 +141,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            int numProbe = verificationRes*verificationRes*3;
-            //int numProbe = 3;
+            //int numProbe = verificationRes*verificationRes*3;
+            int numProbe = verificationRes * 3; // one scanline only
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbe, 1));
 
             ProbeSampleData* samplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
             mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
-            int basisIdx = 6; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+            int basisIdx = 1; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
             int numBasis = 9;
             std::vector<float> coeffVec;
             coeffVec.clear();
@@ -157,18 +156,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
 
             //refer to Krivanek 2005 sect 4.3.1
-            float* XPrimeSHBasisTable = nullptr;
-            float* XPrimeSolidAngleWeight = nullptr;
-            float3* XPrimeSHGradientTable = nullptr;
-            float3x3* XPrimeSHHessianTable = nullptr;
-
-            XPrimeSHBasisTable = new float[9 * numSamplesPerProbe];
-
-            XPrimeSolidAngleWeight = new float[9 * numSamplesPerProbe];
-
-            XPrimeSHGradientTable = new float3[9 * numSamplesPerProbe];
-
-            XPrimeSHHessianTable = new float3x3[9 * numSamplesPerProbe];
+            std::vector<float> XPrimeSHBasisTable(9 * numSamplesPerProbe);
+            std::vector<float> XPrimeSolidAngleWeight(numSamplesPerProbe);
+            std::vector<float3> XPrimeSHGradientTable(9 * numSamplesPerProbe);
+            std::vector<float3x3> XPrimeSHHessianTable(9 * numSamplesPerProbe);
 
              std::vector<float> finiteDifferenceGrads;
              finiteDifferenceGrads.clear();
@@ -178,9 +169,17 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
               analyticGrads.clear();
               analyticGrads.reserve(numProbe / 3);
 
+              std::vector<float> tmp;
+              tmp.clear();
+              tmp.reserve(numProbe / 3);
             // calculate SH coeffs for all verification positions
             for (int probeIdx = 0; probeIdx < numProbe; probeIdx+=3)
             {
+                XPrimeSHBasisTable.assign(9 * numSamplesPerProbe, 0.0f);
+                XPrimeSolidAngleWeight.assign(numSamplesPerProbe, 0.0f);
+                XPrimeSHGradientTable.assign(9 * numSamplesPerProbe, float3(0.0f));
+                XPrimeSHHessianTable.assign(9 * numSamplesPerProbe, float3x3::zeros());
+
                 int offset = probeIdx * numSamplesPerProbe;
                 std::vector<ProbeSampleData> probeSamplingResults;
                 probeSamplingResults.clear();
@@ -266,9 +265,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 float analyticHess = 0.0f;
                 calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
                 analyticGrads.push_back(analyticGrad);
+
+
             }
 
-
+             for (int i = 0; i < analyticGrads.size(); i++)
+            {
+                 tmp.push_back(analyticGrads[i].y);
+            }
             //// calculate finite difference gradient and analytic gradient and compare
             //std::vector<float> finiteDifferenceGrads;
             //finiteDifferenceGrads.clear();
