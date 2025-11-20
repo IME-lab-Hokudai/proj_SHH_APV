@@ -61,7 +61,15 @@ void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, st
 // note that we calculate up to l = 2 only
 void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples);
 
-// this is used in testing using finite difference
+/** * Converts linearized basis index to (l, m).
+ * Assumes encoding: basisIdx = l * (l + 1) + m
+ * This works because the index range for band l is [l^2, (l+1)^2 - 1].
+ */
+void getLMFromBasisIdx(int basisIdx, int& l, int& m);
+
+float3 computeKrivanekBasisGradient(int l, int m, float r, float3 dir, float evalYlmminus);
+void computeKrivanekCoeffLMGradient(float3 x, std::vector<ProbeSampleData> samplingData, int basisIdx, float3& outGrad);
+    // this is used in testing using finite difference
 void initSHBasisGradientAndHessianTables(
     const std::vector<float3>& dirSamples,
     std::vector<float>& SHBasisTableXPrime,

@@ -148,7 +148,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             ProbeSampleData* samplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
             mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
-            int basisIdx = 1; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+            int basisIdx = 3; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
             int numBasis = 9;
             std::vector<float> coeffVec;
             coeffVec.clear();
@@ -195,7 +195,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 xPrimeDirs.clear();
                 xPrimeDirs.reserve(numSamplesPerProbe);
 
-                float3 xPolar; // x' in polar coord
+                float3 xPolar; // x in polar coord
                 xPolar.x = verificationPositions[probeIdx].z;
                 xPolar.y = verificationPositions[probeIdx].x;
                 xPolar.z = verificationPositions[probeIdx].y;
@@ -244,6 +244,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     }
                 }
 
+                // calculate SH basis and derivatives at x' using new directions
                 initSHBasisGradientAndHessianTables(xPrimeDirs, XPrimeSHBasisTable, XPrimeSHGradientTable, XPrimeSHHessianTable);
 
                 // calculate SH coeff at x' using new directions and solid angle correction
@@ -263,10 +264,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                 float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
                 float analyticHess = 0.0f;
-                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
+                //calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
+                computeKrivanekCoeffLMGradient(xPolar, probeSamplingResults, basisIdx, analyticGrad);
                 analyticGrads.push_back(analyticGrad);
-
-
             }
 
              for (int i = 0; i < analyticGrads.size(); i++)

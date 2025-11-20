@@ -123,4 +123,99 @@ void sphericalHarmonics(
 	calcNormalizationCoeff(coeff, degree);
 	sphericalHarmonics(sh, coeff, degree, ct, phi);
 }
+
+double CSPhase(int m)
+{
+    return (std::abs(m) % 2 == 1) ? -1.0 : 1.0;
+}
+
+double getNormalizationK(int l, int m)
+{
+    int m_abs = std::abs(m);
+
+    // Compute factorial terms using std::tgamma (tgamma(n+1) = n!)
+    double fact_l_minus_m = std::tgamma(l - m_abs + 1);
+    double fact_l_plus_m = std::tgamma(l + m_abs + 1);
+
+    double numerator = (2.0 * l + 1.0) * fact_l_minus_m;
+    double denominator = (4.0 * M_PI) * fact_l_plus_m;
+
+    return std::sqrt(numerator / denominator);
+}
+
+double get_dP_dx(int l, int m, double x)
+{
+    int m_abs = std::abs(m);
+
+    // 1. Handle singularities at poles (x -> +/- 1)
+    // The term 1/(x^2 - 1) explodes at the poles. We clamp x slightly.
+    const double EPSILON = 1e-6;
+    if (std::abs(x) > 1.0 - EPSILON)
+    {
+        x = (x > 0.0) ? (1.0 - EPSILON) : (-1.0 + EPSILON);
+    }
+
+    // 2. Evaluate P_l^m(x)
+    // C++17 std::assoc_legendre includes the Condon-Shortley phase (-1)^m
+    double P_current = std::assoc_legendre(l, m_abs, x);
+
+    // 3. Evaluate P_{l-1}^m(x)
+    double P_prev = 0.0;
+    if (l - 1 >= m_abs)
+    {
+        P_prev = std::assoc_legendre(l - 1, m_abs, x);
+    }
+
+    // 4. Apply recurrence
+    double numerator = ((double)l*x * P_current) - ((double)(l + m_abs) * P_prev);
+
+    double denominator = (x * x) - 1.0;
+
+    // Helper: Condon-Shortley Phase Factor (-1)^m
+    // Since std::assoc_legendre OMITS this phase, we must multiply by it
+    // if the target basis requires it (which your mismatch suggests).
+    double csPhase = CSPhase(m);
+
+    return (numerator / denominator)*csPhase;
+}
+
+double computeThetaGradient(int l, int m, double theta, double phi)
+{
+    double cos_theta = std::cos(theta);
+    double sin_theta = std::sin(theta);
+
+    // Calculate normalization K and the Legendre derivative term
+    double K = getNormalizationK(l, m);
+    double dP_dx_val = get_dP_dx(l, m, cos_theta);
+
+    // Apply specific cases based on the sign of m 
+    if (m > 0)
+    {
+        // Case m > 0: -sqrt(2) * K * cos(m*phi) * sin(theta) * dP/dx
+        return -std::sqrt(2.0) * K * std::cos(m * phi) * sin_theta * dP_dx_val;
+    }
+    else if (m < 0)
+    {
+        // Case m < 0: -sqrt(2) * K * sin(-m*phi) * sin(theta) * dP/dx
+        // Note: paper uses sin(-m * phi)
+        return -std::sqrt(2.0) * K * std::sin(-m * phi) * sin_theta * dP_dx_val;
+    }
+    else
+    {
+        // Case m = 0: -K * sin(theta) * dP/dx
+        return -K * sin_theta * dP_dx_val;
+    }
+}
+
+double computePhiGradient(int l, int m, double ylmminus)
+{
+    if (m == 0)
+    {
+        return 0.0;
+    }
+
+    double res = -(double)m * ylmminus;
+    return res;
+}
+
 //-----------------------------------------------------------------------

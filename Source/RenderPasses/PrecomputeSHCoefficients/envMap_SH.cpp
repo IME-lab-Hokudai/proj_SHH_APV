@@ -219,7 +219,7 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
         // compute SH gradients for this direction
         SHGradientAndHessianL2(dir, ylm, glm, hlm);
 
-        // store into SHGradientTable
+        // store into SHGradientTable basisidx = l(l+1)+m
         for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
         {
             SHBasisTable[sampleIdx * numBasis + basisIdx] = ylm[basisIdx];
@@ -229,10 +229,107 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
     }
 }
 
+void getLMFromBasisIdx(int basisIdx, int& l, int& m)
+{
+    // l = floor(sqrt(basisIdx))
+    l = static_cast<int>(std::sqrt(static_cast<float>(basisIdx)));
+    // m = basisIdx - CenterOfBand(l)
+    m = basisIdx - (l * (l + 1));
+}
+
+float3 computeKrivanekBasisGradient(int l, int m, float r, float3 dir, float evalYlmminus)
+{
+    // --- Step A: Spherical Coordinates ---
+    float z_safe = std::clamp(dir.z, -1.0f, 1.0f);
+    double theta = std::acos(z_safe);
+    double phi = std::atan2(dir.y, dir.x);
+    if (phi < 0.0)
+        phi += 2.0 * M_PI;
+    // x = sintheta*cosphi | y = sintheta*sinphi | z = costheta (r = 1 so omitted)
+    double cos_theta = z_safe;
+    double sin_theta = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
+    double cos_phi = (sin_theta > 1e-6) ? (dir.x / sin_theta) : 1.0;
+    double sin_phi = (sin_theta > 1e-6) ? (dir.y / sin_theta) : 0.0;
+
+        // 1. dYlm/dTheta
+     double dYlm_dTheta = 0.0;
+    
+    double K = getNormalizationK(l, m);
+    double dP_dx_val = get_dP_dx(l, m, cos_theta);
+
+    if (m > 0)
+        dYlm_dTheta = -std::sqrt(2.0) * K * std::cos(m * phi) * sin_theta * dP_dx_val;
+    else if (m < 0)
+        dYlm_dTheta = -std::sqrt(2.0) * K * std::sin(-m * phi) * sin_theta * dP_dx_val;
+    else
+        dYlm_dTheta = -K * sin_theta * dP_dx_val;
+    
+
+    // 2. dY/dPhi ( = -m * Y_l^{-m} )
+    double dYlm_dPhi = (m == 0) ? 0.0 : -(double)m * evalYlmminus;
+
+    // --- Step C: Spatial Gradients (Chain Rule) ---
+    const float EPSILON = 1e-6f;
+    float r_safe = (r < EPSILON) ? EPSILON : r;
+    float inv_r = 1.0f / r_safe;
+    float inv_r_sin_theta = (sin_theta > EPSILON) ? (inv_r / (float)sin_theta) : 0.0f;
+
+    // Geometric Derivatives (Eq 9 & 11)
+    float dTheta_dx = -(float)(cos_theta * cos_phi) * inv_r;
+    float dTheta_dy = -(float)(cos_theta * sin_phi) * inv_r;
+    float dPhi_dx = (float)sin_phi * inv_r_sin_theta;
+    float dPhi_dy = -(float)cos_phi * inv_r_sin_theta;
+
+    // Final Chain Rule (Eq 8)
+    float3 grad;
+    grad.x = (float)(dTheta_dx * dYlm_dTheta + dPhi_dx * dYlm_dPhi);
+    grad.y = (float)(dTheta_dy * dYlm_dTheta + dPhi_dy * dYlm_dPhi);
+    grad.z = 0.0f;
+
+    return grad;
+}
+
+void computeKrivanekCoeffLMGradient(float3 x, std::vector<ProbeSampleData> samplingData, int basisIdx, float3& outGrad)
+{
+    outGrad = float3(0.0f, 0.0f, 0.0f);
+    int samplingSize = samplingData.size();
+    int numBasis = 9;
+    int l, m;
+    getLMFromBasisIdx(basisIdx, l, m);
+    int basisIdxMMinus = l * (l + 1) + (-m);
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
+    {
+        if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
+            continue;
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
+
+        // Solid angle (uniform per patch)
+        float Omega_i = (4.0f * M_PI) / (float)samplingSize;
+        // Gradient ∂_x Ω_i
+        float3 gradOmega = gradientOmega(s, x, n, samplingSize);
+        // q = s - x
+        float3 q = s - x;
+
+        // r = ||q||
+        float r = length(q);
+        
+
+        float Ylm = SHBasisTable[sampleIdx * numBasis + basisIdx];
+        float Ylmminus = SHBasisTable[sampleIdx * numBasis + basisIdxMMinus];
+
+        float3 gradYlm = computeKrivanekBasisGradient(l, m, r, normalize(q), Ylmminus);
+
+        float3 contrib = gradOmega * Ylm + Omega_i * gradYlm;
+        outGrad += (L.r * contrib);
+    }
+}
+
 void initSHBasisGradientAndHessianTables(const std::vector<float3>& dirSamples,
-    std::vector<float>&  SHBasisTableXPrime,
-    std::vector<float3>&  SHGradientTableXPrime,
-    std::vector<float3x3>&  SHHessianTableXPrime)
+                                         std::vector<float>&  SHBasisTableXPrime,
+                                         std::vector<float3>&  SHGradientTableXPrime,
+                                         std::vector<float3x3>&  SHHessianTableXPrime)
 {
     int numBasis = 9;
     std::array<float3, 9> glm;
