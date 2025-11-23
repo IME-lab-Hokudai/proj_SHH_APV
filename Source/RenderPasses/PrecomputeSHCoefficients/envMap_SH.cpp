@@ -1105,23 +1105,25 @@ void calculateGradAndHessianSHCoeffLM(
         float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
         float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
-        // Geometry and direction
-        float3 q = s - x;
-        float r = length(q);
-
         // Solid angle (uniform per patch)
         float Omega_i = (4.0f * M_PI) / samplingSize;
 
         // Spatial derivative of Ω_i (geometry-dependent)
-        float3 dOmega = gradientOmega(s, x, n, samplingSize);
+        float3 gradOmega = gradientOmega(s, x, n, samplingSize);
 
         // SH basis and derivative in direction space
         int numBasis = 9;
         float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
         float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+        // q = s - x
+        float3 q = s - x;
+
+        // r = ||q||
+        float rInv = 1.0f / length(q);
+
         // Contribution of this sample to ∇f_l^m
-        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        float3 contrib = dOmega * Ylm + Omega_i * gradYlm;
+        // ∇_x Ω_i Y_l^m (ω_i )-Ω_i/r_i  ∇_(ω_i ) Y_l^m (ω_i)
+        float3 contrib = gradOmega * Ylm - Omega_i * rInv * gradYlm;
         //float3 contrib = Omega_i * gradYlm;
         outGrad.r += L.r * contrib;
         outGrad.g += L.g * contrib;
@@ -1281,9 +1283,15 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
         float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
 
+        // q = s - x
+        float3 q = s - x;
+
+        // r = ||q||
+        float rInv = 1.0f/length(q);
+
         // Contribution of this sample to ∇f_l^m
-        // Equation: ∇f_l^m ≈ Σ_i L_i [ (∇Ω_i) Y_l^m + Ω_i ∇Y_l^m ]
-        float3 contrib = gradOmega * Ylm + Omega_i * gradYlm;
+        // ∇_x Ω_i Y_l^m (ω_i )-Ω_i/r_i  ∇_(ω_i ) Y_l^m (ω_i)
+        float3 contrib = gradOmega * Ylm - Omega_i * rInv* gradYlm;
         outGrad += (L.r* contrib);
 
         // float3x3 H_Omega = grad2OmegaHessian(s, x, n, samplingSize);

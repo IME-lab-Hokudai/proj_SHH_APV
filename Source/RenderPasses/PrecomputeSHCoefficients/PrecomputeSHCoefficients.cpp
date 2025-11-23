@@ -148,7 +148,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             ProbeSampleData* samplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
             mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
-            int basisIdx = 3; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+            int basisIdx = 1; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
             int numBasis = 9;
             std::vector<float> coeffVec;
             coeffVec.clear();
@@ -264,8 +264,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                 float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
                 float analyticHess = 0.0f;
-                //calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
-                computeKrivanekCoeffLMGradient(xPolar, probeSamplingResults, basisIdx, analyticGrad);
+                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
+                //computeKrivanekCoeffLMGradient(xPolar, probeSamplingResults, basisIdx, analyticGrad);
                 analyticGrads.push_back(analyticGrad);
             }
 
