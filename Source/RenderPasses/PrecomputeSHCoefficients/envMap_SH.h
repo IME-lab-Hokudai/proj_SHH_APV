@@ -55,7 +55,8 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
 // calculate gradient and hessian of SH basis functions up to l = 2.
 // gradient is calculated indirectly using solid spherical harmonics as described in Iwasaki sensei paper
 //the code is generated using https://github.com/kiwasaki/shh_code_generator
-// note: it is for SH basis (Ylm) NOT for SH coefficients (Flm). Hlm and Glm are used in equation 2 and 4 
+// note: it is for SH basis (Ylm) NOT for SH coefficients (Flm). Hlm and Glm are used in equation 2 and 4
+// it computes Glm and Hlm wrt direction vector (not spatial position)
 void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, std::array<float3, 9>& glm, std::array<float3x3, 9>& hlm);
 
 // note that we calculate up to l = 2 only
@@ -87,7 +88,7 @@ void saveProbeGridToFileWithGradAndHessian(const ProbeGrid& grid, const std::str
 bool loadProbeGridFromFileWithGradAndHessian(ProbeGrid& out, const std::string& path);
 bool loadProbeGridFromFile( ProbeGrid& out, const std::string& path);
 
-std::vector<ProbeDirSample> generateUniformSphereDirSamples(int sampleCount);
+void generateUniformSphereDirSamples(int sampleCount, std::vector<ProbeDirSample> &out);
 
 //-------------------------------------------------------------------------------
 // Function: gradOmega
@@ -143,7 +144,7 @@ float3 gradientOmega(float3 s, float3 x, float3 n, float N);
 //     and mixed derivatives (∂²/∂x∂y, etc.)
 //   - Be careful of singularities when cosξ → 0; clamp with a small epsilon
 //-------------------------------------------------------------------------------
-float3x3 grad2OmegaHessian(const float3& s, const float3& x, const float3& n, int N);
+float3x3 hessianOmega(const float3& s, const float3& x, const float3& n, int N);
 
 //-------------------------------------------------------------------------------
 // Function: grad_SH
@@ -204,17 +205,20 @@ HessianSHCoeff hessianSHCoeffLM(
 // ****functions for verifying SH gradient and hessian calculation using numerical finite differentiation****
 
 // Generate a single vector containing all positions needed for ∂f/∂x finite difference
-// Order per sample: [center, +h, -h]
+// Order per sample: [center, x+h, x-h]
 std::vector<float3> generateVerificationPositions(float y = 0.2f, float extent = 0.25f, uint32_t resolution = 32, float h = 0.02f);
+// Order per sample: [center, x+h z+h, x+h z-h, x-h z+k, x-h z-k]
+std::vector<float3> generateVerificationPositionsMixed(float y = 0.2f, float extent = 0.25f, uint32_t resolution = 32, float h = 0.02f);
 
 // we evaluate coeff for just one basis and channel R for verification purpose
 float calculateChannelRSHCoeffLM(int basisIdx, const std::vector<ProbeSampleData>& probeSamplingResults);
 void calculateChannelRGradAndHessianSHCoeffLM(
     const float3& x,
     const std::vector<ProbeSampleData>& samplingData,
+    const std::vector<ProbeDirSample>& samplingDir,
     const int& basisIdx,
     float3& outGrad,
-    float& outHessian
+    float3x3& outHessian
 );
 
 float3 testComputeSHGrad();

@@ -129,7 +129,110 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //envMapShaderRootVar["PerFrameCB"]["showReconstructedEnvMap"] = mbShowReconstructedEnvMap;
         //mpFullScreenPass->execute(pRenderContext, mpFbo);
 
-        if (mbVerify)
+ //       if (mbVerify)
+ //       {
+ //           auto rtVar = mpRtVars->getRootVar();
+ //           rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+ //           rtVar["gProbePositions"] = mpProbePosBuffer;
+
+ //           if (mpEmissiveSampler)
+ //               mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+ //           rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+ //           rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+ //           rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+ //           //int numProbe = verificationRes*verificationRes*3;
+ //           int numProbe = verificationRes * 3; // one scanline only
+ //           mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbe, 1));
+
+ //           ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
+ //           mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
+
+ //           int basisIdx = 0; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+ //           int numBasis = 9;
+ //           std::vector<float> coeffVec;
+ //           coeffVec.clear();
+ //           coeffVec.reserve(numProbe);
+
+ //            std::vector<float> finiteDifferenceGrads;
+ //            finiteDifferenceGrads.clear();
+ //            finiteDifferenceGrads.reserve(numProbe/3);
+
+ //            std::vector<float> finiteDifferenceHessians;
+ //            finiteDifferenceHessians.clear();
+ //            finiteDifferenceHessians.reserve(numProbe / 3);
+
+ //             std::vector<float3> analyticGrads;
+ //             analyticGrads.clear();
+ //             analyticGrads.reserve(numProbe / 3);
+
+ //             std::vector<float> analyticGradsY;
+ //             analyticGradsY.clear();
+ //             analyticGradsY.reserve(numProbe / 3);
+
+ //             std::vector<float> analyticHessYY;
+ //             analyticHessYY.clear();
+ //             analyticHessYY.reserve(numProbe / 3);
+
+ //           float verificationHSq = verificationH * verificationH;
+ //           // calculate SH coeffs for all verification positions
+ //           for (int probeIdx = 0; probeIdx < numProbe; probeIdx+=3)
+ //           {
+ //               int offset = probeIdx * numSamplesPerProbe;
+ //               std::vector<ProbeSampleData> probeSamplingResults;
+ //               probeSamplingResults.clear();
+ //               probeSamplingResults.reserve(numSamplesPerProbe);
+ //               for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
+ //               {
+ //                   probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+ //               }
+ //               float coeffR = calculateChannelRSHCoeffLM(basisIdx, probeSamplingResults);
+ //               coeffVec.push_back(coeffR);
+
+ //               float3 xPolar; // x in polar coord
+ //               xPolar.x = verificationPositions[probeIdx].z;
+ //               xPolar.y = verificationPositions[probeIdx].x;
+ //               xPolar.z = verificationPositions[probeIdx].y;
+
+ //               float3 xPolarPPlus; // x' in polar coord
+ //               xPolarPPlus.x = verificationPositions[probeIdx + 1].z;
+ //               xPolarPPlus.y = verificationPositions[probeIdx + 1].x;
+ //               xPolarPPlus.z = verificationPositions[probeIdx + 1].y;
+
+ //               float3 xPolarPMinus; // x' in polar coord
+ //               xPolarPMinus.x = verificationPositions[probeIdx + 2].z;
+ //               xPolarPMinus.y = verificationPositions[probeIdx + 2].x;
+ //               xPolarPMinus.z = verificationPositions[probeIdx + 2].y;
+ //               
+ //               float coeffRPPlus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarPPlus, numBasis, basisIdx);
+ //               float coeffRPMinus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarPMinus, numBasis, basisIdx);
+
+ //               float finiteGrad = (coeffRPPlus - coeffR) / verificationH; // ∂f/∂x≈(f(x+h)-f(x))/h
+ //               //float finiteGrad = (coeffR - coeffRPMinus) / verificationH;
+ //               finiteDifferenceGrads.push_back(finiteGrad);
+
+ //               float finiteHessYY = (coeffRPPlus - 2.0f * coeffR + coeffRPMinus)/verificationHSq;
+ //               finiteDifferenceHessians.push_back(finiteHessYY);
+
+ //               float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
+ //               float3x3 analyticHess = float3x3::zeros();
+ //               calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, samplingDirs, basisIdx, analyticGrad, analyticHess);
+ //               //computeKrivanekCoeffLMGradient(xPolar, probeSamplingResults, basisIdx, analyticGrad);
+ //               analyticGradsY.push_back(analyticGrad.y);
+ //               analyticHessYY.push_back(analyticHess[1][1]);
+ //           }
+
+ ///*           for (int i = 0; i < analyticGrads.size(); i++)
+ //           {
+ //                analyticGradY.push_back(analyticGrads[i].y);
+ //           }*/
+
+
+ //           mbVerify = false;
+ //           delete[] allProbeSamplingData;
+ //       }
+
+        if (mbVerify) // mixed derivative verification
         {
             auto rtVar = mpRtVars->getRootVar();
             rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
@@ -141,172 +244,91 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
             rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
             rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            //int numProbe = verificationRes*verificationRes*3;
-            int numProbe = verificationRes * 3; // one scanline only
+            // int numProbe = verificationRes*verificationRes*3
+            int numProbe = verificationRes * 5; // one scanline only
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbe, 1));
 
-            ProbeSampleData* samplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
-            mpProbeSamplingResultBuffer->getBlob(samplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
+            ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
+            mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
-            int basisIdx = 1; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+            int basisIdx = 2; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
             int numBasis = 9;
             std::vector<float> coeffVec;
             coeffVec.clear();
             coeffVec.reserve(numProbe);
 
+            std::vector<float> finiteDifferenceGrads;
+            finiteDifferenceGrads.clear();
+            finiteDifferenceGrads.reserve(numProbe / 3);
 
-            //refer to Krivanek 2005 sect 4.3.1
-            std::vector<float> XPrimeSHBasisTable(9 * numSamplesPerProbe);
-            std::vector<float> XPrimeSolidAngleWeight(numSamplesPerProbe);
-            std::vector<float3> XPrimeSHGradientTable(9 * numSamplesPerProbe);
-            std::vector<float3x3> XPrimeSHHessianTable(9 * numSamplesPerProbe);
+            std::vector<float> finiteDifferenceHessians;
+            finiteDifferenceHessians.clear();
+            finiteDifferenceHessians.reserve(numProbe / 3);
 
-             std::vector<float> finiteDifferenceGrads;
-             finiteDifferenceGrads.clear();
-             finiteDifferenceGrads.reserve(numProbe/3);
+            std::vector<float3> analyticGrads;
+            analyticGrads.clear();
+            analyticGrads.reserve(numProbe / 3);
 
-              std::vector<float3> analyticGrads;
-              analyticGrads.clear();
-              analyticGrads.reserve(numProbe / 3);
+            std::vector<float> analyticHessYX;
+            analyticHessYX.clear();
+            analyticHessYX.reserve(numProbe / 3);
 
-              std::vector<float> tmp;
-              tmp.clear();
-              tmp.reserve(numProbe / 3);
+            float verificationHSq =4.0f * verificationH * verificationH;
             // calculate SH coeffs for all verification positions
-            for (int probeIdx = 0; probeIdx < numProbe; probeIdx+=3)
+            for (int probeIdx = 0; probeIdx < numProbe; probeIdx += 5)
             {
-                XPrimeSHBasisTable.assign(9 * numSamplesPerProbe, 0.0f);
-                XPrimeSolidAngleWeight.assign(numSamplesPerProbe, 0.0f);
-                XPrimeSHGradientTable.assign(9 * numSamplesPerProbe, float3(0.0f));
-                XPrimeSHHessianTable.assign(9 * numSamplesPerProbe, float3x3::zeros());
-
                 int offset = probeIdx * numSamplesPerProbe;
                 std::vector<ProbeSampleData> probeSamplingResults;
                 probeSamplingResults.clear();
                 probeSamplingResults.reserve(numSamplesPerProbe);
                 for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
                 {
-                    probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
+                    probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
                 }
-                float coeffR = calculateChannelRSHCoeffLM(basisIdx, probeSamplingResults);
-                coeffVec.push_back(coeffR);
-
-                std::vector<float3> xPrimeDirs;
-                xPrimeDirs.clear();
-                xPrimeDirs.reserve(numSamplesPerProbe);
+                //float coeffR = calculateChannelRSHCoeffLM(basisIdx, probeSamplingResults);
+                //coeffVec.push_back(coeffR);
 
                 float3 xPolar; // x in polar coord
                 xPolar.x = verificationPositions[probeIdx].z;
                 xPolar.y = verificationPositions[probeIdx].x;
                 xPolar.z = verificationPositions[probeIdx].y;
 
-                float3 xPolarXPrime; // x' in polar coord
-                xPolarXPrime.x = verificationPositions[probeIdx + 1].z;
-                xPolarXPrime.y = verificationPositions[probeIdx + 1].x;
-                xPolarXPrime.z = verificationPositions[probeIdx + 1].y;
-                // Solid angle (uniform per patch)
-                float Omega_i = (4.0f * M_PI) / (float)numSamplesPerProbe;
+                float3 xPolarXPlusZPlus; // x' in polar coord
+                xPolarXPlusZPlus.x = verificationPositions[probeIdx + 1].z;
+                xPolarXPlusZPlus.y = verificationPositions[probeIdx + 1].x;
+                xPolarXPlusZPlus.z = verificationPositions[probeIdx + 1].y;
 
-                // calculate new directions from x' to all sample points
-                for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
-                {
-                    float3 sPolar = float3(
-                        probeSamplingResults[sampleIdx].s.x, probeSamplingResults[sampleIdx].s.y, probeSamplingResults[sampleIdx].s.z
-                    );
-                    float3 nPolar = float3(
-                        probeSamplingResults[sampleIdx].n.x, probeSamplingResults[sampleIdx].n.y, probeSamplingResults[sampleIdx].n.z
-                    );
-                    float3 L = float3(
-                        probeSamplingResults[sampleIdx].Li.x, probeSamplingResults[sampleIdx].Li.y, probeSamplingResults[sampleIdx].Li.z
-                    );
+                float3 xPolarXPlusZMinus; // x' in polar coord
+                xPolarXPlusZMinus.x = verificationPositions[probeIdx + 2].z;
+                xPolarXPlusZMinus.y = verificationPositions[probeIdx + 2].x;
+                xPolarXPlusZMinus.z = verificationPositions[probeIdx + 2].y;
 
-                    float3 xPrimeNormDir = normalize(sPolar - xPolarXPrime); // direction from x' to same sample point
-                    xPrimeDirs.push_back(xPrimeNormDir);
+                float3 xPolarXMinusZPlus; // x' in polar coord
+                xPolarXMinusZPlus.x = verificationPositions[probeIdx + 3].z;
+                xPolarXMinusZPlus.y = verificationPositions[probeIdx + 3].x;
+                xPolarXMinusZPlus.z = verificationPositions[probeIdx + 3].y;
 
-                    if (probeSamplingResults[sampleIdx].hitT < 0.0f) // ray miss
-                    {
-                        XPrimeSolidAngleWeight[sampleIdx] = 0.0f; 
-                    }
-                    else
-                    {
-                        // Geometry and direction
-                        float3 qk = sPolar - xPolar;
-                        float rk = math::length(qk);
+                 float3 xPolarXMinusZMinus; // x' in polar coord
+                xPolarXMinusZMinus.x = verificationPositions[probeIdx + 4].z;
+                 xPolarXMinusZMinus.y = verificationPositions[probeIdx + 4].x;
+                xPolarXMinusZMinus.z = verificationPositions[probeIdx + 4].y;
 
-                        // cosξ = -(n · q) / r
-                        float cosXik = -(math::dot(nPolar, qk)) / rk;
+                float coeffRXPlusZPlus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarXPlusZPlus, numBasis, basisIdx);
+                float coeffRXPlusZMinus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarXPlusZMinus, numBasis, basisIdx);
+                float coeffRXMinusZPlus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarXMinusZPlus, numBasis, basisIdx);
+                float coeffRXMinusZMinus = calculateCoeffRPrime(probeSamplingResults, xPolar, xPolarXMinusZMinus, numBasis, basisIdx);
 
-                        float3 qkPrime = sPolar - xPolarXPrime;
-                        float rkPrime = math::length(qkPrime);
-                        float cosXikPrime = -(math::dot(nPolar, qkPrime)) / rkPrime;
-
-                        XPrimeSolidAngleWeight[sampleIdx] = (rk * rk * cosXikPrime) / (rkPrime * rkPrime * cosXik);
-                    }
-                }
-
-                // calculate SH basis and derivatives at x' using new directions
-                initSHBasisGradientAndHessianTables(xPrimeDirs, XPrimeSHBasisTable, XPrimeSHGradientTable, XPrimeSHHessianTable);
-
-                // calculate SH coeff at x' using new directions and solid angle correction
-                float coeffRPrime = 0.0f;
-                // For each direction sample
-                for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
-                {
-                    const float4& sample = probeSamplingResults[sampleIdx].Li;
-                    float shYPrime = XPrimeSHBasisTable[numBasis * sampleIdx + basisIdx]; // SH basis value for this direction
-
-                    coeffRPrime += sample.r * shYPrime * XPrimeSolidAngleWeight[sampleIdx];
-                }
-                coeffRPrime *= Omega_i;
-
-                float finiteGrad = (coeffRPrime - coeffR) / verificationH; // ∂f/∂x≈(f(x+h)-f(x))/h
-                finiteDifferenceGrads.push_back(finiteGrad);
+                float finiteHessYX = (coeffRXPlusZPlus - coeffRXPlusZMinus - coeffRXMinusZPlus + coeffRXMinusZMinus) / verificationHSq;
+                finiteDifferenceHessians.push_back(finiteHessYX);
 
                 float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
-                float analyticHess = 0.0f;
-                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
-                //computeKrivanekCoeffLMGradient(xPolar, probeSamplingResults, basisIdx, analyticGrad);
-                analyticGrads.push_back(analyticGrad);
+                float3x3 analyticHess = float3x3::zeros();
+                calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, samplingDirs, basisIdx, analyticGrad, analyticHess);
+                analyticHessYX.push_back(analyticHess[0][1]);
             }
 
-             for (int i = 0; i < analyticGrads.size(); i++)
-            {
-                 tmp.push_back(analyticGrads[i].y);
-            }
-            //// calculate finite difference gradient and analytic gradient and compare
-            //std::vector<float> finiteDifferenceGrads;
-            //finiteDifferenceGrads.clear();
-            //finiteDifferenceGrads.reserve(numProbe/3);
-
-            //std::vector<float3> analyticGrads;
-            //analyticGrads.clear();
-            //analyticGrads.reserve(numProbe / 3);
-
-            //for (int probeIdx = 0; probeIdx < numProbe; probeIdx += 3)
-            //{
-            //    int offset = probeIdx * numSamplePerProbe;
-            //    std::vector<ProbeSampleData> probeSamplingResults;
-            //    probeSamplingResults.clear();
-            //    probeSamplingResults.reserve(numSamplePerProbe);
-            //    for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; sampleIdx++)
-            //    {
-            //        probeSamplingResults.push_back(samplingData[offset + sampleIdx]);
-            //    }
-            //    float finiteDifGrad = (coeffVec[probeIdx + 1] - coeffVec[probeIdx + 2]) / (2.0f * verificationH); //Order per sample: [center, +h, -h] ∂f/∂x≈(f(x+h)-f(x-h))/2h
-            //    finiteDifferenceGrads.push_back(finiteDifGrad);
-
-            //    float3 analyticGrad = float3(0.0f, 0.0f, 0.0f);
-            //    float analyticHess = 0.0f;
-            //    // compute analytic grad
-            //    float3 xPolar;
-            //    xPolar.x = verificationPositions[probeIdx].z; 
-            //    xPolar.y = verificationPositions[probeIdx].x;
-            //    xPolar.z = verificationPositions[probeIdx].y;
-            //    calculateChannelRGradAndHessianSHCoeffLM(xPolar, probeSamplingResults, basisIdx, analyticGrad, analyticHess);
-            //    analyticGrads.push_back(analyticGrad);
-            //}
             mbVerify = false;
-            delete[] samplingData;
+            delete[] allProbeSamplingData;
         }
 
         if (!mbFinishSHPrecompute)
@@ -428,6 +450,76 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         }
     }
 }
+float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx)
+{
+    // refer to Krivanek 2005 sect 4.3.1
+    std::vector<float> XPrimeSHBasisTable(9 * numSamplesPerProbe);
+    std::vector<float> XPrimeSolidAngleWeight(numSamplesPerProbe);
+    std::vector<float3> XPrimeSHGradientTable(9 * numSamplesPerProbe);
+    std::vector<float3x3> XPrimeSHHessianTable(9 * numSamplesPerProbe);
+
+    XPrimeSHBasisTable.assign(9 * numSamplesPerProbe, 0.0f);
+    XPrimeSolidAngleWeight.assign(numSamplesPerProbe, 0.0f);
+    XPrimeSHGradientTable.assign(9 * numSamplesPerProbe, float3(0.0f));
+    XPrimeSHHessianTable.assign(9 * numSamplesPerProbe, float3x3::zeros());
+
+    std::vector<float3> xPrimeDirs;
+    xPrimeDirs.clear();
+    xPrimeDirs.reserve(numSamplesPerProbe);
+
+    // Solid angle (uniform per patch)
+    float Omega_i = (4.0f * M_PI) / (float)numSamplesPerProbe;
+
+    // calculate new directions from x' to all sample points
+    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
+    {
+        float3 sPolar =
+            float3(probeSamplingResults[sampleIdx].s.x, probeSamplingResults[sampleIdx].s.y, probeSamplingResults[sampleIdx].s.z);
+        float3 nPolar =
+            float3(probeSamplingResults[sampleIdx].n.x, probeSamplingResults[sampleIdx].n.y, probeSamplingResults[sampleIdx].n.z);
+        float3 L = float3(probeSamplingResults[sampleIdx].Li.x, probeSamplingResults[sampleIdx].Li.y, probeSamplingResults[sampleIdx].Li.z);
+
+        float3 xPrimeNormDir = normalize(sPolar - xPolarXPrime); // direction from x' to same sample point
+        xPrimeDirs.push_back(xPrimeNormDir);
+
+        if (probeSamplingResults[sampleIdx].hitT < 0.0f) // ray miss
+        {
+            XPrimeSolidAngleWeight[sampleIdx] = 0.0f;
+        }
+        else
+        {
+            // Geometry and direction
+            float3 qk = sPolar - xPolar;
+            float rk = math::length(qk);
+
+            // cosξ = -(n · q) / r
+            float cosXik = -(math::dot(nPolar, qk)) / rk;
+
+            float3 qkPrime = sPolar - xPolarXPrime;
+            float rkPrime = math::length(qkPrime);
+            float cosXikPrime = -(math::dot(nPolar, qkPrime)) / rkPrime;
+
+            XPrimeSolidAngleWeight[sampleIdx] = (rk * rk * cosXikPrime) / (rkPrime * rkPrime * cosXik);
+        }
+    }
+
+     // calculate SH basis and derivatives at x' using new directions
+    initSHBasisGradientAndHessianTables(xPrimeDirs, XPrimeSHBasisTable, XPrimeSHGradientTable, XPrimeSHHessianTable);
+
+    // calculate SH coeff at x' using new directions and solid angle correction
+    float coeffRPrime = 0.0f;
+    // For each direction sample
+    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
+    {
+        const float4& sample = probeSamplingResults[sampleIdx].Li;
+        float shYPrime = XPrimeSHBasisTable[numBasis * sampleIdx + basisIdx]; // SH basis value for this direction
+
+        coeffRPrime += sample.r * shYPrime * XPrimeSolidAngleWeight[sampleIdx];
+    }
+    coeffRPrime *= Omega_i;
+
+    return coeffRPrime;
+}
 
 void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
 {
@@ -443,12 +535,12 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-           auto dirSamples = generateUniformSphereDirSamples(numSamplesPerProbe); //polar z-up
+            generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
             mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
-                sizeof(ProbeDirSample), numSamplesPerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, dirSamples.data()
+                sizeof(ProbeDirSample), numSamplesPerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, samplingDirs.data()
             );
            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
-           initSHBasisGradientAndHessianTables(dirSamples);
+            initSHBasisGradientAndHessianTables(samplingDirs);
 
         //generate verification data
            if (mbVerify)
@@ -494,7 +586,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                   // verificationPositions.push_back(tmpXForward);
                   // verificationPositions.push_back(tmpXBackward);
 
-                   verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord sample: [center,+h, -h]
+                   //verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord sample: [center,+h, -h]
+                   verificationPositions = generateVerificationPositionsMixed(verificationY, verificationExtent, verificationRes, verificationH); // falcor coord Order per sample: [center, x+h z+h, x+h z-h, x-h z+h, x-h z-h]
                    int numProbes = verificationPositions.size();
                    mpProbePosBuffer = mpDevice->createStructuredBuffer(
                        sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
@@ -778,3 +871,5 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            //mpProbeVisualizePass->setGridData(mProbeGrid, dirSamples);
     }
 }
+
+

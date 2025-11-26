@@ -104,4 +104,6 @@ private:
 
     bool mbVerify = true;
     std::vector<float3> verificationPositions;
+    std::vector<ProbeDirSample> samplingDirs;
+    float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
 };
