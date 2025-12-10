@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #pragma once
+#include "AdaptiveProbeVolume.h"
 #include "envMap_SH.h"
 #include "Falcor.h"
 #include "ProbeVisualizePass.h"
@@ -106,4 +107,7 @@ private:
     std::vector<float3> verificationPositions;
     std::vector<ProbeDirSample> samplingDirs;
     float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
+
+    ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
+    bool mNeedRebuildProbeVolume = true;
 };

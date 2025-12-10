@@ -8,11 +8,13 @@ target_sources(PrecomputeSHCoefficients PRIVATE
 	sphericalHarmonics.cpp
     envMap_SH.h
 	envMap_SH.cpp
+	AdaptiveProbeVolume.h
+	AdaptiveProbeVolume.cpp
+	ProbeVisualizePass.h
+	ProbeVisualizePass.cpp
     SHShader.slang
 	EnvMapShader.slang
 	SHGridShader.slang
-	ProbeVisualizePass.h
-	ProbeVisualizePass.cpp
 	ProbeGridVisualizeShader.slang
 	ProbeSamplingData.slang
 	ProbeSampling.rt.slang
