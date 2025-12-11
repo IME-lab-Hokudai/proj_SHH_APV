@@ -1244,8 +1244,6 @@ void calculateGradAndHessianSHCoeffLM(
     }
 }
 
-
-
 HessianSHCoeff hessianSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const int& basisIdx)
 {
     HessianSHCoeff H = {float3x3::zeros(), float3x3::zeros(), float3x3::zeros()};

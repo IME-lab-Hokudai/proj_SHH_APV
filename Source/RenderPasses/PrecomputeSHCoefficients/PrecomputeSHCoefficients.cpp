@@ -40,7 +40,9 @@ const int verificationRes = 32;
 const float verificationH = 0.005f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
-const float Eabs = 50.0f;
+//const float ErrorThreshold = 25.0f;
+const float ErrorThreshold = 5.0f;//threshold for Erel
+const bool useRelativeError = true;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -428,7 +430,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         if (mNeedRebuildProbeVolume)
         {
             // 1. Initialize
-            mAdaptiveProbeVolume->startBuild(mpScene, Eabs);
+            mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
             // 2. Loop until the volume stops asking for more work (Breadth-First Build)
             while (mAdaptiveProbeVolume->hasPendingBatch())

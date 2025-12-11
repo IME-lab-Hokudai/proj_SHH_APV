@@ -11,7 +11,7 @@ class AdaptiveProbeVolume : public Object
 public:
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
-    void startBuild(const ref<Scene>& pScene, float errorThreshold);
+    void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
     bool hasPendingBatch() const { return !mPendingProbes.empty(); }
     void getPendingPositions(std::vector<float3> &position) const;
 
@@ -46,6 +46,7 @@ private:
         std::vector<GradSHCoeff> shGradients;
 
         float maxLambdaL2Norm = 0.0f;
+        float coeffNorm = 0.0f; // for Erel ||L||
     };
 
     struct AdaptiveNode
@@ -87,9 +88,6 @@ private:
         GPUGradSHCoeff gradients[9];
     };
 
-    // ... (Helpers and Members remain same) ...
-    float computeHessianErrorNorm(const float* rawData); // Helper for error calc
-
     ref<Device> mpDevice;
 
     /*
@@ -127,7 +125,9 @@ private:
     std::vector<std::pair<int, int>> mPendingProbes;
 
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 6;
+    int mMaxLevel = 5;
     ref<Buffer> mpNodeBuffer;
     ref<Buffer> mpProbeBuffer;
+
+    bool mUseRelativeError = false; 
 };
