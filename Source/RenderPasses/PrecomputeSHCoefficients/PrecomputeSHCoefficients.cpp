@@ -40,7 +40,7 @@ const int verificationRes = 32;
 const float verificationH = 0.005f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
-const float Eabs = 5.0f;
+const float Eabs = 50.0f;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -427,9 +427,93 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         // build adaptive probe grid here
         if (mNeedRebuildProbeVolume)
         {
+            // 1. Initialize
             mAdaptiveProbeVolume->startBuild(mpScene, Eabs);
-            ref<Buffer> pPosBuffer = mAdaptiveProbeVolume->getPendingPositions();
-            uint32_t numProbes = pPosBuffer->getElementCount();
+
+            // 2. Loop until the volume stops asking for more work (Breadth-First Build)
+            while (mAdaptiveProbeVolume->hasPendingBatch())
+            {
+                // --- A. Get positions for THIS batch ---
+                std::vector<float3> pendingProbePositions;
+                mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
+
+                uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+
+                // --- B. Prepare Buffers (Re-create for new size) ---
+                // Input: Positions
+                mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
+                );
+                mpProbePosBuffer->setName("probes world pos");
+
+                // Output: Ray Tracing Samples
+                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                    sizeof(ProbeSampleData),
+                    numSamplesPerProbe * numProbes,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                    MemoryType::DeviceLocal
+                );
+                mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+
+                // --- C. Run Ray Tracing ---
+                auto rtVar = mpRtVars->getRootVar();
+                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+                rtVar["gProbePositions"] = mpProbePosBuffer;
+                if (mpEmissiveSampler)
+                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+                rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+
+                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+
+                // --- D. Readback Results ---
+                ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
+                mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
+
+                // --- E. Process Each Probe (CPU Math) ---
+                for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+                {
+                    // Gather samples for this specific probe
+                    int offset = probeIdx * numSamplesPerProbe;
+                    std::vector<ProbeSampleData> probeSamplingResults;
+                    probeSamplingResults.reserve(numSamplesPerProbe);
+                    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
+                    {
+                        probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+                    }
+
+                    // Math Containers
+                    std::vector<GradSHCoeff> grads;
+                    std::vector<HessianSHCoeff> hessians;
+                    std::vector<float3> coeffs;
+
+                    // Coordinate conversion
+                    float3 xPolar;
+                    xPolar.x = pendingProbePositions[probeIdx].z;
+                    xPolar.y = pendingProbePositions[probeIdx].x;
+                    xPolar.z = pendingProbePositions[probeIdx].y;
+
+                    // Compute Physics
+                    calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
+                    calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
+
+                    //Feed Data back to Volume
+                    // We pass the batch index (probeIdx) and the calculated data
+                    mAdaptiveProbeVolume->setProbeData(probeIdx, coeffs, grads, hessians);
+                }
+
+                delete[] allProbeSamplingData;
+
+                // --- F. Finish Batch ---
+                // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
+                mAdaptiveProbeVolume->finishBatch();
+            }
+
+            // 3. TODO: upload to GPU for visualization
+            mAdaptiveProbeVolume->uploadToGPU();
+            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolume.txt");
+            mNeedRebuildProbeVolume = false;
         }
 
         // visualize probes
@@ -548,7 +632,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeDirSample), numSamplesPerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, samplingDirs.data()
             );
-           mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
+            mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
             initSHBasisGradientAndHessianTables(samplingDirs);
 
         //generate verification data

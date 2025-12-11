@@ -355,7 +355,7 @@ void initSHBasisGradientAndHessianTables(const std::vector<float3>& dirSamples,
 }
 
 void calculateSHCoeffs(
-    std::vector<float4>& out,                // Output SH coefficients (num_basis)
+    std::vector<float3>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
 )
@@ -381,14 +381,15 @@ void calculateSHCoeffs(
         for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
         {
             const float4& sample = probeSamplingResults[sampleIdx].Li;
-            float shY = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
+            float shBasis = SHBasisTable[num_basis * sampleIdx + basisIdx]; // SH basis value for this direction
 
-            r += (double)sample.x * shY * weight;
-            g += (double)sample.y * shY * weight;
-            b += (double)sample.z * shY * weight;
-            a += (double)sample.w * shY * weight;
+            r += (double)sample.x * shBasis * weight;
+            g += (double)sample.y * shBasis * weight;
+            b += (double)sample.z * shBasis * weight;
+            //a += (double)sample.w * shBasis * weight;
         }
-        out[basisIdx] = float4((float)r, (float)g, (float)b, (float)a);
+        //out[basisIdx] = float3((float)r, (float)g, (float)b, (float)a);
+        out[basisIdx] = float3((float)r, (float)g, (float)b);
     }
 }
 
@@ -396,7 +397,8 @@ void calculateSHCoeffsGradientsAndHessians(
     std::vector<GradSHCoeff>& gradOut,
     std::vector<HessianSHCoeff>& hessianOut,
     const float3& gridPos,
-    const std::vector<ProbeSampleData>& probeSamplingResults
+    const std::vector<ProbeSampleData>& probeSamplingResults,
+    const std::vector<ProbeDirSample>& samplingDir
 )
 {
     gradOut.clear();
@@ -408,7 +410,7 @@ void calculateSHCoeffsGradientsAndHessians(
     {
         GradSHCoeff grad;
         HessianSHCoeff hessian;
-        calculateGradAndHessianSHCoeffLM(gridPos, probeSamplingResults, basisIdx, grad, hessian);
+        calculateGradAndHessianSHCoeffLM(gridPos, probeSamplingResults, samplingDir, basisIdx, grad, hessian);
         gradOut[basisIdx] = grad;
         hessianOut[basisIdx] = hessian;
     }
@@ -1166,6 +1168,7 @@ float3x3 hessianOmega(const float3& s, const float3& x, const float3& n, int N)
 void calculateGradAndHessianSHCoeffLM(
     const float3& x,
     const std::vector<ProbeSampleData>& samplingData,
+    const std::vector<ProbeDirSample>& samplingDir,
     const int& basisIdx,
     GradSHCoeff& outGrad,
     HessianSHCoeff& outHessian
@@ -1183,15 +1186,16 @@ void calculateGradAndHessianSHCoeffLM(
         float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
 
         // Solid angle (uniform per patch)
-        float Omega_i = (4.0f * M_PI) / samplingSize;
+        float Omega_i = (4.0f * M_PI) / (float)samplingSize;
 
-        // Spatial derivative of Ω_i (geometry-dependent)
+        // Gradient ∂_x Ω_i
         float3 gradOmega = gradientOmega(s, x, n, samplingSize);
 
         // SH basis and derivative in direction space
         int numBasis = 9;
         float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
         float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+
         // q = s - x
         float3 q = s - x;
 
@@ -1201,23 +1205,40 @@ void calculateGradAndHessianSHCoeffLM(
         // Contribution of this sample to ∇f_l^m
         // ∇_x Ω_i Y_l^m (ω_i )-Ω_i/r_i  ∇_(ω_i ) Y_l^m (ω_i)
         float3 contrib = gradOmega * Ylm - Omega_i * rInv * gradYlm;
-        //float3 contrib = Omega_i * gradYlm;
-        outGrad.r += L.r * contrib;
-        outGrad.g += L.g * contrib;
-        outGrad.b += L.b * contrib;
+        outGrad.r += (L.r * contrib);
+        outGrad.g += (L.g * contrib);
+        outGrad.b += (L.b * contrib);
 
         float3x3 H_Omega = hessianOmega(s, x, n, samplingSize);
         float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
-        // Accumulate Hessian of f_l^m
-        // ∂_(x_j x_k ) f_l^m=∑_(i=1)^N▒L(ω_i)((∂_(x_j x_k ) Ω_i)Y_l^m (ω_i)+(∂_(x_j ) Ω_i)(∂_(x_k ) Y_l^m (ω_i))+(∂_(x_k ) Ω_i)(∂_(x_j )Y_l^m (ω_i))+Ω_i 〖(∂〗_(x_j x_k ) Y_l^m (ω_i)))
+
+        // Pre-calculate shared values for the inner loop
+        float3 w = samplingDir[sampleIdx].dir;
+        float rInvSq = rInv * rInv;
+
+        //  Accumulate Hessian of f_l^m
+        // ∂_(x_j x_k)
+        //    f_l ^m =∑_(i = 1) ^ N▒L(ω_i)[(∂_(x_j x_k) Ω_i)Y_l ^ m - 1 / r_i((∂_(x_j) Ω_i)(∂_(ω_i, k) Y_l ^ m) + (∂_(x_k) Ω_i)(∂_(ω_i, j)
+        //    Y_l ^ m)) +
+        //                                                Ω_i / (r_i ^ 2)((ω_i)_j(∂_(ω_i, k) Y_l ^ m) + ∂_(ω_i, j) ∂_(ω_i, k) Y_l ^ m)]
         for (int j = 0; j < 3; ++j)
         {
             for (int k = 0; k < 3; ++k)
             {
-                float contribH = H_Omega[j][k] * Ylm + dOmega[j] * gradYlm[k] + dOmega[k] * gradYlm[j] + Omega_i * hessYlm[j][k];
-                outHessian.r[j][k] += L.x * contribH;
-                outHessian.g[j][k] += L.y * contribH;
-                outHessian.b[j][k] += L.z * contribH;
+                // Term 1: (∂²Ω / ∂xj∂xk) * Y
+                float term1 = H_Omega[j][k] * Ylm;
+
+                // Term 2: -1/r * [ (∂Ω/∂xj)(∂Y/∂wk) + (∂Ω/∂xk)(∂Y/∂wj) ]
+                // Note: We access float3 components using array indexing [j] and [k]
+                float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
+
+                // Term 3: Ω/r² * [ (ω)_j * (∂Y/∂wk) + (∂²Y / ∂wj∂wk) ]
+                float term3 = Omega_i * rInvSq * (w[j] * gradYlm[k] + hessYlm[j][k]);
+
+                float contrib = term1 + term2 + term3;
+                outHessian.r[j][k] += L.r * contrib;
+                outHessian.g[j][k] += L.g * contrib;
+                outHessian.b[j][k] += L.b * contrib;
             }
         }
     }

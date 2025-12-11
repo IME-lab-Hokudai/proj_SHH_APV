@@ -2,6 +2,8 @@
 #include "Falcor.h"
 #include <vector>
 
+#include "envMap_SH.h"
+
 using namespace Falcor;
 
 class AdaptiveProbeVolume : public Object
@@ -9,46 +11,41 @@ class AdaptiveProbeVolume : public Object
 public:
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
-    // ------------------------------------------------------------------
-    // Phase 1: Initialization
-    // ------------------------------------------------------------------
-    // Resets the grid and creates the initial "Root Probe" to be computed.
     void startBuild(const ref<Scene>& pScene, float errorThreshold);
-
-    // ------------------------------------------------------------------
-    // Phase 2: The Build Loop (Called by RenderPass)
-    // ------------------------------------------------------------------
-
-    // Returns true if there is a batch of probes waiting for GPU computation.
     bool hasPendingBatch() const { return !mPendingProbes.empty(); }
+    void getPendingPositions(std::vector<float3> &position) const;
 
-    // Creates a buffer of float3 positions for the pending probes.
-    // Bind this to your Compute Shader as "gProbePositions".
-    void getPendingPositions(std::vector<float3> &positions);
+    // Updated: Input matches your structs directly
+    void setProbeData(
+        uint32_t batchIndex,
+        const std::vector<float3>& coeffs,
+        const std::vector<GradSHCoeff>& grads,
+        const std::vector<HessianSHCoeff>& hessians
+    );
 
-    // Processes the results from the GPU.
-    // 1. Reads back L/Grad/Hessian.
-    // 2. Checks Error Metric.
-    // 3. Subdivides nodes and generates the NEXT batch of probes for the next loop.
-    // pResultBuffer struct: { float coeffs[9]; float3 grad[9]; float3x3 hess[9]; }
-    void processBatchResults(const ref<Buffer>& pResultBuffer);
-
-    // ------------------------------------------------------------------
-    // Phase 3: Finalize
-    // ------------------------------------------------------------------
+    void finishBatch();
     void uploadToGPU();
 
     ref<Buffer> getNodeBuffer() const { return mpNodeBuffer; }
     ref<Buffer> getProbeBuffer() const { return mpProbeBuffer; }
 
+    void printDebugInfo(const std::string& filename);
+
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
 
+    // ------------------------------------------------------------------
+    // Internal Data Structures (No more flattening!)
+    // ------------------------------------------------------------------
     struct ProbePoint
     {
-        std::vector<float> shCoeffs;
-        std::vector<float3> shGradients;
-        float hessianErrorNorm = 0.0f;
+        // Store RGB coefficients directly
+        std::vector<float3> shCoeffs;
+
+        // Store RGB gradients directly using your struct
+        std::vector<GradSHCoeff> shGradients;
+
+        float maxLambdaL2Norm = 0.0f;
     };
 
     struct AdaptiveNode
@@ -61,7 +58,9 @@ private:
         int children[8] = {-1};
     };
 
-    // GPU Layouts
+    // ------------------------------------------------------------------
+    // GPU Data Layouts
+    // ------------------------------------------------------------------
     struct PackedNode
     {
         float3 minPoint;
@@ -70,26 +69,65 @@ private:
         uint32_t probeIndex;
     };
 
-    struct PackedProbe
+    // GPU-safe version of Gradient struct (using float4 for 16-byte alignment safety)
+    struct GPUGradSHCoeff
     {
-        float coeffs[9];
-        float3 gradients[9];
+        float4 r; // xyz = gradient, w = pad
+        float4 g;
+        float4 b;
     };
 
-    // Helper
-    float computeHessianErrorNorm(const float* rawData);
+    struct PackedProbe
+    {
+        // 9 Coefficients (RGB)
+        // using float4 for alignment (xyz=rgb, w=pad)
+        float4 coeffs[9];
+
+        // 9 Gradients (RGB)
+        GPUGradSHCoeff gradients[9];
+    };
+
+    // ... (Helpers and Members remain same) ...
+    float computeHessianErrorNorm(const float* rawData); // Helper for error calc
 
     ref<Device> mpDevice;
 
-    std::vector<AdaptiveNode> mNodes;
+    /*
+     * DATA STRUCTURE RELATIONSHIP:
+     * ----------------------------
+     * 1. mPendingProbes (The Queue):
+     * Stores a list of pairs <NodeIndex, ProbeIndex> representing the current batch
+     * of work that just finished computing on the GPU.
+     *
+     * 2. mAdaptiveNodes (The Geometry):
+     * Accessed via 'nodeIdx'. Represents the Octree box (min/max bounds).
+     * We need this to calculate the voxel size (Delta x) for the error metric.
+     *
+     * 3. mProbePoints (The Data):
+     * Accessed via 'node.probeIndex'. Represents the lighting samples.
+     * We need this to retrieve the computed Hessian Error Norm (||lambda||).
+     *
+     * VISUALIZATION:
+     * --------------
+     * mPendingProbes (Queue)
+     * +-----------+-----------+
+     * idx: | Node ID: 5| Probe ID: 9|  <--- "pair"
+     * +-----+-----+-----+-----+
+     * |           |
+     * v           v
+     * mAdaptiveNodes      mProbePoints
+     * +-------------+     +-----------------------+
+     * 5 | Min: (0,0,0)|   9 | SH Coeffs: [0.5, ...]|
+     * | Max: (1,1,1)|     | Hessians:  [...]     |
+     * | ProbeIdx: 9 |---->| Error: 0.04          |
+     * +-------------+     +-----------------------+
+     */
+    std::vector<AdaptiveNode> mAdaptiveNodes;
     std::vector<ProbePoint> mProbePoints;
-
-    // The Work Queue: Pairs of <NodeIndex, ProbeIndex> that need computing
     std::vector<std::pair<int, int>> mPendingProbes;
 
     float mCurrentThreshold = 0.01f;
     int mMaxLevel = 6;
-
     ref<Buffer> mpNodeBuffer;
     ref<Buffer> mpProbeBuffer;
 };

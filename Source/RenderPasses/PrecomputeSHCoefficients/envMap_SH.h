@@ -39,7 +39,7 @@ struct ProbeGrid
 // for probe sampling using ray tracing
 void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples);
 void calculateSHCoeffs(
-    std::vector<float4>& out,                // Output SH coefficients (num_basis)
+    std::vector<float3>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
 );
@@ -47,7 +47,8 @@ void calculateSHCoeffsGradientsAndHessians(
     std::vector<GradSHCoeff>& gradOut,
     std::vector<HessianSHCoeff>& hessianOut,
     const float3& gridPos,
-    const std::vector<ProbeSampleData>& probeSamplingResults
+    const std::vector<ProbeSampleData>& probeSamplingResults,
+    const std::vector<ProbeDirSample>& samplingDir
 );
 
 void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4> & out);
@@ -173,6 +174,7 @@ float3x3 hessianOmega(const float3& s, const float3& x, const float3& n, int N);
 void calculateGradAndHessianSHCoeffLM(
     const float3 &x,
     const std::vector<ProbeSampleData>& samplingData,
+    const std::vector<ProbeDirSample>& samplingDir,
     const int &basisIdx,
     GradSHCoeff& outGrad,
     HessianSHCoeff& outHessian

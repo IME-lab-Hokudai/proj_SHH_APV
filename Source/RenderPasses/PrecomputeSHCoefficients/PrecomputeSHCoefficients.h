@@ -77,7 +77,7 @@ private:
     ref<EnvMap> mpEnvMap;
     bool mbShowReconstructedEnvMap = false;
     bool mbShowSHGrid = false;
-    ProbeGrid mProbeGrid;
+    ProbeGrid mUniformProbeGrid;
     ref<Buffer> mpGridSHCoeffsBuffer; //SH coeffs of all probes
     ref<Buffer> mpProbePosBuffer; // probe center positions in world space
     ref<Buffer> mpProbeDirSamplesBuffer;
