@@ -1,50 +1,37 @@
 #include "AdaptiveProbeVolume.h"
 #include <algorithm>
-#include <queue>
 #include <cmath>
-#include <cstring> 
 #include <fstream>
 #include <iomanip>
+
 // ------------------------------------------------------------------
 // Helper: Analytic Eigenvalues for 3x3 Symmetric Matrix
-// Used to compute curvature for the error metric (Eq. 22)
 // ------------------------------------------------------------------
 static void computeEigenvalues3x3(const float3x3& A, float& e1, float& e2, float& e3)
 {
     const float ONE_THIRD = 1.0f / 3.0f;
     float m = (A[0][0] + A[1][1] + A[2][2]) * ONE_THIRD;
-
-    // Shifted matrix K = A - mI
     float k00 = A[0][0] - m, k11 = A[1][1] - m, k22 = A[2][2] - m;
     float k01 = A[0][1], k02 = A[0][2], k12 = A[1][2];
-
     float q = 0.5f * (k00 * (k11 * k22 - k12 * k12) - k01 * (k01 * k22 - k12 * k02) + k02 * (k01 * k12 - k11 * k02));
     float p = (k00 * k00 + k11 * k11 + k22 * k22 + 2.0f * (k01 * k01 + k02 * k02 + k12 * k12)) / 6.0f;
 
-    // Handle Identity-like matrices or numerical zero
-    if (p < 1e-20f)
-    {
-        e1 = e2 = e3 = m;
-        return;
-    }
+    if (p < 1e-20f) { e1 = e2 = e3 = m; return; }
 
     float p_sqrt = std::sqrt(p);
-    // Clamp for acos safety
     float det_val = q / (p * p_sqrt);
     det_val = std::max(-1.0f, std::min(1.0f, det_val));
-
     float phi = ONE_THIRD * std::acos(det_val);
     float two_sqrt_p = 2.0f * p_sqrt;
     float s = std::sin(phi), c = std::cos(phi);
 
-    // Roots of the depressed cubic
     e1 = m + two_sqrt_p * c;
     e2 = m - two_sqrt_p * (c * 0.5f + s * 0.8660254f);
     e3 = m - two_sqrt_p * (c * 0.5f - s * 0.8660254f);
 }
 
 // ------------------------------------------------------------------
-// Creation and Initialization
+// Lifecycle
 // ------------------------------------------------------------------
 
 ref<AdaptiveProbeVolume> AdaptiveProbeVolume::create(ref<Device> pDevice)
@@ -54,381 +41,343 @@ ref<AdaptiveProbeVolume> AdaptiveProbeVolume::create(ref<Device> pDevice)
 
 AdaptiveProbeVolume::AdaptiveProbeVolume(ref<Device> pDevice) : mpDevice(pDevice) {}
 
+// ------------------------------------------------------------------
+// Build Logic
+// ------------------------------------------------------------------
+
 void AdaptiveProbeVolume::startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError)
 {
-    // Reset all internal state
-    mAdaptiveNodes.clear();
-    mProbePoints.clear();
-    mPendingProbes.clear();
+    mProbes.clear();
+    mCorners.clear();
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
 
-    // 1. Create Root Node (Covers entire scene AABB)
-    // We treat the entire scene as a volume (no occupancy check needed)
-    AdaptiveNode root;
+    auto bounds = pScene->getSceneBounds();
+
+    // 1. Create Root Probe
+    Probe root;
     root.level = 0;
-    root.minPoint = pScene->getSceneBounds().minPoint;
-    root.maxPoint = pScene->getSceneBounds().maxPoint;
+    root.minPoint = bounds.minPoint;
+    root.maxPoint = bounds.maxPoint;
 
-    // 2. Create the first placeholder probe at the root's center
-    mProbePoints.emplace_back();
-    root.probeIndex = 0;
+    float3 size = root.maxPoint - root.minPoint;
 
-    mAdaptiveNodes.push_back(root);
+    // 2. Create the initial 8 Corners
+    for (int i = 0; i < 8; ++i)
+    {
+        float3 offset = float3((i & 4) ? size.x : 0, (i & 2) ? size.y : 0, (i & 1) ? size.z : 0);
 
-    // 3. Queue Root for processing (Level 0 Batch)
-    mPendingProbes.push_back({0, 0});
+        Corner c;
+        c.position = root.minPoint + offset;
+
+        mCorners.push_back(c);
+        int idx = (int)mCorners.size() - 1;
+
+        root.corners[i] = idx;
+        mPendingNewCorners.push_back(idx);
+    }
+
+    mProbes.push_back(root);
+    mProbesPendingCheck.push_back(0);
 }
 
-// ------------------------------------------------------------------
-// Build Pipeline: Step A (Prepare Data for GPU)
-// ------------------------------------------------------------------
-
-void AdaptiveProbeVolume::getPendingPositions(std::vector<float3> &positions) const
+void AdaptiveProbeVolume::getPendingPositions(std::vector<float3>& positions) const
 {
     positions.clear();
-    if (mPendingProbes.empty())
-        return;
-
-    positions.reserve(mPendingProbes.size());
-
-    // Extract center positions for all pending probes
-    for (const auto& pair : mPendingProbes)
+    positions.reserve(mPendingNewCorners.size());
+    for (int idx : mPendingNewCorners)
     {
-        int nodeIdx = pair.first;
-        float3 center = (mAdaptiveNodes[nodeIdx].minPoint + mAdaptiveNodes[nodeIdx].maxPoint) * 0.5f;
-        positions.push_back(center);
+        positions.push_back(mCorners[idx].position);
     }
 }
 
-// ------------------------------------------------------------------
-// Build Pipeline: Step B (Receive Data from CPU/GPU Math)
-// ------------------------------------------------------------------
-
-void AdaptiveProbeVolume::setProbeData(
+void AdaptiveProbeVolume::setCornerData(
     uint32_t batchIndex,
     const std::vector<float3>& coeffs,
     const std::vector<GradSHCoeff>& grads,
-    const std::vector<HessianSHCoeff>& hessians
-)
+    const std::vector<HessianSHCoeff>& hessians)
 {
-    // 1. Locate the correct probe in our internal list
-    // 'batchIndex' matches the order in mPendingProbes/getPendingPositions
-    int probeIdx = mPendingProbes[batchIndex].second;
-    ProbePoint& pt = mProbePoints[probeIdx];
+    // FIX: batchIndex selects the specific corner in the pending list.
+    // The input vectors (coeffs, grads) contain ALL bands for THAT corner.
 
-    // 2. Store SH Coefficients
-    pt.shCoeffs = coeffs;
-    float sumSqL = 0.0f;
+    if (batchIndex >= mPendingNewCorners.size()) return;
 
-    for (size_t i = 0; i < coeffs.size(); ++i)
-    {
-        // Accumulate squares for Vector Norm calculation
-        sumSqL += math::dot(pt.shCoeffs[i], pt.shCoeffs[i]); // x^2 + y^2 + z^2
+    int cornerIdx = mPendingNewCorners[batchIndex];
+    Corner& c = mCorners[cornerIdx];
+
+    // 1. Store Full Data
+    c.shCoeffs = coeffs;
+    c.shGradients = grads;
+
+    // 2. Compute Norm (for Relative Error)
+    // We sum the dot product of all bands
+    if (mUseRelativeError) {
+        float sumSqL = 0.0f;
+        for (const auto& coeff : c.shCoeffs) {
+            sumSqL += math::dot(coeff, coeff);
+        }
+        c.coeffNorm = std::sqrt(sumSqL);
     }
-    pt.coeffNorm = std::sqrt(sumSqL);
-    // 3. Store Gradients (Copy directly)
-    pt.shGradients = grads;
-
-    // 4. Compute Hessian Error Metric (Eq. 22)
-    // We treat R, G, and B as separate scalar fields and take the conservative maximum.
+    
+    // 3. Compute Curvature (Max Eigenvalue of Hessians)
+    // We iterate over the bands (hessians vector) to find the max curvature
     float sumSquares = 0.0f;
 
     for (const auto& h : hessians)
     {
-        // --- Red Channel ---
-        float r1, r2, r3;
+        float r1, r2, r3, g1, g2, g3, b1, b2, b3;
         computeEigenvalues3x3(h.r, r1, r2, r3);
-        float maxR = std::max({std::abs(r1), std::abs(r2), std::abs(r3)});
-
-        // --- Green Channel ---
-        float g1, g2, g3;
         computeEigenvalues3x3(h.g, g1, g2, g3);
-        float maxG = std::max({std::abs(g1), std::abs(g2), std::abs(g3)});
-
-        // --- Blue Channel ---
-        float b1, b2, b3;
         computeEigenvalues3x3(h.b, b1, b2, b3);
-        float maxB = std::max({std::abs(b1), std::abs(b2), std::abs(b3)});
 
-        // Conservative approach: Max curvature across any color channel dictates the error
-        float maxLambda = std::max({maxR, maxG, maxB});
+        float maxR = std::max({ std::abs(r1), std::abs(r2), std::abs(r3) });
+        float maxG = std::max({ std::abs(g1), std::abs(g2), std::abs(g3) });
+        float maxB = std::max({ std::abs(b1), std::abs(b2), std::abs(b3) });
 
-        // Accumulate for L2-Norm of the lambda vector
-        sumSquares += maxLambda * maxLambda;
+        float maxLambdaBand = std::max({ maxR, maxG, maxB });
+        sumSquares += maxLambdaBand * maxLambdaBand;
     }
 
-    pt.maxLambdaL2Norm = std::sqrt(sumSquares);
+    // Total curvature magnitude (L2 norm of the curvature vector across bands)
+    c.maxLambda = std::sqrt(sumSquares);
 }
-
-// ------------------------------------------------------------------
-// Build Pipeline: Step C (Subdivide and Schedule Next Batch)
-// ------------------------------------------------------------------
 
 void AdaptiveProbeVolume::finishBatch()
 {
-    std::vector<std::pair<int, int>> nextBatch;
+    // Clear pending list; we will fill it with the NEXT generation's corners
+    mPendingNewCorners.clear();
 
-    for (const auto& pair : mPendingProbes)
+    std::vector<int> nextProbesToCheck;
+
+    for (int probeIdx : mProbesPendingCheck)
     {
-        int nodeIdx = pair.first;
+        if (mProbes[probeIdx].level >= mMaxLevel) continue;
 
-        // 1. SAFE READ: Access by index to check conditions
-        // We do NOT store 'AdaptiveNode& node = ...' here because push_back below will invalidate it.
-        if (mAdaptiveNodes[nodeIdx].level >= mMaxLevel)
-            continue;
-
-        ProbePoint& pt = mProbePoints[mAdaptiveNodes[nodeIdx].probeIndex];
-
-        // E_abs calculation
-        float3 diag = mAdaptiveNodes[nodeIdx].maxPoint - mAdaptiveNodes[nodeIdx].minPoint;
+        // --------------------------------------------------
+        // Step 4: Calculate Error for this Probe
+        // --------------------------------------------------
+        float3 diag = mProbes[probeIdx].maxPoint - mProbes[probeIdx].minPoint;
         float distSq = dot(diag, diag);
-        float E_abs = (pt.maxLambdaL2Norm * distSq) * 0.5f;
-        float finalError = E_abs;
 
-        // 2. Apply Relative Error Logic if enabled
-        if (mUseRelativeError)
+        float totalError = 0.0f;
+
+        for (int k = 0; k < 8; ++k)
         {
-            // E_rel = E_abs / ||L||
-            // Avoid division by zero for dark areas (use small epsilon)
-            float L_norm = std::max(pt.coeffNorm, 1e-5f);
-            finalError = E_abs / L_norm;
+            int cIdx = mProbes[probeIdx].corners[k];
+            const Corner& c = mCorners[cIdx];
+
+            // E_abs = 0.5 * Lambda * dx^2
+            float e = (c.maxLambda * distSq) * 0.5f;
+
+            if (mUseRelativeError)
+            {
+                float norm = std::max(c.coeffNorm, 1e-5f);
+                totalError += (e / norm);
+            }
+            else
+            {
+                totalError += e;
+            }
         }
-        if (finalError > mCurrentThreshold)
+        float avgProbeError = totalError / 8.0f;
+
+        // --------------------------------------------------
+        // Step 5: Subdivide
+        // --------------------------------------------------
+        if (avgProbeError > mCurrentThreshold)
         {
-            // 2. CAPTURE DATA: Copy the values we need before modifying the vector.
-            // This ensures 'minP' and 'size' stay valid even if the vector reallocates.
-            float3 minP = mAdaptiveNodes[nodeIdx].minPoint;
-            float3 maxP = mAdaptiveNodes[nodeIdx].maxPoint;
-            float3 size = (maxP - minP) * 0.5f;
-            int currentLevel = mAdaptiveNodes[nodeIdx].level;
+            mProbes[probeIdx].isLeaf = false;
 
-            // 3. SAFE WRITE: Update parent flags using INDEX (stable)
-            mAdaptiveNodes[nodeIdx].isLeaf = false;
+            float3 minP = mProbes[probeIdx].minPoint;
+            float3 maxP = mProbes[probeIdx].maxPoint;
+            float3 center = (minP + maxP) * 0.5f;
 
+            // Helper: Create new corner
+            auto addCorner = [&](float3 pos) -> int {
+                Corner c; c.position = pos;
+                mCorners.push_back(c);
+                int idx = (int)mCorners.size() - 1;
+                mPendingNewCorners.push_back(idx);
+                return idx;
+                };
+
+            // A. Generate 19 NEW Corners
+            int c_center = addCorner(center);
+
+            int c_fX0 = addCorner({ minP.x, center.y, center.z }); int c_fX1 = addCorner({ maxP.x, center.y, center.z });
+            int c_fY0 = addCorner({ center.x, minP.y, center.z }); int c_fY1 = addCorner({ center.x, maxP.y, center.z });
+            int c_fZ0 = addCorner({ center.x, center.y, minP.z }); int c_fZ1 = addCorner({ center.x, center.y, maxP.z });
+
+            int c_eX_Y0Z0 = addCorner({ center.x, minP.y, minP.z }); int c_eX_Y1Z0 = addCorner({ center.x, maxP.y, minP.z });
+            int c_eX_Y0Z1 = addCorner({ center.x, minP.y, maxP.z }); int c_eX_Y1Z1 = addCorner({ center.x, maxP.y, maxP.z });
+
+            int c_eY_X0Z0 = addCorner({ minP.x, center.y, minP.z }); int c_eY_X1Z0 = addCorner({ maxP.x, center.y, minP.z });
+            int c_eY_X0Z1 = addCorner({ minP.x, center.y, maxP.z }); int c_eY_X1Z1 = addCorner({ maxP.x, center.y, maxP.z });
+
+            int c_eZ_X0Y0 = addCorner({ minP.x, minP.y, center.z }); int c_eZ_X1Y0 = addCorner({ maxP.x, minP.y, center.z });
+            int c_eZ_X0Y1 = addCorner({ minP.x, maxP.y, center.z }); int c_eZ_X1Y1 = addCorner({ maxP.x, maxP.y, center.z });
+
+            // B. Retrieve 8 OLD Corners
+            const int* P = mProbes[probeIdx].corners;
+
+            // C. Map to Grid
+            int grid[3][3][3];
+            grid[0][0][0] = P[0]; grid[0][0][2] = P[1]; grid[0][2][0] = P[2]; grid[0][2][2] = P[3];
+            grid[2][0][0] = P[4]; grid[2][0][2] = P[5]; grid[2][2][0] = P[6]; grid[2][2][2] = P[7];
+            grid[1][1][1] = c_center;
+            grid[0][1][1] = c_fX0; grid[2][1][1] = c_fX1;
+            grid[1][0][1] = c_fY0; grid[1][2][1] = c_fY1;
+            grid[1][1][0] = c_fZ0; grid[1][1][2] = c_fZ1;
+            grid[1][0][0] = c_eX_Y0Z0; grid[1][2][0] = c_eX_Y1Z0; grid[1][0][2] = c_eX_Y0Z1; grid[1][2][2] = c_eX_Y1Z1;
+            grid[0][1][0] = c_eY_X0Z0; grid[2][1][0] = c_eY_X1Z0; grid[0][1][2] = c_eY_X0Z1; grid[2][1][2] = c_eY_X1Z1;
+            grid[0][0][1] = c_eZ_X0Y0; grid[2][0][1] = c_eZ_X1Y0; grid[0][2][1] = c_eZ_X0Y1; grid[2][2][1] = c_eZ_X1Y1;
+
+            // D. Create 8 Child Probes
             for (int k = 0; k < 8; ++k)
             {
-                AdaptiveNode child;
+                Probe child;
+                child.level = mProbes[probeIdx].level + 1;
 
-                // Use the COPIED level variable
-                child.level = currentLevel + 1;
-
-                float3 offset = float3((k & 4) ? size.x : 0, (k & 2) ? size.y : 0, (k & 1) ? size.z : 0);
+                float3 childSize = (maxP - minP) * 0.5f;
+                float3 offset = float3((k & 4) ? childSize.x : 0, (k & 2) ? childSize.y : 0, (k & 1) ? childSize.z : 0);
                 child.minPoint = minP + offset;
-                child.maxPoint = child.minPoint + size;
+                child.maxPoint = child.minPoint + childSize;
 
-                // Create new probe
-                mProbePoints.emplace_back();
-                child.probeIndex = (uint32_t)mProbePoints.size() - 1;
+                int startX = (k & 4) ? 1 : 0;
+                int startY = (k & 2) ? 1 : 0;
+                int startZ = (k & 1) ? 1 : 0;
 
-                // 4. THE DANGER ZONE: This push_back might move the vector in memory
-                mAdaptiveNodes.push_back(child);
+                for (int c = 0; c < 8; ++c)
+                {
+                    int dx = (c & 4) ? 1 : 0;
+                    int dy = (c & 2) ? 1 : 0;
+                    int dz = (c & 1) ? 1 : 0;
+                    child.corners[c] = grid[startX + dx][startY + dy][startZ + dz];
+                }
 
-                // 5. SAFE LINK: Re-access parent by INDEX to link the child
-                // Even if the vector moved, 'nodeIdx' is still the correct offset.
-                mAdaptiveNodes[nodeIdx].children[k] = (int)mAdaptiveNodes.size() - 1;
-
-                nextBatch.push_back({(int)mAdaptiveNodes.size() - 1, (int)mProbePoints.size() - 1});
+                mProbes.push_back(child);
+                mProbes[probeIdx].children[k] = (int)mProbes.size() - 1;
+                nextProbesToCheck.push_back((int)mProbes.size() - 1);
             }
         }
     }
-    mPendingProbes = nextBatch;
+    mProbesPendingCheck = nextProbesToCheck;
 }
-
-// ------------------------------------------------------------------
-// Finalization: Upload to GPU
-// ------------------------------------------------------------------
 
 void AdaptiveProbeVolume::uploadToGPU()
 {
-    //// 1. Pack Probes (Data Payload)
-    //std::vector<PackedProbe> packedProbes(mProbePoints.size());
-
-    //for (size_t i = 0; i < mProbePoints.size(); ++i)
-    //{
-    //    const ProbePoint& cpuPt = mProbePoints[i];
-    //    PackedProbe& gpuPt = packedProbes[i];
-
-    //    // Ensure we don't overflow fixed array (Order 3 = 9 coeffs)
-    //    size_t count = std::min((size_t)9, cpuPt.shCoeffs.size());
-
-    //    for (size_t k = 0; k < count; ++k)
-    //    {
-    //        // Pack Coeffs: float3 -> float4 (alignment safe)
-    //        gpuPt.coeffs[k] = float4(cpuPt.shCoeffs[k], 0.0f);
-
-    //        // Pack Gradients: float3 -> float4 (alignment safe)
-    //        gpuPt.gradients[k].r = float4(cpuPt.shGradients[k].r, 0.0f);
-    //        gpuPt.gradients[k].g = float4(cpuPt.shGradients[k].g, 0.0f);
-    //        gpuPt.gradients[k].b = float4(cpuPt.shGradients[k].b, 0.0f);
-    //    }
-    //}
-
-    //mpProbeBuffer = Buffer::createStructured(
-    //    mpDevice,
-    //    sizeof(PackedProbe),
-    //    (uint32_t)packedProbes.size(),
-    //    Resource::BindFlags::ShaderResource,
-    //    Buffer::CpuAccess::None,
-    //    packedProbes.data()
-    //);
-
-    //// 2. Pack Nodes (Breadth-First Flattening for cache locality)
-    //std::vector<PackedNode> packedNodes;
-    //packedNodes.reserve(mNodes.size()); // Pre-allocate to prevent reallocation during loop
-
-    //std::vector<uint32_t> cpuToGpuIndex(mNodes.size());
-    //std::queue<int> queue;
-    //queue.push(0); // Start at Root
-
-    //// Pass 1: Flatten nodes into GPU array
-    //while (!queue.empty())
-    //{
-    //    int cpuIdx = queue.front();
-    //    queue.pop();
-
-    //    PackedNode gpuNode;
-    //    gpuNode.minPoint = mNodes[cpuIdx].minPoint;
-    //    gpuNode.maxPoint = mNodes[cpuIdx].maxPoint;
-    //    gpuNode.probeIndex = mNodes[cpuIdx].probeIndex;
-    //    gpuNode.childrenStartIndex = 0xFFFFFFFF; // Placeholder for leaf
-
-    //    cpuToGpuIndex[cpuIdx] = (uint32_t)packedNodes.size();
-    //    packedNodes.push_back(gpuNode);
-
-    //    if (!mNodes[cpuIdx].isLeaf)
-    //    {
-    //        for (int k = 0; k < 8; ++k)
-    //            queue.push(mNodes[cpuIdx].children[k]);
-    //    }
-    //}
-
-    //// Pass 2: Patch children indices now that we know final positions
-    //for (size_t i = 0; i < mNodes.size(); ++i)
-    //{
-    //    if (!mNodes[i].isLeaf)
-    //    {
-    //        uint32_t gpuParentIdx = cpuToGpuIndex[i];
-
-    //        // Because we pushed children to the queue sequentially,
-    //        // the GPU array will store them sequentially starting from child[0].
-    //        int firstChildCpuIdx = mNodes[i].children[0];
-    //        packedNodes[gpuParentIdx].childrenStartIndex = cpuToGpuIndex[firstChildCpuIdx];
-    //    }
-    //}
-
-    //mpNodeBuffer = Buffer::createStructured(
-    //    mpDevice,
-    //    sizeof(PackedNode),
-    //    (uint32_t)packedNodes.size(),
-    //    Resource::BindFlags::ShaderResource,
-    //    Buffer::CpuAccess::None,
-    //    packedNodes.data()
-    //);
+    // Stub
 }
 
 void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
 {
     std::ofstream out(filename);
-    if (!out)
-        return;
+    if (!out) return;
 
     out << "================================================================================\n";
-    out << " ADAPTIVE PROBE VOLUME HIERARCHY\n";
+    out << " ADAPTIVE PROBE VOLUME HIERARCHY (Vertex-Sharing)\n";
     out << "================================================================================\n";
-    out << " Nodes:     " << mAdaptiveNodes.size() << "\n";
-    out << " Probes:    " << mProbePoints.size() << "\n";
+    out << " Probes:    " << mProbes.size() << "\n";
+    out << " Corners:   " << mCorners.size() << "\n";
     out << " Threshold: " << mCurrentThreshold << "\n";
     out << " Max Level: " << mMaxLevel << "\n";
     out << " Metric:    " << (mUseRelativeError ? "Relative (E_rel)" : "Absolute (E_abs)") << "\n";
     out << "================================================================================\n\n";
 
-    std::function<void(int, std::string, bool)> printNode = [&](int nodeIdx, std::string prefix, bool isLast)
-    {
-        const AdaptiveNode& node = mAdaptiveNodes[nodeIdx];
-
-        // 1. Calculate Geometry
-        float3 diag = node.maxPoint - node.minPoint;
-        float distSq = dot(diag, diag);
-        float size = std::sqrt(distSq);
-
-        // 2. Calculate Error (MATCHING finishBatch LOGIC)
-        float error = 0.0f;
-        float lambda = 0.0f;
-
-        if (node.probeIndex < mProbePoints.size())
+    // Recursive Lambda for Tree Traversal
+    std::function<void(int, std::string, bool)> printProbe = [&](int probeIdx, std::string prefix, bool isLast)
         {
-            const ProbePoint& pt = mProbePoints[node.probeIndex];
-            lambda = pt.maxLambdaL2Norm;
+            const Probe& probe = mProbes[probeIdx];
 
-            // A. Absolute Error
-            float E_abs = (lambda * distSq) * 0.5f;
-            error = E_abs;
+            // 1. Re-Calculate Geometry
+            float3 diag = probe.maxPoint - probe.minPoint;
+            float distSq = dot(diag, diag);
+            float size = std::sqrt(distSq);
 
-            // B. Relative Error (Must match finishBatch)
-            if (mUseRelativeError)
+            // 2. Re-Calculate Error (Must match finishBatch logic exactly)
+            float totalError = 0.0f;
+            float maxLambdaInProbe = 0.0f;
+
+            for (int k = 0; k < 8; ++k)
             {
-                float L_norm = std::max(pt.coeffNorm, 1e-5f);
-                error = E_abs / L_norm;
+                int cIdx = probe.corners[k];
+                const Corner& c = mCorners[cIdx];
+
+                // Track max curvature in this voxel for display
+                maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambda);
+
+                // Re-compute error
+                float e = (c.maxLambda * distSq) * 0.5f;
+
+                if (mUseRelativeError)
+                {
+                    float norm = std::max(c.coeffNorm, 1e-5f);
+                    totalError += (e / norm);
+                }
+                else
+                {
+                    totalError += e;
+                }
             }
-        }
+            float avgError = totalError / 8.0f;
 
-        // 3. Print Structure
-        out << prefix << (isLast ? "L-- " : "|-- ");
-        out << "[Lvl " << node.level << "] ";
+            // 3. Format Output
+            out << prefix << (isLast ? "L-- " : "|-- ");
+            out << "[Lvl " << probe.level << "] ";
 
-        // Format error string: "0.0050"
-        std::stringstream ssErr;
-        ssErr << std::fixed << std::setprecision(4) << error;
-        std::string errStr = ssErr.str();
+            // Format error: "0.0050"
+            std::stringstream ssErr;
+            ssErr << std::fixed << std::setprecision(4) << avgError;
+            std::string errStr = ssErr.str();
 
-        if (!node.isLeaf)
-        {
-            // Case 1: SUBDIVIDED
-            out << "SUBDIVIDED ";
-            out << "(Err: " << errStr << " > " << mCurrentThreshold << ") ";
-            out << "Size: " << std::setprecision(2) << size << "\n";
-        }
-        else
-        {
-            // Case 2: LEAF
-            out << "LEAF       ";
-
-            if (node.level == mMaxLevel)
+            if (!probe.isLeaf)
             {
-                out << "(Max Depth) ";
-            }
-            else if (error > mCurrentThreshold)
-            {
-                out << "BUG! (Err: " << errStr << " > Thr) ";
+                // Case 1: SUBDIVIDED
+                out << "SUBDIVIDED ";
+                out << "(Err: " << errStr << " > " << mCurrentThreshold << ") ";
+                out << "Size: " << std::setprecision(2) << size << " ";
+                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
+
+                // Recurse children
+                std::vector<int> childrenIdx;
+                for (int i = 0; i < 8; ++i)
+                    if (probe.children[i] != -1)
+                        childrenIdx.push_back(probe.children[i]);
+
+                for (size_t i = 0; i < childrenIdx.size(); ++i)
+                {
+                    std::string newPrefix = prefix + (isLast ? "    " : "|   ");
+                    printProbe(childrenIdx[i], newPrefix, (i == childrenIdx.size() - 1));
+                }
             }
             else
             {
-                // explicit proof
-                out << "(Err: " << errStr << " < " << mCurrentThreshold << ") ";
+                // Case 2: LEAF
+                out << "LEAF       ";
+
+                if (probe.level == mMaxLevel)
+                {
+                    out << "(Max Depth) ";
+                }
+                else if (avgError > mCurrentThreshold)
+                {
+                    // This happens if finishBatch hasn't processed this leaf yet, or logic bug
+                    out << "PENDING? (Err: " << errStr << " > Thr) ";
+                }
+                else
+                {
+                    out << "(Err: " << errStr << " < " << mCurrentThreshold << ") ";
+                }
+                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
             }
-            out << "Lambda: "  << std::setprecision(4) << lambda << "\n";
-        }
+        };
 
-        // 4. Recurse
-        if (!node.isLeaf)
-        {
-            std::vector<int> childrenIdx;
-            for (int i = 0; i < 8; ++i)
-                if (node.children[i] != -1)
-                    childrenIdx.push_back(node.children[i]);
-
-            for (size_t i = 0; i < childrenIdx.size(); ++i)
-            {
-                std::string newPrefix = prefix + (isLast ? "    " : "|   ");
-                printNode(childrenIdx[i], newPrefix, (i == childrenIdx.size() - 1));
-            }
-        }
-    };
-
-    if (!mAdaptiveNodes.empty())
+    if (!mProbes.empty())
     {
-        printNode(0, "", true);
+        printProbe(0, "", true);
     }
     else
     {
