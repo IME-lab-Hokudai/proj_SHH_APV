@@ -621,6 +621,29 @@ void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
         requestRecompile();
     if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
         requestRecompile();
+    // Level Visibility Controls
+    if (mbShowAdaptiveGrid)
+    {
+        // NEW Checkbox
+        if (widget.checkbox("Draw Leaf Only", mbDrawLeafOnly))
+        {
+            if (mpProbeVisualizePass)
+                mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+        }
+
+        if (auto g = widget.group("Octree Levels", true))
+        {
+            for (int i = 0; i < 8; ++i)
+            {
+                std::string label = "Level " + std::to_string(i);
+                if (g.checkbox(label.c_str(), mVisLevels[i]))
+                {
+                    if (mpProbeVisualizePass)
+                        mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+                }
+            }
+        }
+    }
 }
 
 void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -963,6 +986,14 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
            //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
            mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+
+           //Re-apply the visibility masks from our member variables
+           for (int i = 0; i < 8; ++i)
+           {
+               mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+           }
+           // Restore Leaf Only
+           mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 

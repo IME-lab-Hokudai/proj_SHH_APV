@@ -110,4 +110,8 @@ private:
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
     bool mNeedRebuildProbeVolume = true;
+
+    // Add this array to track checkbox states
+    bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
+    bool mbDrawLeafOnly = false; 
 };
