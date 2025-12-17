@@ -515,7 +515,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
             // 3. TODO: upload to GPU for visualization
             mAdaptiveProbeVolume->uploadToGPU();
-            //mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolume.txt");
+            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
             mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
