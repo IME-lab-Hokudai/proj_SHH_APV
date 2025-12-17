@@ -30,8 +30,8 @@ public:
         std::vector<float3> shCoeffs;
         std::vector<GradSHCoeff> shGradients;
 
-        float maxLambda = 0.0f; // Curvature
-        float coeffNorm = 0.0f; // ||L||
+        float maxLambdaVecL2 = 0.0f; // Curvature
+        float coeffVecL2 = 0.0f; // ||L||
     };
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
@@ -55,7 +55,7 @@ public:
         uint32_t batchIndex,
         const std::vector<float3>& coeffs,
         const std::vector<GradSHCoeff>& grads,
-        const std::vector<HessianSHCoeff>& hessians
+        const std::vector<float3x3>& hessians // Now receives Luminance Hessians
     );
 
     // Calculate Error per Probe, Subdivide if needed, Generate new Corners
@@ -70,6 +70,12 @@ public:
     ref<Buffer> getNodeBuffer() const { return mpProbeBuffer; }
     ref<Buffer> getProbeBuffer() const { return mpCornerBuffer; }
     const std::vector<Probe>& getProbes() const { return mProbes; }
+
+    // ----------------------------------------------------------------
+    // IO Interface
+    // ----------------------------------------------------------------
+    void saveToFile(const std::string& filename) const;
+    void loadFromFile(const std::string& filename);
 
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);

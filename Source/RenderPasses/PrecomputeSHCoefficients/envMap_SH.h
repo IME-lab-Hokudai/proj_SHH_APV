@@ -224,3 +224,7 @@ void calculateChannelRGradAndHessianSHCoeffLM(
 );
 
 float3 testComputeSHGrad();
+
+void calculateGradRGBAndHessianLumSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad, float3x3& outHessian);
+
+void calculateSHCoeffsGradientsRGBAndHessiansLum(std::vector<GradSHCoeff>& gradOut, std::vector<float3x3>& hessianOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);

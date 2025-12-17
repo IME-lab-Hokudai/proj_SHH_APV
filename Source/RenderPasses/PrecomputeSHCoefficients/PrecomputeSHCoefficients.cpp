@@ -486,7 +486,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                     // Math Containers
                     std::vector<GradSHCoeff> grads;
-                    std::vector<HessianSHCoeff> hessians;
+                    //std::vector<HessianSHCoeff> hessians;
+                    std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
                     std::vector<float3> coeffs;
 
                     // Coordinate conversion
@@ -496,12 +497,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     xPolar.z = pendingProbePositions[probeIdx].y;
 
                     // Compute Physics
-                    calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
+                    //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
+                    calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
                     calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
 
                     //Feed Data back to Volume
                     // We pass the batch index (probeIdx) and the calculated data
-                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, hessians);
+                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
                 }
 
                 delete[] allProbeSamplingData;
@@ -513,7 +515,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
             // 3. TODO: upload to GPU for visualization
             mAdaptiveProbeVolume->uploadToGPU();
-            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolume.txt");
+            //mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolume.txt");
+            mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
         }
@@ -996,7 +999,11 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-
+           if (!mNeedRebuildProbeVolume) {
+               mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
+               mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+           }
+              
             ProgramDesc rtProgDesc;
             rtProgDesc.addShaderModules(mpScene->getShaderModules());
             rtProgDesc.addShaderLibrary(kProbeSamplingFile);

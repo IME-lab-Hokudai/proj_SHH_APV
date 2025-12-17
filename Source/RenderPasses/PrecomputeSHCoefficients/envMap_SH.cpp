@@ -1477,3 +1477,104 @@ float3 testComputeSHGrad()
      float3 contrib = gradOmega * Ylm + Omega_i * gradYlm;
     return L*contrib;
 }
+
+// Add to envMap_SH.cpp
+
+// Calculates RGB Gradient (for color interpolation) and Luminance Hessian (for geometric error)
+void calculateGradRGBAndHessianLumSHCoeffLM(
+    const float3& x,
+    const std::vector<ProbeSampleData>& samplingData,
+    const std::vector<ProbeDirSample>& samplingDir,
+    const int& basisIdx,
+    GradSHCoeff& outGrad,
+    float3x3& outHessian // Single 3x3 matrix for Luminance
+)
+{
+    outGrad = { float3(0), float3(0), float3(0) };
+    outHessian = float3x3::zeros();
+
+    // Rec. 709 Luminance weights
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    int samplingSize = samplingData.size();
+    float Omega_i = (4.0f * M_PI) / (float)samplingSize;
+
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
+    {
+        if (samplingData[sampleIdx].hitT < 0.0f) continue;
+
+        float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
+        float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
+
+        // Input Radiance (RGB)
+        float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
+
+        // Luminance Scalar for Hessian
+        float L_lum = dot(L, kLuma);
+
+        // --- Gradient (RGB) ---
+        // We keep RGB gradients so runtime interpolation looks correct per-channel
+        float3 gradOmega = gradientOmega(s, x, n, samplingSize);
+        int numBasis = 9;
+        float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+        float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+
+        float3 q = s - x;
+        float rInv = 1.0f / length(q);
+
+        float3 contribGrad = gradOmega * Ylm - Omega_i * rInv * gradYlm;
+
+        outGrad.r += (L.x * contribGrad);
+        outGrad.g += (L.y * contribGrad);
+        outGrad.b += (L.z * contribGrad);
+
+        // --- Hessian (Luminance Only) ---
+        // We use L_lum here. This saves 3x memory/compute vs storing RGB Hessians.
+        float3x3 H_Omega = hessianOmega(s, x, n, samplingSize);
+        float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+        float3 w = samplingDir[sampleIdx].dir;
+        float rInvSq = rInv * rInv;
+
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                // Term 1: (∂²Ω / ∂xj∂xk) * Y
+                float term1 = H_Omega[j][k] * Ylm;
+                // Term 2: -1/r * [ (∂Ω/∂xj)(∂Y/∂wk) + (∂Ω/∂xk)(∂Y/∂wj) ]
+                // Note: We access float3 components using array indexing [j] and [k]
+                float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
+                // Term 3: Ω/r² * [ (ω)_j * (∂Y/∂wk) + (∂²Y / ∂wj∂wk) ]
+                float term3 = Omega_i * rInvSq * (w[j] * gradYlm[k] + hessYlm[j][k]);
+
+                // Accumulate Luminance Weighted Hessian
+                outHessian[j][k] += L_lum * (term1 + term2 + term3);
+            }
+        }
+    }
+}
+
+// Wrapper to loop over all 9 basis functions
+void calculateSHCoeffsGradientsRGBAndHessiansLum(
+    std::vector<GradSHCoeff>& gradOut,
+    std::vector<float3x3>& hessianOut,
+    const float3& gridPos,
+    const std::vector<ProbeSampleData>& probeSamplingResults,
+    const std::vector<ProbeDirSample>& samplingDir
+)
+{
+    gradOut.resize(9);
+    hessianOut.resize(9);
+
+    for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+    {
+        calculateGradRGBAndHessianLumSHCoeffLM(
+            gridPos,
+            probeSamplingResults,
+            samplingDir,
+            basisIdx,
+            gradOut[basisIdx],
+            hessianOut[basisIdx]
+        );
+    }
+}

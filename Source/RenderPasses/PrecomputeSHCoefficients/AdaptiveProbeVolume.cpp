@@ -98,51 +98,53 @@ void AdaptiveProbeVolume::setCornerData(
     uint32_t batchIndex,
     const std::vector<float3>& coeffs,
     const std::vector<GradSHCoeff>& grads,
-    const std::vector<HessianSHCoeff>& hessians)
+    const std::vector<float3x3>& hessians // Now receives Luminance Hessians
+)
 {
-    // FIX: batchIndex selects the specific corner in the pending list.
-    // The input vectors (coeffs, grads) contain ALL bands for THAT corner.
-
+    // 1. Locate Probe
     if (batchIndex >= mPendingNewCorners.size()) return;
 
     int cornerIdx = mPendingNewCorners[batchIndex];
     Corner& c = mCorners[cornerIdx];
 
-    // 1. Store Full Data
-    c.shCoeffs = coeffs;
-    c.shGradients = grads;
+    // -----------------------------------------------------------
+    // PART A: RUNTIME DATA (Store RGB)
+    // -----------------------------------------------------------
+    c.shCoeffs = coeffs;       // Full RGB for color rendering
+    c.shGradients = grads;     // Full RGB for color interpolation
 
-    // 2. Compute Norm (for Relative Error)
-    // We sum the dot product of all bands
+    // -----------------------------------------------------------
+    // PART B: CONSTRUCTION METRICS (Use Luminance)
+    // -----------------------------------------------------------
     if (mUseRelativeError) {
-        float sumSqL = 0.0f;
-        for (const auto& coeff : c.shCoeffs) {
-            sumSqL += math::dot(coeff, coeff);
-        }
-        c.coeffNorm = std::sqrt(sumSqL);
-    }
-    
-    // 3. Compute Curvature (Max Eigenvalue of Hessians)
-    // We iterate over the bands (hessians vector) to find the max curvature
-    float sumSquares = 0.0f;
+        const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
+        // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
+        // ||L|| = sqrt( sum( (c_i . luma)^2 ) )
+        float sumSqL = 0.0f;
+        for (const auto& c : coeffs)
+        {
+            // Project this band's RGB coefficient to Luminance
+            float lum = dot(c, kLuma);
+            sumSqL += lum * lum;
+        }
+        c.coeffVecL2 = std::sqrt(sumSqL);
+    }
+
+    // 2. Calculate Curvature of LUMINANCE Field (Hessian)
+    float sumSquares = 0.0f;
     for (const auto& h : hessians)
     {
-        float r1, r2, r3, g1, g2, g3, b1, b2, b3;
-        computeEigenvalues3x3(h.r, r1, r2, r3);
-        computeEigenvalues3x3(h.g, g1, g2, g3);
-        computeEigenvalues3x3(h.b, b1, b2, b3);
+        // Compute Eigenvalues of the Luminance Hessian
+        float e1, e2, e3;
+        computeEigenvalues3x3(h, e1, e2, e3);
 
-        float maxR = std::max({ std::abs(r1), std::abs(r2), std::abs(r3) });
-        float maxG = std::max({ std::abs(g1), std::abs(g2), std::abs(g3) });
-        float maxB = std::max({ std::abs(b1), std::abs(b2), std::abs(b3) });
-
-        float maxLambdaBand = std::max({ maxR, maxG, maxB });
-        sumSquares += maxLambdaBand * maxLambdaBand;
+        // Max curvature
+        float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+        sumSquares += maxLambda * maxLambda;
     }
 
-    // Total curvature magnitude (L2 norm of the curvature vector across bands)
-    c.maxLambda = std::sqrt(sumSquares);
+    c.maxLambdaVecL2 = std::sqrt(sumSquares);
 }
 
 void AdaptiveProbeVolume::finishBatch()
@@ -170,11 +172,11 @@ void AdaptiveProbeVolume::finishBatch()
             const Corner& c = mCorners[cIdx];
 
             // E_abs = 0.5 * Lambda * dx^2
-            float e = (c.maxLambda * distSq) * 0.5f;
+            float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
 
             if (mUseRelativeError)
             {
-                float norm = std::max(c.coeffNorm, 1e-5f);
+                float norm = std::max(c.coeffVecL2, 1e-5f);
                 totalError += (e / norm);
             }
             else
@@ -307,14 +309,14 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
                 const Corner& c = mCorners[cIdx];
 
                 // Track max curvature in this voxel for display
-                maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambda);
+                maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambdaVecL2);
 
                 // Re-compute error
-                float e = (c.maxLambda * distSq) * 0.5f;
+                float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
 
                 if (mUseRelativeError)
                 {
-                    float norm = std::max(c.coeffNorm, 1e-5f);
+                    float norm = std::max(c.coeffVecL2, 1e-5f);
                     totalError += (e / norm);
                 }
                 else
@@ -385,4 +387,153 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     }
 
     out.close();
+}
+
+void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
+{
+    std::ofstream out(filename);
+    if (!out)
+    {
+        logError("Failed to open file for saving: " + filename);
+        return;
+    }
+
+    out << std::fixed << std::setprecision(8);
+
+    // 1. Header & Config
+    out << "ADAPTIVE_GRID_V2\n";
+    out << mCurrentThreshold << " " << mMaxLevel << " " << (mUseRelativeError ? 1 : 0) << "\n";
+
+    // 2. Corners
+    out << "NUM_CORNERS " << mCorners.size() << "\n";
+    for (const auto& c : mCorners)
+    {
+        // Basic Data
+        out << c.position.x << " " << c.position.y << " " << c.position.z << " ";
+        out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << "\n";
+
+        // SH Coeffs
+        out << c.shCoeffs.size() << "\n";
+        for (const auto& val : c.shCoeffs)
+        {
+            out << val.x << " " << val.y << " " << val.z << " ";
+        }
+        out << "\n";
+
+        // SH Gradients
+        out << c.shGradients.size() << "\n";
+        for (const auto& g : c.shGradients)
+        {
+            // Assuming GradSHCoeff has r, g, b (float3)
+            out << g.r.x << " " << g.r.y << " " << g.r.z << " ";
+            out << g.g.x << " " << g.g.y << " " << g.g.z << " ";
+            out << g.b.x << " " << g.b.y << " " << g.b.z << " ";
+        }
+        out << "\n";
+    }
+
+    // 3. Probes
+    out << "NUM_PROBES " << mProbes.size() << "\n";
+    for (const auto& p : mProbes)
+    {
+        out << (p.isLeaf ? 1 : 0) << " " << p.level << "\n";
+
+        // Bounds
+        out << p.minPoint.x << " " << p.minPoint.y << " " << p.minPoint.z << " ";
+        out << p.maxPoint.x << " " << p.maxPoint.y << " " << p.maxPoint.z << "\n";
+
+        // Corners
+        for (int i = 0; i < 8; ++i) out << p.corners[i] << " ";
+        out << "\n";
+
+        // Children
+        for (int i = 0; i < 8; ++i) out << p.children[i] << " ";
+        out << "\n";
+    }
+
+    out.close();
+    logInfo("Successfully saved AdaptiveProbeVolume to " + filename);
+}
+
+void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
+{
+    std::ifstream in(filename);
+    if (!in)
+    {
+        logError("Failed to open file for loading: " + filename);
+        return;
+    }
+
+    // Clear existing
+    mProbes.clear();
+    mCorners.clear();
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+
+    std::string header;
+    in >> header;
+    if (header != "ADAPTIVE_GRID_V2")
+    {
+        logError("Invalid file format or version mismatch: " + filename);
+        return;
+    }
+
+    int useRelErrInt;
+    in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
+    mUseRelativeError = (useRelErrInt != 0);
+
+    // 2. Load Corners
+    size_t numCorners;
+    std::string tag;
+    in >> tag >> numCorners;
+
+    mCorners.resize(numCorners);
+    for (size_t i = 0; i < numCorners; ++i)
+    {
+        Corner& c = mCorners[i];
+        in >> c.position.x >> c.position.y >> c.position.z;
+        in >> c.maxLambdaVecL2 >> c.coeffVecL2;
+
+        // SH Coeffs
+        size_t numCoeffs;
+        in >> numCoeffs;
+        c.shCoeffs.resize(numCoeffs);
+        for (size_t k = 0; k < numCoeffs; ++k)
+        {
+            in >> c.shCoeffs[k].x >> c.shCoeffs[k].y >> c.shCoeffs[k].z;
+        }
+
+        // SH Gradients
+        size_t numGrads;
+        in >> numGrads;
+        c.shGradients.resize(numGrads);
+        for (size_t k = 0; k < numGrads; ++k)
+        {
+            in >> c.shGradients[k].r.x >> c.shGradients[k].r.y >> c.shGradients[k].r.z;
+            in >> c.shGradients[k].g.x >> c.shGradients[k].g.y >> c.shGradients[k].g.z;
+            in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
+        }
+    }
+
+    // 3. Load Probes
+    size_t numProbes;
+    in >> tag >> numProbes;
+
+    mProbes.resize(numProbes);
+    for (size_t i = 0; i < numProbes; ++i)
+    {
+        Probe& p = mProbes[i];
+        int isLeafInt;
+        in >> isLeafInt >> p.level;
+        p.isLeaf = (isLeafInt != 0);
+
+        in >> p.minPoint.x >> p.minPoint.y >> p.minPoint.z;
+        in >> p.maxPoint.x >> p.maxPoint.y >> p.maxPoint.z;
+
+        for (int k = 0; k < 8; ++k) in >> p.corners[k];
+        for (int k = 0; k < 8; ++k) in >> p.children[k];
+    }
+
+    in.close();
+    logInfo("Successfully loaded AdaptiveProbeVolume from " + filename);
 }
