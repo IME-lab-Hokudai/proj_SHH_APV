@@ -1,57 +1,24 @@
-/***************************************************************************
- # Copyright (c) 2015-23, NVIDIA CORPORATION. All rights reserved.
- #
- # Redistribution and use in source and binary forms, with or without
- # modification, are permitted provided that the following conditions
- # are met:
- #  * Redistributions of source code must retain the above copyright
- #    notice, this list of conditions and the following disclaimer.
- #  * Redistributions in binary form must reproduce the above copyright
- #    notice, this list of conditions and the following disclaimer in the
- #    documentation and/or other materials provided with the distribution.
- #  * Neither the name of NVIDIA CORPORATION nor the names of its
- #    contributors may be used to endorse or promote products derived
- #    from this software without specific prior written permission.
- #
- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS "AS IS" AND ANY
- # EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- # PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- # CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- # PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- # PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- **************************************************************************/
 #include "ProbeVisualizePass.h"
-
-#include "Scene/TriangleMesh.h"
 
 namespace
 {
-const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeGridVisualizeShader.slang";
-} // namespace
+    const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeGridVisualizeShader.slang";
+}
 
 ProbeVisualizePass::ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines)
     : BaseGraphicsPass(pDevice, progDesc, programDefines)
 {
-    // default depth stencil state
+    // Enable Depth Test
     DepthStencilState::Desc dsDesc;
-    ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
-   // auto pDsState = DepthStencilState::create(DepthStencilState::Desc().setDepthEnabled(false));
     dsDesc.setDepthEnabled(true);
-    dsDesc.setDepthWriteMask(false);
+    dsDesc.setDepthWriteMask(true);
+    ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
     mpState->setDepthStencilState(pDsState);
 
-     // rasterizer state
+    // Standard Solid Render (we build the "wireframe" as actual geometry)
     RasterizerState::Desc rasterDesc;
-    //rasterDesc.setFillMode(RasterizerState::FillMode::Wireframe);
     rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
     rasterDesc.setCullMode(RasterizerState::CullMode::None);
-    rasterDesc.setDepthBias(100000, 1.0f);
-    rasterDesc.setDepthClamp(0.0f);
     mpRasterState = RasterizerState::create(rasterDesc);
     mpState->setRasterizerState(mpRasterState);
 }
@@ -67,213 +34,129 @@ ref<ProbeVisualizePass> ProbeVisualizePass::create(const ref<Device>& pDevice, c
 
 void ProbeVisualizePass::execute(RenderContext* pRenderContext, const ref<Fbo>& pFbo, bool autoSetVpSc) const
 {
+    if (mVertices.empty()) return;
+
     mpState->setFbo(pFbo, autoSetVpSc);
-    pRenderContext->draw(mpState.get(), mpVars.get(), mVertices.size(), 0);
+    pRenderContext->draw(mpState.get(), mpVars.get(), (uint32_t)mVertices.size(), 0);
 }
 
-void ProbeVisualizePass::setGridData(const ProbeGrid& grid, const std::vector<ProbeDirSample>& dirSamples)
+void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Probe>& probes)
 {
     mVertices.clear();
 
-    const int3 res = grid.resolution;
+    // -------------------------------------------------------------
+        // VISUALIZATION COLOR PALETTE
+        // -------------------------------------------------------------
+    static const float3 kLevelColors[] = {
+        float3(0.9f, 0.9f, 0.9f), // Level 0: ⬜ White
+        float3(1.0f, 0.0f, 0.0f), // Level 1: 🟥 Red
+        float3(1.0f, 0.5f, 0.0f), // Level 2: 🟧 Orange
+        float3(1.0f, 1.0f, 0.0f), // Level 3: 🟨 Yellow
+        float3(0.0f, 1.0f, 0.0f), // Level 4: 🟩 Green
+        float3(0.0f, 1.0f, 1.0f), // Level 5: 🟦 Cyan
+        float3(0.0f, 0.0f, 1.0f), // Level 6: 🔷 Blue
+        float3(1.0f, 0.0f, 1.0f)  // Level 7: 🟪 Magenta
+    };
 
-    int width = res.x;
-    int height = res.y;
-    int depth = res.z;
-
-    // Sphere parameters
-    float sphereRadius = 0.15f * std::min({grid.spacing.x, grid.spacing.y, grid.spacing.z});
-    //float sphereRadius = 0.3f;
-    int segmentsU = 64; // longitude
-    int segmentsV = 32;  // latitude
-    uint32_t probeIndexCount = 0;
-    for (int z = 0; z < depth; ++z)
+    for (const auto& probe : probes)
     {
-        for (int y = 0; y < height; ++y)
+        // Only visualize Leaf nodes to see the final tessellation
+        if (probe.isLeaf)
         {
-            for (int x = 0; x < width; ++x)
-            {
-                float3 probePos = grid.origin + float3(x * grid.spacing.x, y * grid.spacing.y, z * grid.spacing.z);
-                //auto tmp = generateProbeCube(probePos, grid.spacing);
-
-                auto tmp = generateProbeSphere(probePos, sphereRadius, segmentsU, segmentsV, dirSamples, probeIndexCount);
-                probeIndexCount ++;
-                mVertices.insert(mVertices.end(), tmp.begin(), tmp.end());
-            }
+            int lvl = std::min(probe.level, 5);
+            generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], mVertices);
         }
     }
 
-     const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
-     pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
-     pVertexBuffer->breakStrongReferenceToDevice();
+    if (mVertices.empty()) return;
 
-     ref<VertexLayout> pLayout = VertexLayout::create();
-     ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
-     pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
-     pBufLayout->addElement("DIR_SAMPLE_INDEX", sizeof(float3), ResourceFormat::R32Uint, 1, 0);
-     pBufLayout->addElement("PROBE_INDEX", sizeof(float3) + sizeof(uint32_t), ResourceFormat::R32Uint, 1, 0);
-     pLayout->addBufferLayout(0, pBufLayout);
+    // Create Buffers
+    const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
+    pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
 
-     Vao::BufferVec buffers{pVertexBuffer};
-     pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
-     mpState->setVao(pVao);
-     numSamplePerProbe = (uint32_t)dirSamples.size();
+    ref<VertexLayout> pLayout = VertexLayout::create();
+    ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
+    pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("COLOR", sizeof(float3), ResourceFormat::RGB32Float, 1, 0);
+    pLayout->addBufferLayout(0, pBufLayout);
+
+    Vao::BufferVec buffers{ pVertexBuffer };
+    pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
+    mpState->setVao(pVao);
 }
 
-void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat, const float4x4& viewMat, const float4x4& projMat)
+void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat)
 {
     mpVars->getRootVar()["PerFrameBuffer"]["viewProjMat"] = viewProjMat;
-    mpVars->getRootVar()["PerFrameBuffer"]["viewMat"] = viewMat;
-    mpVars->getRootVar()["PerFrameBuffer"]["projMat"] = projMat;
 }
 
-void ProbeVisualizePass::setProbeSamplingData(ref<Buffer> dirSamples, ref<Buffer> samplingBuffer)
+void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& maxP, const float3& color, std::vector<ProbeVertex>& outVerts)
 {
-    mpVars->getRootVar()["gProbeSamplingResults"] = samplingBuffer;
-    mpVars->getRootVar()["gProbeDirSamples"] = dirSamples;
-    mpVars->getRootVar()["PerFrameBuffer"]["numSamplePerProbe"] = numSamplePerProbe;
-}
+    // Define the 8 corners
+    float3 p0 = float3(minP.x, minP.y, minP.z);
+    float3 p1 = float3(maxP.x, minP.y, minP.z);
+    float3 p2 = float3(minP.x, maxP.y, minP.z);
+    float3 p3 = float3(maxP.x, maxP.y, minP.z);
+    float3 p4 = float3(minP.x, minP.y, maxP.z);
+    float3 p5 = float3(maxP.x, minP.y, maxP.z);
+    float3 p6 = float3(minP.x, maxP.y, maxP.z);
+    float3 p7 = float3(maxP.x, maxP.y, maxP.z);
 
-/*
-       v6-------v7
-      / |      / |
-    v4-------v5  |
-    |  |     |   |
-    |  v2----|--v3
-    | /      | /
-    v0-------v1
-Index order (triangle strip):
-  0, 1, 2, 3,   // front face
-  7, 4,         // degenerate
-  6, 5,         // right face
-  1, 0,         // degenerate
-  4, 7, 6, 2,  // top face
-  3, 1          // degenerate
-  */
-std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeCube(const float3& center, const float3& spacing)
-{
-    std::vector<ProbeVertex> verts;
+    // 12 Edges (Pairs of indices)
+    // Bottom Ring: 0-1, 1-3, 3-2, 2-0? No, standard indexing:
+    // 0:min, 7:max.
+    // X-axis lines, Y-axis lines, Z-axis lines
+    float3 corners[8] = { p0, p1, p2, p3, p4, p5, p6, p7 };
 
-    //// half-size along each axis
-    //float3 h = spacing * 0.5f;
+    // Indices map based on standard binary order (x, y, z)
+    // 0=000, 1=100, 2=010, 3=110, 4=001, 5=101, 6=011, 7=111
+    int edges[12][2] = {
+        {0, 1}, {2, 3}, {4, 5}, {6, 7}, // X-axis edges
+        {0, 2}, {1, 3}, {4, 6}, {5, 7}, // Y-axis edges
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}  // Z-axis edges
+    };
 
-    //// Cube corners
-    //ProbeVertex corners[8] = {
-    //    {center + float3(-h.x, -h.y, -h.z)}, // 0
-    //    {center + float3(h.x, -h.y, -h.z)},  // 1
-    //    {center + float3(-h.x, h.y, -h.z)},  // 2
-    //    {center + float3(h.x, h.y, -h.z)},   // 3
-    //    {center + float3(-h.x, -h.y, h.z)},  // 4
-    //    {center + float3(h.x, -h.y, h.z)},   // 5
-    //    {center + float3(-h.x, h.y, h.z)},   // 6
-    //    {center + float3(h.x, h.y, h.z)}     // 7
-    //};
+    // Thickness of the wireframe lines
+    float thickness = 0.001f;
 
-    // // 12 edges: each defined by a pair of corner indices
-    //int edgeIdx[12][2] = {
-    //    {0, 1},
-    //    {1, 3},
-    //    {3, 2},
-    //    {2, 0}, // bottom
-    //    {4, 5},
-    //    {5, 7},
-    //    {7, 6},
-    //    {6, 4}, // top
-    //    {0, 4},
-    //    {1, 5},
-    //    {2, 6},
-    //    {3, 7} // verticals
-    //};
-    //float thickness = 0.0001f;
-    //// For each edge, generate a thin quad along the line
-    //for (int e = 0; e < 12; ++e)
-    //{
-    //    float3 p0 = corners[edgeIdx[e][0]].worldPos;
-    //    float3 p1 = corners[edgeIdx[e][1]].worldPos;
-
-    //    // Compute a simple perpendicular offset in screen-aligned direction
-    //    // Here we just use a small arbitrary vector for thickness; ideally use camera-facing offset
-    //    float3 offset = float3(thickness, thickness, thickness);
-
-    //    // Quad vertices (two triangles)
-    //    verts.push_back({p0 - offset});
-    //    verts.push_back({p0 + offset});
-    //    verts.push_back({p1 - offset});
-
-    //    verts.push_back({p1 - offset});
-    //    verts.push_back({p0 + offset});
-    //    verts.push_back({p1 + offset});
-    //}
-
-    return verts;
-}
-
-// New function to generate a UV sphere at a given position
-std::vector<ProbeVisualizePass::ProbeVertex> ProbeVisualizePass::generateProbeSphere(
-    const float3& center,
-    float radius,
-    int segmentsU,
-    int segmentsV,
-    const std::vector<ProbeDirSample>& dirSamples,
-    uint32_t probeIndex
-)
-{
-    std::vector<ProbeVertex> verts;
-
-    for (int v = 0; v < segmentsV; ++v)
+    for (int i = 0; i < 12; ++i)
     {
-        float phi0 = float(v) / segmentsV * float(M_PI);
-        float phi1 = float(v + 1) / segmentsV * float(M_PI);
+        float3 start = corners[edges[i][0]];
+        float3 end = corners[edges[i][1]];
 
-        for (int u = 0; u < segmentsU; ++u)
-        {
-            float theta0 = float(u) / segmentsU * 2.0f * float(M_PI);
-            float theta1 = float(u + 1) / segmentsU * 2.0f * float(M_PI);
+        // Create a thin box (quads) around the segment
+        // Simple approach: Add slight offsets to create volume
+        float3 dir = normalize(end - start);
+        float3 up = (abs(dir.y) < 0.99f) ? float3(0, 1, 0) : float3(1, 0, 0);
+        float3 right = normalize(cross(dir, up)) * thickness;
+        up = normalize(cross(right, dir)) * thickness;
 
-            // Directions from center to vertex (normalized)
-            float3 dir00 = normalize(float3(std::sin(phi0) * std::cos(theta0), std::cos(phi0), std::sin(phi0) * std::sin(theta0)));
-            float3 dir01 = normalize(float3(std::sin(phi0) * std::cos(theta1), std::cos(phi0), std::sin(phi0) * std::sin(theta1)));
-            float3 dir10 = normalize(float3(std::sin(phi1) * std::cos(theta0), std::cos(phi1), std::sin(phi1) * std::sin(theta0)));
-            float3 dir11 = normalize(float3(std::sin(phi1) * std::cos(theta1), std::cos(phi1), std::sin(phi1) * std::sin(theta1)));
+        // 4 vertices around start, 4 around end
+        float3 v0 = start - right - up;
+        float3 v1 = start + right - up;
+        float3 v2 = start + right + up;
+        float3 v3 = start - right + up;
 
-            // Find closest sample index for each direction
-            uint32_t idx00 = findClosestDirIndex(dir00, dirSamples);
-            uint32_t idx01 = findClosestDirIndex(dir01, dirSamples);
-            uint32_t idx10 = findClosestDirIndex(dir10, dirSamples);
-            uint32_t idx11 = findClosestDirIndex(dir11, dirSamples);
+        float3 v4 = end - right - up;
+        float3 v5 = end + right - up;
+        float3 v6 = end + right + up;
+        float3 v7 = end - right + up;
 
-            // Four points of the quad
-            float3 p00 = center + radius * dir00;
-            float3 p01 = center + radius * dir01;
-            float3 p10 = center + radius * dir10;
-            float3 p11 = center + radius * dir11;
+        // Push Triangles (Front, Back, Top, Bottom, Left, Right)
+        // Simplified: Just push 2 triangles for the main face facing camera? 
+        // No, let's just push a few random faces to make sure it's visible from any angle.
+        // Or simpler: Just 2 triangles to form a "billboard" if we were using geometry shader, 
+        // but here we are static. Let's do a full box for the line segment.
 
-            // Two triangles per quad
-            verts.push_back({p00, idx00, probeIndex});
-            verts.push_back({p10, idx10, probeIndex});
-            verts.push_back({p11, idx11, probeIndex});
+        auto pushQuad = [&](float3 a, float3 b, float3 c, float3 d) {
+            outVerts.push_back({ a, color }); outVerts.push_back({ b, color }); outVerts.push_back({ c, color });
+            outVerts.push_back({ a, color }); outVerts.push_back({ c, color }); outVerts.push_back({ d, color });
+            };
 
-            verts.push_back({p00, idx00, probeIndex});
-            verts.push_back({p11, idx11, probeIndex});
-            verts.push_back({p01, idx01, probeIndex});
-        }
+        // Top/Bottom/Sides
+        pushQuad(v0, v1, v5, v4);
+        pushQuad(v1, v2, v6, v5);
+        pushQuad(v2, v3, v7, v6);
+        pushQuad(v3, v0, v4, v7);
     }
-    return verts;
-}
-
-// Helper: find the closest direction index
-uint32_t ProbeVisualizePass::findClosestDirIndex(const float3& dir, const std::vector<ProbeDirSample>& dirSamples)
-{
-    uint32_t bestIdx = 0;
-    float bestDot = -1.0f;
-    for (int i = 0; i < dirSamples.size(); ++i)
-    {
-        float d = dot(dir, normalize(dirSamples[i].dir));
-        if (d > bestDot)
-        {
-            bestDot = d;
-            bestIdx = i;
-        }
-    }
-    return bestIdx;
 }

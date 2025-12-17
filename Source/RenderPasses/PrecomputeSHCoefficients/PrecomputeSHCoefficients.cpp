@@ -32,8 +32,6 @@
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
-#include "Scene/SceneBuilder.h"
-#include "Scene/TriangleMesh.h"
 #include "ProbeSamplingData.slang"
 const int numSamplesPerProbe = 4096;
 const int verificationRes = 32;
@@ -41,7 +39,7 @@ const float verificationH = 0.005f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
-const float ErrorThreshold = 5.0f;//threshold for Erel
+const float ErrorThreshold = 2.0f;//threshold for Erel
 const bool useRelativeError = true;
 namespace
 {
@@ -67,7 +65,7 @@ PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Pr
         if (key == kShowReconstructedEnvMap)
             mbShowReconstructedEnvMap = value;
         if (key == kShowSHGrid)
-            mbShowSHGrid = value;
+            mbShowAdaptiveGrid = value;
     }
 
     mpFbo = Fbo::create(mpDevice);
@@ -82,7 +80,7 @@ Properties PrecomputeSHCoefficients::getProperties() const
 {
     Properties props;
     props[kShowReconstructedEnvMap] = mbShowReconstructedEnvMap;
-    props[kShowSHGrid] = mbShowSHGrid;
+    props[kShowSHGrid] = mbShowAdaptiveGrid;
     return props;
 }
 
@@ -92,18 +90,18 @@ RenderPassReflection PrecomputeSHCoefficients::reflect(const CompileData& compil
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    //reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA16Float);
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA16Float);
     // Add the required depth output. This always exists.
-    // reflector.addOutput("depth", "Depth buffer")
-    //     .format(ResourceFormat::D32Float)
-    //     .bindFlags(ResourceBindFlags::DepthStencil)
-    //     .texture2D(sz.x, sz.y, 4);
+     reflector.addOutput("depth", "Depth buffer")
+         .format(ResourceFormat::D32Float)
+         .bindFlags(ResourceBindFlags::DepthStencil)
+         .texture2D(sz.x, sz.y, 4);
 
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y).format(ResourceFormat::RGBA16Float);
-    reflector.addOutput("depth", "Depth buffer")
-        .format(ResourceFormat::D32Float)
-        .bindFlags(ResourceBindFlags::DepthStencil)
-        .texture2D(sz.x, sz.y);
+    //reflector.addOutput("output", "Color").texture2D(sz.x, sz.y).format(ResourceFormat::RGBA16Float);
+    //reflector.addOutput("depth", "Depth buffer")
+    //    .format(ResourceFormat::D32Float)
+    //    .bindFlags(ResourceBindFlags::DepthStencil)
+    //    .texture2D(sz.x, sz.y);
     return reflector;
 }
 
@@ -131,7 +129,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //envMapShaderRootVar["PerFrameCB"]["shCoeffs"].setBlob(shCoeffs.data(), shCoeffs.size() * sizeof(float4)); // bind sh coeffs to cbuffer
         //envMapShaderRootVar["PerFrameCB"]["showReconstructedEnvMap"] = mbShowReconstructedEnvMap;
         //mpFullScreenPass->execute(pRenderContext, mpFbo);
-
+#pragma region  ====Finite difference verification code block===
  //       if (mbVerify)
  //       {
  //           auto rtVar = mpRtVars->getRootVar();
@@ -333,7 +331,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    mbVerify = false;
         //    delete[] allProbeSamplingData;
         //}
-
+#pragma endregion
+#pragma region  ====Uniform grid SH coeff block===
         //if (!mbFinishSHPrecompute)
         //{
         //    auto rtVar = mpRtVars->getRootVar();
@@ -425,7 +424,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    mbFinishSHPrecompute = true;
         //    delete[] samplingData;
         //}
-
+#pragma endregion
         // build adaptive probe grid here
         if (mNeedRebuildProbeVolume)
         {
@@ -502,7 +501,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                     //Feed Data back to Volume
                     // We pass the batch index (probeIdx) and the calculated data
-                    mAdaptiveProbeVolume->setProbeData(probeIdx, coeffs, grads, hessians);
+                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, hessians);
                 }
 
                 delete[] allProbeSamplingData;
@@ -516,32 +515,32 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mAdaptiveProbeVolume->uploadToGPU();
             mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolume.txt");
             mNeedRebuildProbeVolume = false;
+            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
         }
 
         // visualize probes
-       /* if (mbFinishSHPrecompute)
-        {*/
-            //pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+        //if (mbFinishSHPrecompute)
+        //{
+            pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
-            // auto shShaderRootVar = mpVars->getRootVar();
-            // shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-            // shShaderRootVar["gSHCoeffs"] = mpGridSHCoeffsBuffer;
-            // shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
-            // shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
-            // shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
-            // shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
+             auto shShaderRootVar = mpVars->getRootVar();
+             shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+             shShaderRootVar["gSHCoeffs"] = mpGridSHCoeffsBuffer;
+             //shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
+             //shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
+             //shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
+             //shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
 
-            // mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-            // TODO: rework grid visualization pass
-             //if (mbShowSHGrid)
-             //{
-             //   mpProbeVisualizePass->setCameraData(
-             //       mpScene->getCamera()->getViewProjMatrix(), mpScene->getCamera()->getViewMatrix(), mpScene->getCamera()->getProjMatrix()
-             //   );
-             //   mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
-             //   mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-             //}
+             if (mbShowAdaptiveGrid)
+             {
+                mpProbeVisualizePass->setCameraData(
+                    mpScene->getCamera()->getViewProjMatrix()
+                );
+                //mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
+                mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+             }
         //}
     }
 }
@@ -620,7 +619,7 @@ void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
 {
     if (widget.checkbox("Show Reconstructed Env Map", mbShowReconstructedEnvMap))
         requestRecompile();
-    if (widget.checkbox("Show SH Grid", mbShowSHGrid))
+    if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
         requestRecompile();
 }
 
@@ -961,9 +960,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpGraphicsState->setRasterizerState(mpRasterState);
            mpGraphicsState->setFbo(mpFbo);
            mpGraphicsState->setDepthStencilState(pDsState);
-            // mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
-           //mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
-           //mpProbeVisualizePass->setGridData(mProbeGrid, dirSamples);
+
+           //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
+           mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
 
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 

@@ -76,7 +76,7 @@ private:
     ref<FullScreenPass> mpFullScreenPass;
     ref<EnvMap> mpEnvMap;
     bool mbShowReconstructedEnvMap = false;
-    bool mbShowSHGrid = false;
+    bool mbShowAdaptiveGrid = false;
     ProbeGrid mUniformProbeGrid;
     ref<Buffer> mpGridSHCoeffsBuffer; //SH coeffs of all probes
     ref<Buffer> mpProbePosBuffer; // probe center positions in world space

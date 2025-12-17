@@ -8,6 +8,31 @@ using namespace Falcor;
 class AdaptiveProbeVolume : public Object
 {
 public:
+    struct Probe
+    {
+        bool isLeaf = true;
+        int level = 0;
+
+        float3 minPoint;
+        float3 maxPoint;
+
+        // Indices into mCorners (0..7)
+        int corners[8] = { -1 };
+
+        // Indices into mProbes (Children)
+        int children[8] = { -1 };
+    };
+    struct Corner
+    {
+        float3 position;
+
+        // Physics Data (Full bands)
+        std::vector<float3> shCoeffs;
+        std::vector<GradSHCoeff> shGradients;
+
+        float maxLambda = 0.0f; // Curvature
+        float coeffNorm = 0.0f; // ||L||
+    };
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
     void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
@@ -44,6 +69,7 @@ public:
 
     ref<Buffer> getNodeBuffer() const { return mpProbeBuffer; }
     ref<Buffer> getProbeBuffer() const { return mpCornerBuffer; }
+    const std::vector<Probe>& getProbes() const { return mProbes; }
 
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
@@ -51,33 +77,6 @@ private:
     // ----------------------------------------------------------------
     // Internal Data Structures
     // ----------------------------------------------------------------
-
-    struct Corner
-    {
-        float3 position;
-
-        // Physics Data (Full bands)
-        std::vector<float3> shCoeffs;
-        std::vector<GradSHCoeff> shGradients;
-
-        float maxLambda = 0.0f; // Curvature
-        float coeffNorm = 0.0f; // ||L||
-    };
-
-    struct Probe
-    {
-        bool isLeaf = true;
-        int level = 0;
-
-        float3 minPoint;
-        float3 maxPoint;
-
-        // Indices into mCorners (0..7)
-        int corners[8] = { -1 };
-
-        // Indices into mProbes (Children)
-        int children[8] = { -1 };
-    };
 
     ref<Device> mpDevice;
 

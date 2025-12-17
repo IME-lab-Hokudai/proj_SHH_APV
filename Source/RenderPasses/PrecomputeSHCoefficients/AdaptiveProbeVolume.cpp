@@ -195,8 +195,8 @@ void AdaptiveProbeVolume::finishBatch()
             float3 maxP = mProbes[probeIdx].maxPoint;
             float3 center = (minP + maxP) * 0.5f;
 
-            // Helper: Create new corner
-            auto addCorner = [&](float3 pos) -> int {
+            // Helper: Create new corner and add to pending list
+            auto addNewCorner = [&](float3 pos) -> int {
                 Corner c; c.position = pos;
                 mCorners.push_back(c);
                 int idx = (int)mCorners.size() - 1;
@@ -205,20 +205,20 @@ void AdaptiveProbeVolume::finishBatch()
                 };
 
             // A. Generate 19 NEW Corners
-            int c_center = addCorner(center);
+            int c_center = addNewCorner(center);
 
-            int c_fX0 = addCorner({ minP.x, center.y, center.z }); int c_fX1 = addCorner({ maxP.x, center.y, center.z });
-            int c_fY0 = addCorner({ center.x, minP.y, center.z }); int c_fY1 = addCorner({ center.x, maxP.y, center.z });
-            int c_fZ0 = addCorner({ center.x, center.y, minP.z }); int c_fZ1 = addCorner({ center.x, center.y, maxP.z });
+            int c_fX0 = addNewCorner({ minP.x, center.y, center.z }); int c_fX1 = addNewCorner({ maxP.x, center.y, center.z });
+            int c_fY0 = addNewCorner({ center.x, minP.y, center.z }); int c_fY1 = addNewCorner({ center.x, maxP.y, center.z });
+            int c_fZ0 = addNewCorner({ center.x, center.y, minP.z }); int c_fZ1 = addNewCorner({ center.x, center.y, maxP.z });
 
-            int c_eX_Y0Z0 = addCorner({ center.x, minP.y, minP.z }); int c_eX_Y1Z0 = addCorner({ center.x, maxP.y, minP.z });
-            int c_eX_Y0Z1 = addCorner({ center.x, minP.y, maxP.z }); int c_eX_Y1Z1 = addCorner({ center.x, maxP.y, maxP.z });
+            int c_eX_Y0Z0 = addNewCorner({ center.x, minP.y, minP.z }); int c_eX_Y1Z0 = addNewCorner({ center.x, maxP.y, minP.z });
+            int c_eX_Y0Z1 = addNewCorner({ center.x, minP.y, maxP.z }); int c_eX_Y1Z1 = addNewCorner({ center.x, maxP.y, maxP.z });
 
-            int c_eY_X0Z0 = addCorner({ minP.x, center.y, minP.z }); int c_eY_X1Z0 = addCorner({ maxP.x, center.y, minP.z });
-            int c_eY_X0Z1 = addCorner({ minP.x, center.y, maxP.z }); int c_eY_X1Z1 = addCorner({ maxP.x, center.y, maxP.z });
+            int c_eY_X0Z0 = addNewCorner({ minP.x, center.y, minP.z }); int c_eY_X1Z0 = addNewCorner({ maxP.x, center.y, minP.z });
+            int c_eY_X0Z1 = addNewCorner({ minP.x, center.y, maxP.z }); int c_eY_X1Z1 = addNewCorner({ maxP.x, center.y, maxP.z });
 
-            int c_eZ_X0Y0 = addCorner({ minP.x, minP.y, center.z }); int c_eZ_X1Y0 = addCorner({ maxP.x, minP.y, center.z });
-            int c_eZ_X0Y1 = addCorner({ minP.x, maxP.y, center.z }); int c_eZ_X1Y1 = addCorner({ maxP.x, maxP.y, center.z });
+            int c_eZ_X0Y0 = addNewCorner({ minP.x, minP.y, center.z }); int c_eZ_X1Y0 = addNewCorner({ maxP.x, minP.y, center.z });
+            int c_eZ_X0Y1 = addNewCorner({ minP.x, maxP.y, center.z }); int c_eZ_X1Y1 = addNewCorner({ maxP.x, maxP.y, center.z });
 
             // B. Retrieve 8 OLD Corners
             const int* P = mProbes[probeIdx].corners;
