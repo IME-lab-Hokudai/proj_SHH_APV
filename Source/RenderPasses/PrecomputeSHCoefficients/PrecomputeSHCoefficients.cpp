@@ -531,10 +531,6 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
              shShaderRootVar["gLinearSampler"] = mpLinearSampler;
              shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
              shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
-             //shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
-             //shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
-             //shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
-             //shShaderRootVar["gProbeGridInfo"]["spacing"] = mProbeGrid.spacing;
 
              mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
@@ -543,7 +539,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mpProbeVisualizePass->setCameraData(
                     mpScene->getCamera()->getViewProjMatrix()
                 );
-                //mpProbeVisualizePass->setProbeSamplingData(mpProbeDirSamplesBuffer, mpProbeSamplingResultBuffer);
+               
                 mpProbeVisualizePass->execute(pRenderContext, mpFbo);
              }
         //}

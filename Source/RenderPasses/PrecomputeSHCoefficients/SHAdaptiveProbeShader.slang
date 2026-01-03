@@ -114,6 +114,105 @@ void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs
 }
 
 // ------------------------------------------------------------------
+// Standard Trilinear Interpolation (Baseline)
+// Traversal Order: Z -> Y -> X (Matches C++ Bit Packing)
+// ------------------------------------------------------------------
+void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])
+{
+    GPUProbe p = gProbeBuffer[probeIdx];
+    float3 size = p.maxPoint - p.minPoint;
+
+    // Normalized position within voxel (0..1)
+    float3 t = saturate((pos - p.minPoint) / size);
+
+    // Pre-load indices for the 8 corners
+    int cIdx[8];
+    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
+
+    for (int band = 0; band < 9; ++band)
+    {
+        // 1. Fetch Corner Values (No Gradients needed!)
+        float3 v[8];
+        for (int i = 0; i < 8; ++i)
+        {
+            v[i] = gCornerBuffer[cIdx[i]].coeffs[band].rgb;
+        }
+
+        // 2. Interpolate along Z (Stride 1, Bit 0)
+        // Pairs (0,1), (2,3), (4,5), (6,7)
+        float3 z0 = lerp(v[0], v[1], t.z);
+        float3 z1 = lerp(v[2], v[3], t.z);
+        float3 z2 = lerp(v[4], v[5], t.z);
+        float3 z3 = lerp(v[6], v[7], t.z);
+
+        // 3. Interpolate along Y (Stride 2, Bit 1)
+        // Pairs (z0, z1) -> Low Y
+        // Pairs (z2, z3) -> High Y
+        float3 y0 = lerp(z0, z1, t.y);
+        float3 y1 = lerp(z2, z3, t.y);
+
+        // 4. Interpolate along X (Stride 4, Bit 2)
+        finalCoeffs[band] = lerp(y0, y1, t.x);
+    }
+}
+
+// ------------------------------------------------------------------
+// Taylor-Weighted Interpolation (Annen et al. 2004 / Ward & Heckbert)
+// ------------------------------------------------------------------
+void fetchTaylorInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])
+{
+    GPUProbe p = gProbeBuffer[probeIdx];
+    float3 size = p.maxPoint - p.minPoint;
+    float3 t = saturate((pos - p.minPoint) / size); // Trilinear Weights
+
+    int cIdx[8];
+    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
+
+    for (int band = 0; band < 9; ++band)
+    {
+        float3 accum = 0.0;
+
+        // Loop through all 8 corners
+        // We calculate 8 separate predictions and blend them trilinearly
+        for (int i = 0; i < 8; ++i)
+        {
+            // 1. Get Corner Data
+            GPUCorner c = gCornerBuffer[cIdx[i]];
+            float3 val = c.coeffs[band].rgb;
+
+            // 2. Get Gradient (Using your Z-Up mapping)
+            // Falcor X = SH Y (.y), Falcor Y = SH Z (.z), Falcor Z = SH X (.x)
+            float3 grad;
+            grad.x = c.gradR[band].y; // d/dx (Falcor)
+            grad.y = c.gradR[band].z; // d/dy (Falcor)
+            grad.z = c.gradR[band].x; // d/dz (Falcor)
+            // Note: Use gradG/gradB for Green/Blue channels in production code
+
+            // 3. Taylor Extrapolation: Pred = L + Gradient * Displacement
+            // We need the vector from THIS corner to the pixel 'pos'
+            float3 cornerPos = p.minPoint + size * float3(
+                (i & 4) ? 1.0 : 0.0, // X bit
+                                                          (i & 2) ? 1.0 : 0.0, // Y bit
+                                                          (i & 1) ? 1.0 : 0.0  // Z bit
+                                                   );
+            float3 disp = pos - cornerPos;
+
+            float3 prediction = val + grad * disp; // "First-order Taylor polynomial"
+
+            // 4. Calculate Trilinear Weight for this corner
+            // If corner is at 0, weight is (1-t). If at 1, weight is t.
+            float wx = (i & 4) ? t.x : (1.0 - t.x);
+            float wy = (i & 2) ? t.y : (1.0 - t.y);
+            float wz = (i & 1) ? t.z : (1.0 - t.z);
+            float weight = wx * wy * wz;
+
+            accum += prediction * weight;
+        }
+        finalCoeffs[band] = accum;
+    }
+}
+
+// ------------------------------------------------------------------
 // Octree Traversal Logic 
 // ------------------------------------------------------------------
 // Returns the index of the LEAF probe containing 'pos'
@@ -280,7 +379,10 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   // 1. Find the Leaf Voxel
   int probeIdx = traverseOctree(shadingData.posW);
   // 2. Compute interpolated SH Coeffs
-  fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+   //fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+   fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+  //fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+
   float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), shCoeffs);
 
   float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
