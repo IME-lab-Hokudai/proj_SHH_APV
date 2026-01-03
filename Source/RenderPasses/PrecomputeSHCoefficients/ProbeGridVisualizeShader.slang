@@ -12,12 +12,9 @@ struct VSOut {
 
 cbuffer PerFrameBuffer {
     float4x4 viewProjMat;
-    float4x4 viewMat;
-    float4x4 projMat;
     uint32_t numSamplePerProbe;
-    
     uint visibleLevelMask; 
-    uint drawLeafOnly; // New Toggle (bool passed as uint)
+    uint drawLeafOnly; 
 }
 
 VSOut vsMain(VSIn vIn)

@@ -85,11 +85,9 @@ void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat)
     mpVars->getRootVar()["PerFrameBuffer"]["viewProjMat"] = viewProjMat;
 }
 
-// Updated Generator to accept isLeaf
 void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& maxP, const float3& color, int level, bool isLeaf, std::vector<ProbeVertex>& outVerts)
 {
     // ... setup corners and edges ...
-    // (Copy existing p0-p7 and edges array logic here)
     float3 p0(minP.x, minP.y, minP.z); float3 p1(maxP.x, minP.y, minP.z);
     float3 p2(minP.x, maxP.y, minP.z); float3 p3(maxP.x, maxP.y, minP.z);
     float3 p4(minP.x, minP.y, maxP.z); float3 p5(maxP.x, minP.y, maxP.z);
@@ -106,7 +104,6 @@ void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& max
     for (int i = 0; i < 12; ++i)
     {
         // ... build box vertices v0-v7 ...
-        // (Copy existing logic)
         float3 start = corners[edges[i][0]];
         float3 end = corners[edges[i][1]];
         float3 dir = normalize(end - start);

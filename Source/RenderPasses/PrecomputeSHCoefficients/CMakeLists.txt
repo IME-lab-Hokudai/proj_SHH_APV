@@ -18,6 +18,7 @@ target_sources(PrecomputeSHCoefficients PRIVATE
 	ProbeGridVisualizeShader.slang
 	ProbeSamplingData.slang
 	ProbeSampling.rt.slang
+    SHAdaptiveProbeShader.slang
 )
 
 target_copy_shaders(PrecomputeSHCoefficients RenderPasses/PrecomputeSHCoefficients)

@@ -271,7 +271,74 @@ void AdaptiveProbeVolume::finishBatch()
 
 void AdaptiveProbeVolume::uploadToGPU()
 {
-    // Stub
+    // 1. Pack Probes (Tree Topology)
+    std::vector<GPUProbe> gpuProbes;
+    gpuProbes.reserve(mProbes.size());
+
+    for (const auto& p : mProbes)
+    {
+        GPUProbe gp;
+        gp.minPoint = p.minPoint;
+        gp.maxPoint = p.maxPoint;
+        gp.pad1 = 0; gp.pad2 = 0;
+
+        for (int i = 0; i < 8; ++i) gp.children[i] = p.children[i];
+        for (int i = 0; i < 8; ++i) gp.corners[i] = p.corners[i]; // Store indices
+
+        gpuProbes.push_back(gp);
+    }
+
+    mpProbeBuffer = mpDevice->createStructuredBuffer(
+        sizeof(GPUProbe),
+        (uint32_t)gpuProbes.size(),
+        ResourceBindFlags::ShaderResource,
+        MemoryType::DeviceLocal,
+        gpuProbes.data()
+    );
+
+    // 2. Pack Corners (Physics Data)
+    std::vector<GPUCorner> gpuCorners;
+    gpuCorners.reserve(mCorners.size());
+
+    for (const auto& c : mCorners)
+    {
+        GPUCorner gc;
+
+        // Safety: ensure we don't read out of bounds if corner has fewer bands
+        int numBands = std::min((int)c.shCoeffs.size(), 9);
+
+        for (int i = 0; i < 9; ++i)
+        {
+            if (i < numBands)
+            {
+                // Value
+                gc.coeffs[i] = float4(c.shCoeffs[i], 0.0f);
+
+                // Gradients (Assuming GradSHCoeff has .r, .g, .b members of type float3)
+                // c.shGradients[i].r is the gradient vector (dR/dx, dR/dy, dR/dz)
+                gc.gradR[i] = float4(c.shGradients[i].r, 0.0f);
+                gc.gradG[i] = float4(c.shGradients[i].g, 0.0f);
+                gc.gradB[i] = float4(c.shGradients[i].b, 0.0f);
+            }
+            else
+            {
+                // Zero out unused bands
+                gc.coeffs[i] = float4(0);
+                gc.gradR[i] = float4(0);
+                gc.gradG[i] = float4(0);
+                gc.gradB[i] = float4(0);
+            }
+        }
+        gpuCorners.push_back(gc);
+    }
+
+    mpCornerBuffer = mpDevice->createStructuredBuffer(
+        sizeof(GPUCorner),
+        (uint32_t)gpuCorners.size(),
+        ResourceBindFlags::ShaderResource,
+        MemoryType::DeviceLocal,
+        gpuCorners.data()
+    );
 }
 
 void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)

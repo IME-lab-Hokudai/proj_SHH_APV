@@ -44,7 +44,8 @@ const bool useRelativeError = true;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
-const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
+//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
+const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHAdaptiveProbeShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSampling.rt.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
@@ -528,7 +529,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
              auto shShaderRootVar = mpVars->getRootVar();
              shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-             shShaderRootVar["gSHCoeffs"] = mpGridSHCoeffsBuffer;
+             shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
              //shShaderRootVar["gProbeGridInfo"]["resolution"] = mProbeGrid.resolution;
              //shShaderRootVar["gProbeGridInfo"]["numBasis"] = mProbeGrid.numBasis;
              //shShaderRootVar["gProbeGridInfo"]["origin"] = mProbeGrid.origin;
@@ -1001,6 +1003,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
            if (!mNeedRebuildProbeVolume) {
                mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
+               mAdaptiveProbeVolume->uploadToGPU();
                mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
            }
               

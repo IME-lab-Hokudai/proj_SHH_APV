@@ -48,4 +48,26 @@ struct ProbeSampleData
     float hitT; // Ray hit distance t_i to check ray miss/hit
 };
 
+struct GPUCorner
+{
+    // We pack 9 bands. For each band, we have Value + 3 Gradients.
+    // float4 allows efficient alignment.
+    // .w components can be padding or used for other data.
+
+    float4 coeffs[9]; // .rgb = SH Value
+    float4 gradR[9];  // .xyz = Gradient of Red Channel
+    float4 gradG[9];  // .xyz = Gradient of Green Channel
+    float4 gradB[9];  // .xyz = Gradient of Blue Channel
+};
+
+struct GPUProbe
+{
+    float3 minPoint;
+    int pad1;
+    float3 maxPoint;
+    int pad2;
+    int children[8]; // Indices into GPUProbe buffer (-1 if leaf)
+    int corners[8];  // Indices into GPUCorner buffer
+};
+
 END_NAMESPACE_FALCOR

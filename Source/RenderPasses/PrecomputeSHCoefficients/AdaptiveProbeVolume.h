@@ -67,8 +67,8 @@ public:
     void uploadToGPU();
     void printDebugInfo(const std::string& filename);
 
-    ref<Buffer> getNodeBuffer() const { return mpProbeBuffer; }
-    ref<Buffer> getProbeBuffer() const { return mpCornerBuffer; }
+    ref<Buffer> getProbeBuffer() const { return mpProbeBuffer; }
+    ref<Buffer> getCornerBuffer() const { return mpCornerBuffer; }
     const std::vector<Probe>& getProbes() const { return mProbes; }
 
     // ----------------------------------------------------------------
