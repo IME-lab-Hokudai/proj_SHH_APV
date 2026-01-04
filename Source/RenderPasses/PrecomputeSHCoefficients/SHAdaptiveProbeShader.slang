@@ -377,13 +377,79 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 
   float3 shCoeffs[MAX_SH_BASIS];
   // 1. Find the Leaf Voxel
-  int probeIdx = traverseOctree(shadingData.posW);
+  // int probeIdx = traverseOctree(shadingData.posW);
   // 2. Compute interpolated SH Coeffs
-   //fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
-   fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
-  //fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+  // fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+  // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+  // fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+  // ... Material Setup ...
 
-  float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), shCoeffs);
+  // 1. Get My Probe & Initial SH
+  int myIdx = traverseOctree(shadingData.posW);
+  GPUProbe myProbe = gProbeBuffer[myIdx];
+  float3 mySH[9];
+  fetchHermiteInterpolatedSH(myIdx, shadingData.posW, mySH);
+
+  // 2. Geometry Setup
+  float3 myCenter = (myProbe.minPoint + myProbe.maxPoint) * 0.5;
+  float3 mySize = myProbe.maxPoint - myProbe.minPoint;
+  float3 offset = shadingData.posW - myCenter;
+  float3 distToWall = (mySize * 0.5) - abs(offset); // Positive = inside
+  float blendZone = 0.4 * min(min(mySize.x, mySize.y), mySize.z);
+
+  // 3. Multi-Axis Accumulation (Check X, Y, and Z independently)
+  // This prevents "Triangle" artifacts in the corners
+
+  // --- AXIS X BLEND ---
+  if (distToWall.x < blendZone)
+  {
+      int faceIdx = (offset.x < 0) ? 0 : 1; // 0: -X, 1: +X
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+
+      if (neighborIdx != -1)
+      {
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
+
+          float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.x / blendZone));
+          // Accumulate blend
+          for (int i = 0; i < 9; ++i) mySH[i] = lerp(mySH[i], neighborSH[i], t);
+      }
+  }
+
+  // --- AXIS Y BLEND ---
+  if (distToWall.y < blendZone)
+  {
+      int faceIdx = (offset.y < 0) ? 2 : 3; // 2: -Y, 3: +Y
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+
+      if (neighborIdx != -1)
+      {
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+
+          float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.y / blendZone));
+          for (int i = 0; i < 9; ++i) mySH[i] = lerp(mySH[i], neighborSH[i], t);
+      }
+  }
+
+  // --- AXIS Z BLEND ---
+  if (distToWall.z < blendZone)
+  {
+      int faceIdx = (offset.z < 0) ? 4 : 5; // 4: -Z, 5: +Z
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+
+      if (neighborIdx != -1)
+      {
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
+
+          float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.z / blendZone));
+          for (int i = 0; i < 9; ++i) mySH[i] = lerp(mySH[i], neighborSH[i], t);
+      }
+  }
+
+   float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), mySH);
 
   float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
    float3 emissiveColor = emissiveSample.rgb;

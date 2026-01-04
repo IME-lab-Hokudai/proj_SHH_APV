@@ -269,8 +269,111 @@ void AdaptiveProbeVolume::finishBatch()
     mProbesPendingCheck = nextProbesToCheck;
 }
 
+// ------------------------------------------------------------------
+// CPU Traversal Logic (Matches Shader Logic)
+// ------------------------------------------------------------------
+int AdaptiveProbeVolume::traverseOctreeCPU(float3 pos) const
+{
+    if (mProbes.empty()) return -1;
+
+    // 1. Bounds Check: If position is outside the volume, return -1
+    const Probe& root = mProbes[0];
+    if (pos.x < root.minPoint.x || pos.y < root.minPoint.y || pos.z < root.minPoint.z ||
+        pos.x > root.maxPoint.x || pos.y > root.maxPoint.y || pos.z > root.maxPoint.z)
+    {
+        return -1;
+    }
+
+    int currentIdx = 0; // Start at Root
+
+    // Safety loop to prevent infinite recursion
+    for (int i = 0; i < mMaxLevel + 5; ++i)
+    {
+        const Probe& p = mProbes[currentIdx];
+
+        // Found a Leaf
+        if (p.children[0] == -1)
+        {
+            return currentIdx;
+        }
+
+        // Determine Octant
+        float3 center = (p.minPoint + p.maxPoint) * 0.5f;
+        int octant = 0;
+        if (pos.x >= center.x) octant |= 4; // Bit 2 = X
+        if (pos.y >= center.y) octant |= 2; // Bit 1 = Y
+        if (pos.z >= center.z) octant |= 1; // Bit 0 = Z
+
+        int childIdx = p.children[octant];
+
+        // If tree is incomplete, stop here
+        if (childIdx == -1) return currentIdx;
+
+        currentIdx = childIdx;
+    }
+    return currentIdx;
+}
+
+// ------------------------------------------------------------------
+// Neighbor Computation (Fixes T-Junctions)
+// ------------------------------------------------------------------
+void AdaptiveProbeVolume::computeNeighbors()
+{
+    // Directions corresponding to the 6 faces: -X, +X, -Y, +Y, -Z, +Z
+    const float3 DIRECTIONS[6] = {
+        float3(-1, 0, 0), float3(1, 0, 0),
+        float3(0, -1, 0), float3(0, 1, 0),
+        float3(0, 0, -1), float3(0, 0, 1)
+    };
+
+    for (size_t i = 0; i < mProbes.size(); ++i)
+    {
+        Probe& p = mProbes[i];
+
+        // Initialize neighbors to -1 (No neighbor / No blend needed)
+        for (int k = 0; k < 6; ++k) p.coarseNeighbors[k] = -1;
+
+        // We only care about LEAF nodes
+        if (p.children[0] != -1) continue;
+
+        float3 size = p.maxPoint - p.minPoint;
+        float3 center = (p.minPoint + p.maxPoint) * 0.5f;
+        int totalCoarseNeighbors = 0;
+        // Check all 6 faces
+        for (int face = 0; face < 6; ++face)
+        {
+            // Step 5% of the size past the wall to ensure we enter the neighbor's voxel
+            float3 dir = DIRECTIONS[face];
+            float3 wallPos = center + dir * (size * 0.5f);
+            float3 nudge = dir * (size * 0.1f); // Push 10% outwards
+            float3 checkPos = wallPos + nudge;
+
+            int neighborIdx = traverseOctreeCPU(checkPos);
+
+            // If we found a valid neighbor (that is not ourselves)
+            if (neighborIdx != -1 && neighborIdx != (int)i)
+            {
+                const Probe& neighbor = mProbes[neighborIdx];
+                float3 neighborSize = neighbor.maxPoint - neighbor.minPoint;
+
+                // THE RULE: Only store if neighbor is LARGER (Coarser)
+                // Use 1.1x tolerance to avoid floating point equality issues
+                if (neighborSize.x > size.x * 1.1f)
+                {
+                    p.coarseNeighbors[face] = neighborIdx;
+                    totalCoarseNeighbors++;
+                }
+            }
+        }
+        std::cout << "Found " << totalCoarseNeighbors << " coarse neighbor links." << std::endl;
+    }
+}
+
 void AdaptiveProbeVolume::uploadToGPU()
 {
+    // Ensure neighbors are computed before uploading!
+    computeNeighbors();
+
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
@@ -283,7 +386,14 @@ void AdaptiveProbeVolume::uploadToGPU()
         gp.pad1 = 0; gp.pad2 = 0;
 
         for (int i = 0; i < 8; ++i) gp.children[i] = p.children[i];
-        for (int i = 0; i < 8; ++i) gp.corners[i] = p.corners[i]; // Store indices
+        for (int i = 0; i < 8; ++i) gp.corners[i] = p.corners[i];
+
+        // --------------------------------------------------------
+        // NEW: Copy Coarse Neighbor Indices
+        // --------------------------------------------------------
+        for (int k = 0; k < 6; ++k) gp.coarseNeighbors[k] = p.coarseNeighbors[k];
+        gp.pad3[0] = 0; // Padding maintenance
+        gp.pad3[1] = 0;
 
         gpuProbes.push_back(gp);
     }
@@ -314,15 +424,13 @@ void AdaptiveProbeVolume::uploadToGPU()
                 // Value
                 gc.coeffs[i] = float4(c.shCoeffs[i], 0.0f);
 
-                // Gradients (Assuming GradSHCoeff has .r, .g, .b members of type float3)
-                // c.shGradients[i].r is the gradient vector (dR/dx, dR/dy, dR/dz)
+                // Gradients
                 gc.gradR[i] = float4(c.shGradients[i].r, 0.0f);
                 gc.gradG[i] = float4(c.shGradients[i].g, 0.0f);
                 gc.gradB[i] = float4(c.shGradients[i].b, 0.0f);
             }
             else
             {
-                // Zero out unused bands
                 gc.coeffs[i] = float4(0);
                 gc.gradR[i] = float4(0);
                 gc.gradG[i] = float4(0);

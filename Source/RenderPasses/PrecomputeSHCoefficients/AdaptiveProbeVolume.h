@@ -21,6 +21,8 @@ public:
 
         // Indices into mProbes (Children)
         int children[8] = { -1 };
+
+        int coarseNeighbors[6];
     };
     struct Corner
     {
@@ -60,6 +62,10 @@ public:
 
     // Calculate Error per Probe, Subdivide if needed, Generate new Corners
     void finishBatch();
+
+    int traverseOctreeCPU(float3 pos) const;
+
+    void computeNeighbors();
 
     // ----------------------------------------------------------------
     // Resources & Debug

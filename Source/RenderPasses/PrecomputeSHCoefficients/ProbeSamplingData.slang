@@ -68,6 +68,9 @@ struct GPUProbe
     int pad2;
     int children[8]; // Indices into GPUProbe buffer (-1 if leaf)
     int corners[8];  // Indices into GPUCorner buffer
+    // Order: -X, +X, -Y, +Y, -Z, +Z
+    int coarseNeighbors[6];
+    int pad3[2]; // Keep 16-byte alignment if needed
 };
 
 END_NAMESPACE_FALCOR
