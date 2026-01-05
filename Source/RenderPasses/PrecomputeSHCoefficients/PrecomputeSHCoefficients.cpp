@@ -25,6 +25,7 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+#include <fstream>
 #include "PrecomputeSHCoefficients.h"
 
 #include "envMap_SH.h"
@@ -34,8 +35,8 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "ProbeSamplingData.slang"
 const int numSamplesPerProbe = 4096;
-const int verificationRes = 32;
-const float verificationH = 0.005f;
+const int verificationRes = 100;
+const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
@@ -150,7 +151,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
  //           ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
  //           mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
- //           int basisIdx = 0; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+ //           int basisIdx = 4; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
  //           int numBasis = 9;
  //           std::vector<float> coeffVec;
  //           coeffVec.clear();
@@ -333,6 +334,140 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    delete[] allProbeSamplingData;
         //}
 #pragma endregion
+#pragma region  ====Finite difference verification code block (Row-by-Row)===
+if (mbVerify)
+{
+    // 1. Open CSV File
+    std::ofstream csvFile("verification_data.csv");
+    csvFile << "WorldX,WorldZ,AnalyticGrad,FDGrad,AnalyticHess,FDHess\n";
+
+    // 2. Settings (Matching your uploaded file)
+    int basisIdx = 4; // l=2, m=-2 (Index 4) - As seen in your uploaded code line 144
+    int numBasis = 9;
+    float verificationHSq = verificationH * verificationH;
+
+    // Step size for the grid coverage
+    double step = (2.0 * verificationExtent) / (double)(verificationRes - 1);
+
+    // =================================================================================
+    // MAIN LOOP: Process Row by Row (Z-Axis) to save GPU Memory
+    // =================================================================================
+    for (uint32_t zIdx = 0; zIdx < verificationRes; ++zIdx)
+    {
+        // A. Generate ONLY CENTER Positions (World Space)
+        // Optimization: We only raytrace the center. Neighbors are computed via Reprojection (Krivanek).
+        std::vector<float3> rowPositions;
+        rowPositions.clear();
+        rowPositions.reserve(verificationRes);
+
+        double z = -verificationExtent + step * (double)zIdx;
+
+        for (uint32_t xIdx = 0; xIdx < verificationRes; ++xIdx)
+        {
+            double x = -verificationExtent + step * (double)xIdx;
+            rowPositions.push_back(float3((float)x, verificationY, (float)z));
+        }
+
+        int numProbesInRow = (int)rowPositions.size();
+
+        // B. Update GPU Buffers (Small batch for this row)
+        mpProbePosBuffer = mpDevice->createStructuredBuffer(
+            sizeof(float3), numProbesInRow,
+            ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal,
+            rowPositions.data()
+        );
+
+        mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+            sizeof(ProbeSampleData),
+            numSamplesPerProbe * numProbesInRow,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            MemoryType::DeviceLocal
+        );
+
+        // C. Dispatch Ray Tracing
+        auto rtVar = mpRtVars->getRootVar();
+        rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+        rtVar["gProbePositions"] = mpProbePosBuffer;
+        if (mpEmissiveSampler) mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+        rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+        rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+        rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex;
+
+        mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbesInRow, 1));
+
+        // D. Readback Row Data
+        /*std::vector<ProbeSampleData> rowAllData(numSamplesPerProbe * numProbesInRow);
+        mpProbeSamplingResultBuffer->getBlob(rowAllData.data(), 0, rowAllData.size() * sizeof(ProbeSampleData));*/
+        ProbeSampleData* rowAllData = new ProbeSampleData[numSamplesPerProbe * numProbesInRow];
+        mpProbeSamplingResultBuffer->getBlob(rowAllData, 0, numSamplesPerProbe * numProbesInRow * sizeof(ProbeSampleData));
+
+        // E. Process Probes
+        for (int i = 0; i < verificationRes; ++i)
+        {
+            // 1. Extract Samples for the CENTER Probe
+            std::vector<ProbeSampleData> centerSamples;
+            centerSamples.reserve(numSamplesPerProbe);
+            int offset = i * numSamplesPerProbe;
+            for (int s = 0; s < numSamplesPerProbe; ++s) centerSamples.push_back(rowAllData[offset + s]);
+
+            // 2. Define Positions (World Space)
+            float3 centerPosWorld = rowPositions[i];
+
+            // 3. Define Polar Coordinates (Swizzled: Z, X, Y)
+            // Matches uploaded code lines 149-151
+            float3 centerPosPolar;
+            centerPosPolar.x = centerPosWorld.z;
+            centerPosPolar.y = centerPosWorld.x;
+            centerPosPolar.z = centerPosWorld.y;
+
+            // Neighbors (+h and -h along World X -> Polar Y)
+            float3 plusPosPolar = centerPosPolar;
+            plusPosPolar.y += verificationH;
+
+            float3 minusPosPolar = centerPosPolar;
+            minusPosPolar.y -= verificationH;
+
+            // 4. Compute Coefficients
+            // CENTER: Use Standard Projection (Matches uploaded code line 148)
+            float coeffR = calculateChannelRSHCoeffLM(basisIdx, centerSamples);
+
+            // NEIGHBORS: Use Reprojection (Matches uploaded code lines 160-161)
+            // Note: We reuse 'centerSamples' because that's what the old code did (it used probeIdx for all 3)
+            float coeffPlus = calculateCoeffRPrime(centerSamples, centerPosPolar, plusPosPolar, numBasis, basisIdx);
+            float coeffMinus = calculateCoeffRPrime(centerSamples, centerPosPolar, minusPosPolar, numBasis, basisIdx);
+
+            // 5. Finite Difference (Exact match to uploaded code)
+
+            // Gradient: Forward Difference (Line 163)
+            float fdGrad = (coeffPlus - coeffR) / verificationH;
+
+            // Hessian: Central Difference (Line 167)
+            float fdHess = (coeffPlus - 2.0f * coeffR + coeffMinus) / verificationHSq;
+
+            // 6. Analytic (Ours)
+            float3 analyticGrad = float3(0, 0, 0);
+            float3x3 analyticHess = float3x3::zeros();
+
+            calculateChannelRGradAndHessianSHCoeffLM(centerPosPolar, centerSamples, samplingDirs, basisIdx, analyticGrad, analyticHess);
+
+            // 7. Write to CSV
+            // AnalyticGrad.y corresponds to World-X (Polar-Y) partial derivative
+            csvFile << centerPosWorld.x << ","
+                << centerPosWorld.z << ","
+                << analyticGrad.y << ","
+                << fdGrad << ","
+                << analyticHess[1][1] << ","
+                << fdHess << "\n";
+        }
+    }
+
+    csvFile.close();
+    mbVerify = false;
+    mSampleIndex++;
+    std::cout << "Verification Data Export Complete!" << std::endl;
+}
+#pragma endregion
 #pragma region  ====Uniform grid SH coeff block===
         //if (!mbFinishSHPrecompute)
         //{
@@ -427,122 +562,122 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //}
 #pragma endregion
         // build adaptive probe grid here
-        if (mNeedRebuildProbeVolume)
-        {
-            // 1. Initialize
-            mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
+    //    if (mNeedRebuildProbeVolume)
+    //    {
+    //        // 1. Initialize
+    //        mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-            // 2. Loop until the volume stops asking for more work (Breadth-First Build)
-            while (mAdaptiveProbeVolume->hasPendingBatch())
-            {
-                // --- A. Get positions for THIS batch ---
-                std::vector<float3> pendingProbePositions;
-                mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
+    //        // 2. Loop until the volume stops asking for more work (Breadth-First Build)
+    //        while (mAdaptiveProbeVolume->hasPendingBatch())
+    //        {
+    //            // --- A. Get positions for THIS batch ---
+    //            std::vector<float3> pendingProbePositions;
+    //            mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
 
-                uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+    //            uint32_t numProbes = (uint32_t)pendingProbePositions.size();
 
-                // --- B. Prepare Buffers (Re-create for new size) ---
-                // Input: Positions
-                mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
-                );
-                mpProbePosBuffer->setName("probes world pos");
+    //            // --- B. Prepare Buffers (Re-create for new size) ---
+    //            // Input: Positions
+    //            mpProbePosBuffer = mpDevice->createStructuredBuffer(
+    //                sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
+    //            );
+    //            mpProbePosBuffer->setName("probes world pos");
 
-                // Output: Ray Tracing Samples
-                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                    sizeof(ProbeSampleData),
-                    numSamplesPerProbe * numProbes,
-                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                    MemoryType::DeviceLocal
-                );
-                mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+    //            // Output: Ray Tracing Samples
+    //            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+    //                sizeof(ProbeSampleData),
+    //                numSamplesPerProbe * numProbes,
+    //                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+    //                MemoryType::DeviceLocal
+    //            );
+    //            mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
 
-                // --- C. Run Ray Tracing ---
-                auto rtVar = mpRtVars->getRootVar();
-                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-                rtVar["gProbePositions"] = mpProbePosBuffer;
-                if (mpEmissiveSampler)
-                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+    //            // --- C. Run Ray Tracing ---
+    //            auto rtVar = mpRtVars->getRootVar();
+    //            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+    //            rtVar["gProbePositions"] = mpProbePosBuffer;
+    //            if (mpEmissiveSampler)
+    //                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
 
-                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-                rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+    //            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+    //            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
 
-                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+    //            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
 
-                // --- D. Readback Results ---
-                ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
-                mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
+    //            // --- D. Readback Results ---
+    //            ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
+    //            mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
 
-                // --- E. Process Each Probe (CPU Math) ---
-                for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
-                {
-                    // Gather samples for this specific probe
-                    int offset = probeIdx * numSamplesPerProbe;
-                    std::vector<ProbeSampleData> probeSamplingResults;
-                    probeSamplingResults.reserve(numSamplesPerProbe);
-                    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
-                    {
-                        probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
-                    }
+    //            // --- E. Process Each Probe (CPU Math) ---
+    //            for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+    //            {
+    //                // Gather samples for this specific probe
+    //                int offset = probeIdx * numSamplesPerProbe;
+    //                std::vector<ProbeSampleData> probeSamplingResults;
+    //                probeSamplingResults.reserve(numSamplesPerProbe);
+    //                for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
+    //                {
+    //                    probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+    //                }
 
-                    // Math Containers
-                    std::vector<GradSHCoeff> grads;
-                    //std::vector<HessianSHCoeff> hessians;
-                    std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
-                    std::vector<float3> coeffs;
+    //                // Math Containers
+    //                std::vector<GradSHCoeff> grads;
+    //                //std::vector<HessianSHCoeff> hessians;
+    //                std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
+    //                std::vector<float3> coeffs;
 
-                    // Coordinate conversion
-                    float3 xPolar;
-                    xPolar.x = pendingProbePositions[probeIdx].z;
-                    xPolar.y = pendingProbePositions[probeIdx].x;
-                    xPolar.z = pendingProbePositions[probeIdx].y;
+    //                // Coordinate conversion
+    //                float3 xPolar;
+    //                xPolar.x = pendingProbePositions[probeIdx].z;
+    //                xPolar.y = pendingProbePositions[probeIdx].x;
+    //                xPolar.z = pendingProbePositions[probeIdx].y;
 
-                    // Compute Physics
-                    //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
-                    calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
-                    calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
+    //                // Compute Physics
+    //                //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
+    //                calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
+    //                calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
 
-                    //Feed Data back to Volume
-                    // We pass the batch index (probeIdx) and the calculated data
-                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
-                }
+    //                //Feed Data back to Volume
+    //                // We pass the batch index (probeIdx) and the calculated data
+    //                mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
+    //            }
 
-                delete[] allProbeSamplingData;
+    //            delete[] allProbeSamplingData;
 
-                // --- F. Finish Batch ---
-                // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
-                mAdaptiveProbeVolume->finishBatch();
-            }
+    //            // --- F. Finish Batch ---
+    //            // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
+    //            mAdaptiveProbeVolume->finishBatch();
+    //        }
 
-            // 3. TODO: upload to GPU for visualization
-            mAdaptiveProbeVolume->uploadToGPU();
-            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
-            mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
-            mNeedRebuildProbeVolume = false;
-            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-        }
+    //        // 3. TODO: upload to GPU for visualization
+    //        mAdaptiveProbeVolume->uploadToGPU();
+    //        mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
+    //        mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
+    //        mNeedRebuildProbeVolume = false;
+    //        mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+    //    }
 
-        // visualize probes
-        //if (mbFinishSHPrecompute)
-        //{
-            pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+    //    // visualize probes
+    //    //if (mbFinishSHPrecompute)
+    //    //{
+    //        pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
-             auto shShaderRootVar = mpVars->getRootVar();
-             shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-             shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+    //         auto shShaderRootVar = mpVars->getRootVar();
+    //         shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+    //         shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+    //         shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
 
-             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+    //         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-             if (mbShowAdaptiveGrid)
-             {
-                mpProbeVisualizePass->setCameraData(
-                    mpScene->getCamera()->getViewProjMatrix()
-                );
-               
-                mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-             }
-        //}
+    //         if (mbShowAdaptiveGrid)
+    //         {
+    //            mpProbeVisualizePass->setCameraData(
+    //                mpScene->getCamera()->getViewProjMatrix()
+    //            );
+    //           
+    //            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+    //         }
+    //    //}
     }
 }
 float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx)
@@ -661,133 +796,133 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             initSHBasisGradientAndHessianTables(samplingDirs);
 
         //generate verification data
-           //if (mbVerify)
-           //{
-           //    //std::vector<float3> verificationPositions;
-           //    if (sceneName == "cornell")
-           //    {
-           //       // AABB sceneBounds = mpScene->getSceneBounds();
-           //       // float3 minBound = sceneBounds.minPoint;
-           //       // float3 maxBound = sceneBounds.maxPoint;
-           //       // float3 sceneCenter = sceneBounds.center();
-           //       // float3 sceneSize = maxBound - minBound;
+           if (mbVerify)
+           {
+               //std::vector<float3> verificationPositions;
+               if (sceneName == "cornell")
+               {
+                  // AABB sceneBounds = mpScene->getSceneBounds();
+                  // float3 minBound = sceneBounds.minPoint;
+                  // float3 maxBound = sceneBounds.maxPoint;
+                  // float3 sceneCenter = sceneBounds.center();
+                  // float3 sceneSize = maxBound - minBound;
 
-           //       //float3 spacing = float3(.15f, .15f, .15f);
-           //       //// Number of probes in each dimension
-           //       // int3 resolution;
-           //       // resolution.x = (int)ceil(sceneSize.x / spacing.x);
-           //       // resolution.y = (int)ceil(sceneSize.y / spacing.y);
-           //       // resolution.z = (int)ceil(sceneSize.z / spacing.z);
+                  //float3 spacing = float3(.15f, .15f, .15f);
+                  //// Number of probes in each dimension
+                  // int3 resolution;
+                  // resolution.x = (int)ceil(sceneSize.x / spacing.x);
+                  // resolution.y = (int)ceil(sceneSize.y / spacing.y);
+                  // resolution.z = (int)ceil(sceneSize.z / spacing.z);
 
-           //       //// resolution = int3(1, 1, 1); // for testing
+                  //// resolution = int3(1, 1, 1); // for testing
 
-           //       // float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
-           //       // // resolution = int3(1, 1, 1);
-           //       // mProbeGrid.origin = sceneCenter - halfSize;
-           //       // mProbeGrid.origin += 0.025f;
+                  // float3 halfSize = 0.5f * (float3(resolution) - 1.0f) * spacing;
+                  // // resolution = int3(1, 1, 1);
+                  // mProbeGrid.origin = sceneCenter - halfSize;
+                  // mProbeGrid.origin += 0.025f;
 
-           //       // // mProbeGrid.origin = sceneCenter;
-           //       // mProbeGrid.spacing = spacing;
-           //       // mProbeGrid.resolution = resolution;
-           //       // mProbeGrid.numBasis = 9; // number of SH coefficients per probe
-           //       // computeProbesPos(mProbeGrid);
+                  // // mProbeGrid.origin = sceneCenter;
+                  // mProbeGrid.spacing = spacing;
+                  // mProbeGrid.resolution = resolution;
+                  // mProbeGrid.numBasis = 9; // number of SH coefficients per probe
+                  // computeProbesPos(mProbeGrid);
 
-           //       // 
+                  // 
 
-           //       // verificationPositions.clear();
-           //       // verificationPositions.reserve(3);
+                  // verificationPositions.clear();
+                  // verificationPositions.reserve(3);
 
-           //       // float3 tmpX = mProbeGrid.probesPos[0];
-           //       // float3 tmpXForward = tmpX + float3(verificationH, 0.0f, 0.0f);
-           //       // float3 tmpXBackward = tmpX - float3(verificationH, 0.0f, 0.0f);
-           //       // verificationPositions.push_back(tmpX);
-           //       // verificationPositions.push_back(tmpXForward);
-           //       // verificationPositions.push_back(tmpXBackward);
+                  // float3 tmpX = mProbeGrid.probesPos[0];
+                  // float3 tmpXForward = tmpX + float3(verificationH, 0.0f, 0.0f);
+                  // float3 tmpXBackward = tmpX - float3(verificationH, 0.0f, 0.0f);
+                  // verificationPositions.push_back(tmpX);
+                  // verificationPositions.push_back(tmpXForward);
+                  // verificationPositions.push_back(tmpXBackward);
 
-           //        //verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord sample: [center,+h, -h]
-           //        verificationPositions = generateVerificationPositionsMixed(verificationY, verificationExtent, verificationRes, verificationH); // falcor coord Order per sample: [center, x+h z+h, x+h z-h, x-h z+h, x-h z-h]
-           //        int numProbes = verificationPositions.size();
-           //        mpProbePosBuffer = mpDevice->createStructuredBuffer(
-           //            sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
-           //        );
-           //        mpProbePosBuffer->setName("probes world pos");
+                   //verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord sample: [center,+h, -h]
+                   ////verificationPositions = generateVerificationPositionsMixed(verificationY, verificationExtent, verificationRes, verificationH); // falcor coord Order per sample: [center, x+h z+h, x+h z-h, x-h z+h, x-h z-h]
+                   //int numProbes = verificationPositions.size();
+                   //mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                   //    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
+                   //);
+                   //mpProbePosBuffer->setName("probes world pos");
 
-           //         mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-           //         sizeof(ProbeSampleData),
-           //            numSamplesPerProbe * numProbes,
-           //         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-           //         MemoryType::DeviceLocal
-           //         );
-           //         mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
-           //    }
-           //    ProgramDesc rtProgDesc;
-           //    rtProgDesc.addShaderModules(mpScene->getShaderModules());
-           //    rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-           //    rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-           //                                             // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-           //                                             // tracing a shadow ray
-           //    rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-           //                                             // should be set as small as possible for maximum performance.
-           //    rtProgDesc.setMaxAttributeSize(8);
-           //    // Add global type conformances.
-           //    rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+                   // mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                   // sizeof(ProbeSampleData),
+                   //    numSamplesPerProbe * numProbes,
+                   // ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                   // MemoryType::DeviceLocal
+                   // );
+                   // mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+               }
+               ProgramDesc rtProgDesc;
+               rtProgDesc.addShaderModules(mpScene->getShaderModules());
+               rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+               rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+                                                        // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+                                                        // tracing a shadow ray
+               rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+                                                        // should be set as small as possible for maximum performance.
+               rtProgDesc.setMaxAttributeSize(8);
+               // Add global type conformances.
+               rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
 
-           //    ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-           //    sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-           //    sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-           //    // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-           //    auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-           //    // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+               ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+               sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+               sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+               // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+               auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+               // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
 
-           //    sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-           //    //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+               sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+               //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-           //    const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
-           //                                                                        // upon first call to this.
-           //    if (mpScene->useEmissiveLights())
-           //    {
-           //        if (!mpEmissiveSampler)
-           //        {
-           //            FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-           //            FALCOR_ASSERT(!mpEmissiveSampler);
+               const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
+                                                                                   // upon first call to this.
+               if (mpScene->useEmissiveLights())
+               {
+                   if (!mpEmissiveSampler)
+                   {
+                       FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+                       FALCOR_ASSERT(!mpEmissiveSampler);
 
-           //            switch (mEmissiveSamplerType)
-           //            {
-           //            case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-           //                mpEmissiveSampler =
-           //                    std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                break;
-           //            case EmissiveLightSamplerType::LightBVH:
-           //                mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-           //                    pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-           //                );
-           //                break;
-           //            case EmissiveLightSamplerType::Power:
-           //                mpEmissiveSampler =
-           //                    std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                break;
-           //            default:
-           //                FALCOR_THROW("Unknown emissive light sampler type");
-           //            }
-           //        }
-           //    }
+                       switch (mEmissiveSamplerType)
+                       {
+                       case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+                           mpEmissiveSampler =
+                               std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                           break;
+                       case EmissiveLightSamplerType::LightBVH:
+                           mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+                               pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+                           );
+                           break;
+                       case EmissiveLightSamplerType::Power:
+                           mpEmissiveSampler =
+                               std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                           break;
+                       default:
+                           FALCOR_THROW("Unknown emissive light sampler type");
+                       }
+                   }
+               }
 
-           //    mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+               mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
 
-           //    if (mpEmissiveSampler)
-           //    {
-           //        auto defines = mpEmissiveSampler->getDefines();
-           //        mpRtProgram->addDefines(defines);
-           //    }
+               if (mpEmissiveSampler)
+               {
+                   auto defines = mpEmissiveSampler->getDefines();
+                   mpRtProgram->addDefines(defines);
+               }
 
-           //    DefineList lightRelatedDefines;
-           //    lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-           //    lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+               DefineList lightRelatedDefines;
+               lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+               lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
 
-           //    mpRtProgram->addDefines(lightRelatedDefines);
+               mpRtProgram->addDefines(lightRelatedDefines);
 
-           //    mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
-           //}
+               mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+           }
 
            //if (!mbFinishSHPrecompute) // config for precomputing SH coefficients
            //{
@@ -986,89 +1121,89 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpGraphicsState->setDepthStencilState(pDsState);
 
            //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
-           mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+           //mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
 
-           //Re-apply the visibility masks from our member variables
-           for (int i = 0; i < 8; ++i)
-           {
-               mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
-           }
-           // Restore Leaf Only
-           mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+           ////Re-apply the visibility masks from our member variables
+           //for (int i = 0; i < 8; ++i)
+           //{
+           //    mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+           //}
+           //// Restore Leaf Only
+           //mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
-           mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-           if (!mNeedRebuildProbeVolume) {
-               mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
-               mAdaptiveProbeVolume->uploadToGPU();
-               mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-           }
-              
-            ProgramDesc rtProgDesc;
-            rtProgDesc.addShaderModules(mpScene->getShaderModules());
-            rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-            rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-                                                     // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-                                                     // tracing a shadow ray
-            rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-                                                     // should be set as small as possible for maximum performance.
-            rtProgDesc.setMaxAttributeSize(8);
-            // Add global type conformances.
-            rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+           //mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+           //if (!mNeedRebuildProbeVolume) {
+           //    mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
+           //    mAdaptiveProbeVolume->uploadToGPU();
+           //    mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+           //}
+           //   
+           // ProgramDesc rtProgDesc;
+           // rtProgDesc.addShaderModules(mpScene->getShaderModules());
+           // rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+           // rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+           //                                          // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+           //                                          // tracing a shadow ray
+           // rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+           //                                          // should be set as small as possible for maximum performance.
+           // rtProgDesc.setMaxAttributeSize(8);
+           // // Add global type conformances.
+           // rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
 
-            ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-            sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-            sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-            // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-            auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-            // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+           // ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+           // sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+           // sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+           // // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+           // auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+           // // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
 
-            sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-            //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+           // sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+           // //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-            const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
-            if (mpScene->useEmissiveLights())
-            {
-                if (!mpEmissiveSampler)
-                {
-                    FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-                    FALCOR_ASSERT(!mpEmissiveSampler);
+           // const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
+           // if (mpScene->useEmissiveLights())
+           // {
+           //     if (!mpEmissiveSampler)
+           //     {
+           //         FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+           //         FALCOR_ASSERT(!mpEmissiveSampler);
 
-                    switch (mEmissiveSamplerType)
-                    {
-                        case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-                            mpEmissiveSampler =
-                                std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                            break;
-                        case EmissiveLightSamplerType::LightBVH:
-                            mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-                                pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-                            );
-                            break;
-                        case EmissiveLightSamplerType::Power:
-                            mpEmissiveSampler =
-                                std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                            break;
-                        default:
-                            FALCOR_THROW("Unknown emissive light sampler type");
-                    }
-                }
-            }
+           //         switch (mEmissiveSamplerType)
+           //         {
+           //             case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+           //                 mpEmissiveSampler =
+           //                     std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+           //                 break;
+           //             case EmissiveLightSamplerType::LightBVH:
+           //                 mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+           //                     pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+           //                 );
+           //                 break;
+           //             case EmissiveLightSamplerType::Power:
+           //                 mpEmissiveSampler =
+           //                     std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+           //                 break;
+           //             default:
+           //                 FALCOR_THROW("Unknown emissive light sampler type");
+           //         }
+           //     }
+           // }
 
-           mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+           //mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
         
-            if (mpEmissiveSampler)
-            {
-                auto defines = mpEmissiveSampler->getDefines();
-                mpRtProgram->addDefines(defines);
-            }
+           // if (mpEmissiveSampler)
+           // {
+           //     auto defines = mpEmissiveSampler->getDefines();
+           //     mpRtProgram->addDefines(defines);
+           // }
 
-            DefineList lightRelatedDefines;
-            lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-            lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+           // DefineList lightRelatedDefines;
+           // lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+           // lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
 
-            mpRtProgram->addDefines(lightRelatedDefines);
+           // mpRtProgram->addDefines(lightRelatedDefines);
 
-            mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+           // mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
     }
 }
 
