@@ -1333,7 +1333,8 @@ std::vector<float3> generateVerificationPositionsMixed(float y, float extent, ui
     double step = (2.0 * extent) / (double)(resolution - 1);
 
     // Base Z is 0.0f
-    float z_base = 0.0f;
+    float z_base = -0.25f;
+    //float z_base = 0.0f;
 
     for (uint32_t j = 0; j < resolution; ++j)
     {
@@ -1396,10 +1397,12 @@ void calculateChannelRGradAndHessianSHCoeffLM(
     outGrad = float3(0.0f, 0.0f, 0.0f);
     outHessian = float3x3::zeros();
     int samplingSize = samplingData.size();
+
     for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
     {
         if (samplingData[sampleIdx].hitT < 0.0f) // ray miss
             continue;
+
         float3 s = float3(samplingData[sampleIdx].s.x, samplingData[sampleIdx].s.y, samplingData[sampleIdx].s.z);
         float3 n = float3(samplingData[sampleIdx].n.x, samplingData[sampleIdx].n.y, samplingData[sampleIdx].n.z);
         float3 L = float3(samplingData[sampleIdx].Li.x, samplingData[sampleIdx].Li.y, samplingData[sampleIdx].Li.z);
@@ -1419,12 +1422,12 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         float3 q = s - x;
 
         // r = ||q||
-        float rInv = 1.0f/length(q);
+        float rInv = 1.0f / length(q);
 
         // Contribution of this sample to ∇f_l^m
         // ∇_x Ω_i Y_l^m (ω_i )-Ω_i/r_i  ∇_(ω_i ) Y_l^m (ω_i)
-        float3 contrib = gradOmega * Ylm - Omega_i * rInv* gradYlm;
-        outGrad += (L.r* contrib);
+        float3 contrib = gradOmega * Ylm - Omega_i * rInv * gradYlm;
+        outGrad += (L.r * contrib);
 
         float3x3 H_Omega = hessianOmega(s, x, n, samplingSize);
         float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
@@ -1433,28 +1436,25 @@ void calculateChannelRGradAndHessianSHCoeffLM(
         float3 w = samplingDir[sampleIdx].dir;
         float rInvSq = rInv * rInv;
 
-        //  Accumulate Hessian of f_l^m
-        //∂_(x_j x_k)
-        //    f_l ^m =∑_(i = 1) ^ N▒L(ω_i)[(∂_(x_j x_k) Ω_i)Y_l ^ m - 1 / r_i((∂_(x_j) Ω_i)(∂_(ω_i, k) Y_l ^ m) + (∂_(x_k) Ω_i)(∂_(ω_i, j) Y_l ^ m)) +
-        //                                                Ω_i / (r_i ^ 2)((ω_i)_j(∂_(ω_i, k) Y_l ^ m) + ∂_(ω_i, j) ∂_(ω_i, k) Y_l ^ m)]
-         for (int j = 0; j < 3; ++j)
-         {
-             for (int k = 0; k < 3; ++k)
-             {
-                 // Term 1: (∂²Ω / ∂xj∂xk) * Y
-                 float term1 = H_Omega[j][k] * Ylm;
+        // Accumulate Hessian of f_l^m
+        for (int j = 0; j < 3; ++j)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                // Term 1: (∂²Ω / ∂xj∂xk) * Y
+                float term1 = H_Omega[j][k] * Ylm;
 
-                 // Term 2: -1/r * [ (∂Ω/∂xj)(∂Y/∂wk) + (∂Ω/∂xk)(∂Y/∂wj) ]
-                 // Note: We access float3 components using array indexing [j] and [k]
-                 float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
+                // Term 2: -1/r * [ (∂Ω/∂xj)(∂Y/∂wk) + (∂Ω/∂xk)(∂Y/∂wj) ]
+                float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
 
-                 // Term 3: Ω/r² * [ (ω)_j * (∂Y/∂wk) + (∂²Y / ∂wj∂wk) ]
-                 float term3 = Omega_i * rInvSq * (w[j] * gradYlm[k] + hessYlm[j][k]);
+                // Term 3: Ω/r² * [ (∂²Y / ∂wj∂wk) + (ω)_j * (∂Y/∂wk) + (ω)_k * (∂Y/∂wj) ]
 
-                 float contrib = term1 + term2 + term3;
-                 outHessian[j][k] += L.r * contrib;
-             }
-         }
+                float term3 = Omega_i * rInvSq * hessYlm[j][k];
+
+                float contrib = term1 + term2 + term3;
+                outHessian[j][k] += L.r * contrib;
+            }
+        }
     }
 }
 
@@ -1545,7 +1545,8 @@ void calculateGradRGBAndHessianLumSHCoeffLM(
                 // Note: We access float3 components using array indexing [j] and [k]
                 float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
                 // Term 3: Ω/r² * [ (ω)_j * (∂Y/∂wk) + (∂²Y / ∂wj∂wk) ]
-                float term3 = Omega_i * rInvSq * (w[j] * gradYlm[k] + hessYlm[j][k]);
+                //float term3 = Omega_i * rInvSq * (w[j] * gradYlm[k] + hessYlm[j][k]);
+                float term3 = Omega_i * rInvSq * hessYlm[j][k];
 
                 // Accumulate Luminance Weighted Hessian
                 outHessian[j][k] += L_lum * (term1 + term2 + term3);

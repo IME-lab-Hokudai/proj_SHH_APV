@@ -254,7 +254,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbe];
         //    mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbe * sizeof(ProbeSampleData));
 
-        //    int basisIdx = 2; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
+        //    int basisIdx = 6; // l=2, m=0 l(l+1)+m = 2*3 + 0 = 6
         //    int numBasis = 9;
         //    std::vector<float> coeffVec;
         //    coeffVec.clear();
@@ -335,138 +335,167 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //}
 #pragma endregion
 #pragma region  ====Finite difference verification code block (Row-by-Row)===
-if (mbVerify)
-{
-    // 1. Open CSV File
-    std::ofstream csvFile("verification_data.csv");
-    csvFile << "WorldX,WorldZ,AnalyticGrad,FDGrad,AnalyticHess,FDHess\n";
-
-    // 2. Settings (Matching your uploaded file)
-    int basisIdx = 4; // l=2, m=-2 (Index 4) - As seen in your uploaded code line 144
-    int numBasis = 9;
-    float verificationHSq = verificationH * verificationH;
-
-    // Step size for the grid coverage
-    double step = (2.0 * verificationExtent) / (double)(verificationRes - 1);
-
-    // =================================================================================
-    // MAIN LOOP: Process Row by Row (Z-Axis) to save GPU Memory
-    // =================================================================================
-    for (uint32_t zIdx = 0; zIdx < verificationRes; ++zIdx)
-    {
-        // A. Generate ONLY CENTER Positions (World Space)
-        // Optimization: We only raytrace the center. Neighbors are computed via Reprojection (Krivanek).
-        std::vector<float3> rowPositions;
-        rowPositions.clear();
-        rowPositions.reserve(verificationRes);
-
-        double z = -verificationExtent + step * (double)zIdx;
-
-        for (uint32_t xIdx = 0; xIdx < verificationRes; ++xIdx)
-        {
-            double x = -verificationExtent + step * (double)xIdx;
-            rowPositions.push_back(float3((float)x, verificationY, (float)z));
-        }
-
-        int numProbesInRow = (int)rowPositions.size();
-
-        // B. Update GPU Buffers (Small batch for this row)
-        mpProbePosBuffer = mpDevice->createStructuredBuffer(
-            sizeof(float3), numProbesInRow,
-            ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal,
-            rowPositions.data()
-        );
-
-        mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-            sizeof(ProbeSampleData),
-            numSamplesPerProbe * numProbesInRow,
-            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-            MemoryType::DeviceLocal
-        );
-
-        // C. Dispatch Ray Tracing
-        auto rtVar = mpRtVars->getRootVar();
-        rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-        rtVar["gProbePositions"] = mpProbePosBuffer;
-        if (mpEmissiveSampler) mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-        rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-        rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-        rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex;
-
-        mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbesInRow, 1));
-
-        // D. Readback Row Data
-        /*std::vector<ProbeSampleData> rowAllData(numSamplesPerProbe * numProbesInRow);
-        mpProbeSamplingResultBuffer->getBlob(rowAllData.data(), 0, rowAllData.size() * sizeof(ProbeSampleData));*/
-        ProbeSampleData* rowAllData = new ProbeSampleData[numSamplesPerProbe * numProbesInRow];
-        mpProbeSamplingResultBuffer->getBlob(rowAllData, 0, numSamplesPerProbe * numProbesInRow * sizeof(ProbeSampleData));
-
-        // E. Process Probes
-        for (int i = 0; i < verificationRes; ++i)
-        {
-            // 1. Extract Samples for the CENTER Probe
-            std::vector<ProbeSampleData> centerSamples;
-            centerSamples.reserve(numSamplesPerProbe);
-            int offset = i * numSamplesPerProbe;
-            for (int s = 0; s < numSamplesPerProbe; ++s) centerSamples.push_back(rowAllData[offset + s]);
-
-            // 2. Define Positions (World Space)
-            float3 centerPosWorld = rowPositions[i];
-
-            // 3. Define Polar Coordinates (Swizzled: Z, X, Y)
-            // Matches uploaded code lines 149-151
-            float3 centerPosPolar;
-            centerPosPolar.x = centerPosWorld.z;
-            centerPosPolar.y = centerPosWorld.x;
-            centerPosPolar.z = centerPosWorld.y;
-
-            // Neighbors (+h and -h along World X -> Polar Y)
-            float3 plusPosPolar = centerPosPolar;
-            plusPosPolar.y += verificationH;
-
-            float3 minusPosPolar = centerPosPolar;
-            minusPosPolar.y -= verificationH;
-
-            // 4. Compute Coefficients
-            // CENTER: Use Standard Projection (Matches uploaded code line 148)
-            float coeffR = calculateChannelRSHCoeffLM(basisIdx, centerSamples);
-
-            // NEIGHBORS: Use Reprojection (Matches uploaded code lines 160-161)
-            // Note: We reuse 'centerSamples' because that's what the old code did (it used probeIdx for all 3)
-            float coeffPlus = calculateCoeffRPrime(centerSamples, centerPosPolar, plusPosPolar, numBasis, basisIdx);
-            float coeffMinus = calculateCoeffRPrime(centerSamples, centerPosPolar, minusPosPolar, numBasis, basisIdx);
-
-            // 5. Finite Difference (Exact match to uploaded code)
-
-            // Gradient: Forward Difference (Line 163)
-            float fdGrad = (coeffPlus - coeffR) / verificationH;
-
-            // Hessian: Central Difference (Line 167)
-            float fdHess = (coeffPlus - 2.0f * coeffR + coeffMinus) / verificationHSq;
-
-            // 6. Analytic (Ours)
-            float3 analyticGrad = float3(0, 0, 0);
-            float3x3 analyticHess = float3x3::zeros();
-
-            calculateChannelRGradAndHessianSHCoeffLM(centerPosPolar, centerSamples, samplingDirs, basisIdx, analyticGrad, analyticHess);
-
-            // 7. Write to CSV
-            // AnalyticGrad.y corresponds to World-X (Polar-Y) partial derivative
-            csvFile << centerPosWorld.x << ","
-                << centerPosWorld.z << ","
-                << analyticGrad.y << ","
-                << fdGrad << ","
-                << analyticHess[1][1] << ","
-                << fdHess << "\n";
-        }
-    }
-
-    csvFile.close();
-    mbVerify = false;
-    mSampleIndex++;
-    std::cout << "Verification Data Export Complete!" << std::endl;
-}
+//if (mbVerify)
+//{
+//    // 1. Open CSV File
+//    std::ofstream csvFile("verification_data.csv");
+//    // Added AnalyticHessXZ and FDHessXZ columns
+//    csvFile << "WorldX,WorldZ,AnalyticGrad,FDGrad,AnalyticHessXX,FDHessXX,AnalyticHessXZ,FDHessXZ\n";
+//
+//    // 2. Settings
+//    int basisIdx = 4; // l=2, m=-2 (xy in world, depends on basis def)
+//    int numBasis = 9;
+//    float verificationHSq = verificationH * verificationH;
+//    float verificationHSq4 = 4.0f * verificationHSq; // Denominator for Mixed FD (4h^2)
+//
+//    // Step size for the grid coverage
+//    double step = (2.0 * verificationExtent) / (double)(verificationRes - 1);
+//
+//    // =================================================================================
+//    // MAIN LOOP: Process Row by Row (Z-Axis)
+//    // =================================================================================
+//    for (uint32_t zIdx = 0; zIdx < verificationRes; ++zIdx)
+//    {
+//        // A. Generate ONLY CENTER Positions (World Space)
+//        std::vector<float3> rowPositions;
+//        rowPositions.clear();
+//        rowPositions.reserve(verificationRes);
+//
+//        double z = -verificationExtent + step * (double)zIdx;
+//
+//        for (uint32_t xIdx = 0; xIdx < verificationRes; ++xIdx)
+//        {
+//            double x = -verificationExtent + step * (double)xIdx;
+//            rowPositions.push_back(float3((float)x, verificationY, (float)z));
+//        }
+//
+//        int numProbesInRow = (int)rowPositions.size();
+//
+//        // B. Update GPU Buffers
+//        mpProbePosBuffer = mpDevice->createStructuredBuffer(
+//            sizeof(float3), numProbesInRow,
+//            ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal,
+//            rowPositions.data()
+//        );
+//
+//        mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+//            sizeof(ProbeSampleData),
+//            numSamplesPerProbe * numProbesInRow,
+//            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+//            MemoryType::DeviceLocal
+//        );
+//
+//        // C. Dispatch Ray Tracing
+//        auto rtVar = mpRtVars->getRootVar();
+//        rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+//        rtVar["gProbePositions"] = mpProbePosBuffer;
+//        if (mpEmissiveSampler) mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+//
+//        rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+//        rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+//        rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+//
+//        mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbesInRow, 1));
+//
+//        // D. Readback Row Data
+//        ProbeSampleData* rowAllData = new ProbeSampleData[numSamplesPerProbe * numProbesInRow];
+//        mpProbeSamplingResultBuffer->getBlob(rowAllData, 0, numSamplesPerProbe * numProbesInRow * sizeof(ProbeSampleData));
+//
+//        // E. Process Probes
+//        for (int i = 0; i < verificationRes; ++i)
+//        {
+//            // 1. Extract Samples for the CENTER Probe
+//            std::vector<ProbeSampleData> centerSamples;
+//            centerSamples.reserve(numSamplesPerProbe);
+//            int offset = i * numSamplesPerProbe;
+//            for (int s = 0; s < numSamplesPerProbe; ++s) centerSamples.push_back(rowAllData[offset + s]);
+//
+//            // 2. Define Center Position (World Space)
+//            float3 centerPosWorld = rowPositions[i];
+//
+//            // 3. Define Polar Coordinates (Swizzled: Z, X, Y)
+//            float3 centerPosPolar;
+//            centerPosPolar.x = centerPosWorld.z;
+//            centerPosPolar.y = centerPosWorld.x;
+//            centerPosPolar.z = centerPosWorld.y;
+//
+//            // -----------------------------------------------------------------
+//            // 4. Stencil Generation (Using Reprojection / Virtual shifts)
+//            // -----------------------------------------------------------------
+//
+//            // --- A. Pure X Derivative Stencil (For Gradient and HessXX) ---
+//            // World X maps to Polar Y
+//            float3 posPolarXPlus = centerPosPolar; posPolarXPlus.y += verificationH;
+//            float3 posPolarXMinus = centerPosPolar; posPolarXMinus.y -= verificationH;
+//
+//            // --- B. Mixed XZ Derivative Stencil (For HessXZ) ---
+//            // World X maps to Polar Y, World Z maps to Polar X
+//            float3 posPolarXPZP = centerPosPolar; // X+ Z+
+//            posPolarXPZP.y += verificationH; posPolarXPZP.x += verificationH;
+//
+//            float3 posPolarXPZM = centerPosPolar; // X+ Z-
+//            posPolarXPZM.y += verificationH; posPolarXPZM.x -= verificationH;
+//
+//            float3 posPolarXMZP = centerPosPolar; // X- Z+
+//            posPolarXMZP.y -= verificationH; posPolarXMZP.x += verificationH;
+//
+//            float3 posPolarXMZM = centerPosPolar; // X- Z-
+//            posPolarXMZM.y -= verificationH; posPolarXMZM.x -= verificationH;
+//
+//
+//            // 5. Compute Coefficients (Numerical Reprojection)
+//            // Note: We use 'centerSamples' for ALL calls to lock the noise.
+//
+//            float coeffR = calculateChannelRSHCoeffLM(basisIdx, centerSamples);
+//
+//            // Pure X
+//            float coeffXP = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXPlus, numBasis, basisIdx);
+//            float coeffXM = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXMinus, numBasis, basisIdx);
+//
+//            // Mixed XZ
+//            float coeffXPZP = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXPZP, numBasis, basisIdx);
+//            float coeffXPZM = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXPZM, numBasis, basisIdx);
+//            float coeffXMZP = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXMZP, numBasis, basisIdx);
+//            float coeffXMZM = calculateCoeffRPrime(centerSamples, centerPosPolar, posPolarXMZM, numBasis, basisIdx);
+//
+//
+//            // 6. Finite Difference Calculations
+//
+//            // Gradient d/dX (World)
+//            float fdGrad = (coeffXP - coeffR) / verificationH; // Forward diff matches your old code, or use (XP-XM)/2h
+//
+//            // Hessian d^2/dX^2 (World)
+//            float fdHessXX = (coeffXP - 2.0f * coeffR + coeffXM) / verificationHSq;
+//
+//            // Hessian d^2/dXdZ (World) -> Formula: (f_++ - f_+- - f_-+ + f_--) / 4h^2
+//            float fdHessXZ = (coeffXPZP - coeffXPZM - coeffXMZP + coeffXMZM) / verificationHSq4;
+//
+//
+//            // 7. Analytic Calculations (Ours)
+//            float3 analyticGrad = float3(0, 0, 0);
+//            float3x3 analyticHess = float3x3::zeros();
+//            calculateChannelRGradAndHessianSHCoeffLM(centerPosPolar, centerSamples, samplingDirs, basisIdx, analyticGrad, analyticHess);
+//
+//            // Mapping:
+//            // AnalyticGrad.y corresponds to d/dPolarY -> d/dWorldX
+//            // AnalyticHess[1][1] corresponds to d^2/dPolarY^2 -> d^2/dWorldX^2
+//            // AnalyticHess[0][1] corresponds to d^2/dPolarX dPolarY -> d^2/dWorldZ dWorldX
+//
+//            // 8. Write to CSV
+//            csvFile << centerPosWorld.x << "," << centerPosWorld.z << ","
+//                << analyticGrad.y << "," << fdGrad << ","
+//                << analyticHess[1][1] << "," << fdHessXX << ","
+//                << analyticHess[0][1] << "," << fdHessXZ << "\n";
+//        }
+//
+//        delete[] rowAllData; // Cleanup array
+//    }
+//
+//    csvFile.close();
+//    mbVerify = false;
+//    mSampleIndex++;
+//    std::cout << "Verification Data Export Complete!" << std::endl;
+//}
 #pragma endregion
 #pragma region  ====Uniform grid SH coeff block===
         //if (!mbFinishSHPrecompute)
@@ -562,122 +591,122 @@ if (mbVerify)
         //}
 #pragma endregion
         // build adaptive probe grid here
-    //    if (mNeedRebuildProbeVolume)
-    //    {
-    //        // 1. Initialize
-    //        mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
+        if (mNeedRebuildProbeVolume)
+        {
+            // 1. Initialize
+            mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-    //        // 2. Loop until the volume stops asking for more work (Breadth-First Build)
-    //        while (mAdaptiveProbeVolume->hasPendingBatch())
-    //        {
-    //            // --- A. Get positions for THIS batch ---
-    //            std::vector<float3> pendingProbePositions;
-    //            mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
+            // 2. Loop until the volume stops asking for more work (Breadth-First Build)
+            while (mAdaptiveProbeVolume->hasPendingBatch())
+            {
+                // --- A. Get positions for THIS batch ---
+                std::vector<float3> pendingProbePositions;
+                mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
 
-    //            uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+                uint32_t numProbes = (uint32_t)pendingProbePositions.size();
 
-    //            // --- B. Prepare Buffers (Re-create for new size) ---
-    //            // Input: Positions
-    //            mpProbePosBuffer = mpDevice->createStructuredBuffer(
-    //                sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
-    //            );
-    //            mpProbePosBuffer->setName("probes world pos");
+                // --- B. Prepare Buffers (Re-create for new size) ---
+                // Input: Positions
+                mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
+                );
+                mpProbePosBuffer->setName("probes world pos");
 
-    //            // Output: Ray Tracing Samples
-    //            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-    //                sizeof(ProbeSampleData),
-    //                numSamplesPerProbe * numProbes,
-    //                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-    //                MemoryType::DeviceLocal
-    //            );
-    //            mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
+                // Output: Ray Tracing Samples
+                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                    sizeof(ProbeSampleData),
+                    numSamplesPerProbe * numProbes,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                    MemoryType::DeviceLocal
+                );
+                mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
 
-    //            // --- C. Run Ray Tracing ---
-    //            auto rtVar = mpRtVars->getRootVar();
-    //            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-    //            rtVar["gProbePositions"] = mpProbePosBuffer;
-    //            if (mpEmissiveSampler)
-    //                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+                // --- C. Run Ray Tracing ---
+                auto rtVar = mpRtVars->getRootVar();
+                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+                rtVar["gProbePositions"] = mpProbePosBuffer;
+                if (mpEmissiveSampler)
+                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
 
-    //            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-    //            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+                rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
 
-    //            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
 
-    //            // --- D. Readback Results ---
-    //            ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
-    //            mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
+                // --- D. Readback Results ---
+                ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
+                mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
 
-    //            // --- E. Process Each Probe (CPU Math) ---
-    //            for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
-    //            {
-    //                // Gather samples for this specific probe
-    //                int offset = probeIdx * numSamplesPerProbe;
-    //                std::vector<ProbeSampleData> probeSamplingResults;
-    //                probeSamplingResults.reserve(numSamplesPerProbe);
-    //                for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
-    //                {
-    //                    probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
-    //                }
+                // --- E. Process Each Probe (CPU Math) ---
+                for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+                {
+                    // Gather samples for this specific probe
+                    int offset = probeIdx * numSamplesPerProbe;
+                    std::vector<ProbeSampleData> probeSamplingResults;
+                    probeSamplingResults.reserve(numSamplesPerProbe);
+                    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
+                    {
+                        probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+                    }
 
-    //                // Math Containers
-    //                std::vector<GradSHCoeff> grads;
-    //                //std::vector<HessianSHCoeff> hessians;
-    //                std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
-    //                std::vector<float3> coeffs;
+                    // Math Containers
+                    std::vector<GradSHCoeff> grads;
+                    //std::vector<HessianSHCoeff> hessians;
+                    std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
+                    std::vector<float3> coeffs;
 
-    //                // Coordinate conversion
-    //                float3 xPolar;
-    //                xPolar.x = pendingProbePositions[probeIdx].z;
-    //                xPolar.y = pendingProbePositions[probeIdx].x;
-    //                xPolar.z = pendingProbePositions[probeIdx].y;
+                    // Coordinate conversion
+                    float3 xPolar;
+                    xPolar.x = pendingProbePositions[probeIdx].z;
+                    xPolar.y = pendingProbePositions[probeIdx].x;
+                    xPolar.z = pendingProbePositions[probeIdx].y;
 
-    //                // Compute Physics
-    //                //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
-    //                calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
-    //                calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
+                    // Compute Physics
+                    //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
+                    calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
+                    calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
 
-    //                //Feed Data back to Volume
-    //                // We pass the batch index (probeIdx) and the calculated data
-    //                mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
-    //            }
+                    //Feed Data back to Volume
+                    // We pass the batch index (probeIdx) and the calculated data
+                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
+                }
 
-    //            delete[] allProbeSamplingData;
+                delete[] allProbeSamplingData;
 
-    //            // --- F. Finish Batch ---
-    //            // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
-    //            mAdaptiveProbeVolume->finishBatch();
-    //        }
+                // --- F. Finish Batch ---
+                // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
+                mAdaptiveProbeVolume->finishBatch();
+            }
 
-    //        // 3. TODO: upload to GPU for visualization
-    //        mAdaptiveProbeVolume->uploadToGPU();
-    //        mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
-    //        mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
-    //        mNeedRebuildProbeVolume = false;
-    //        mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-    //    }
+            // 3. TODO: upload to GPU for visualization
+            mAdaptiveProbeVolume->uploadToGPU();
+            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
+            mAdaptiveProbeVolume->saveToFile("AdaptiveProbeVolume.txt");
+            mNeedRebuildProbeVolume = false;
+            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+        }
 
-    //    // visualize probes
-    //    //if (mbFinishSHPrecompute)
-    //    //{
-    //        pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+        // visualize probes
+        //if (mbFinishSHPrecompute)
+        //{
+            pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
-    //         auto shShaderRootVar = mpVars->getRootVar();
-    //         shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-    //         shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-    //         shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+             auto shShaderRootVar = mpVars->getRootVar();
+             shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+             shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
 
-    //         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-    //         if (mbShowAdaptiveGrid)
-    //         {
-    //            mpProbeVisualizePass->setCameraData(
-    //                mpScene->getCamera()->getViewProjMatrix()
-    //            );
-    //           
-    //            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-    //         }
-    //    //}
+             if (mbShowAdaptiveGrid)
+             {
+                mpProbeVisualizePass->setCameraData(
+                    mpScene->getCamera()->getViewProjMatrix()
+                );
+               
+                mpProbeVisualizePass->execute(pRenderContext, mpFbo);
+             }
+        //}
     }
 }
 float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx)
@@ -840,7 +869,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                   // verificationPositions.push_back(tmpXBackward);
 
                    //verificationPositions = generateVerificationPositions(verificationY, verificationExtent, verificationRes, verificationH); // Falcor coord sample: [center,+h, -h]
-                   ////verificationPositions = generateVerificationPositionsMixed(verificationY, verificationExtent, verificationRes, verificationH); // falcor coord Order per sample: [center, x+h z+h, x+h z-h, x-h z+h, x-h z-h]
+                   //verificationPositions = generateVerificationPositionsMixed(verificationY, verificationExtent, verificationRes, verificationH); // falcor coord Order per sample: [center, x+h z+h, x+h z-h, x-h z+h, x-h z-h]
                    //int numProbes = verificationPositions.size();
                    //mpProbePosBuffer = mpDevice->createStructuredBuffer(
                    //    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, verificationPositions.data()
@@ -1121,89 +1150,89 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpGraphicsState->setDepthStencilState(pDsState);
 
            //mpFullScreenPass = FullScreenPass::create(mpDevice, kEnvMapShaderFile, mpScene->getSceneDefines(), 0, "vsMain");
-           //mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+           mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
 
-           ////Re-apply the visibility masks from our member variables
-           //for (int i = 0; i < 8; ++i)
-           //{
-           //    mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
-           //}
-           //// Restore Leaf Only
-           //mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+           //Re-apply the visibility masks from our member variables
+           for (int i = 0; i < 8; ++i)
+           {
+               mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+           }
+           // Restore Leaf Only
+           mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
-           //mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-           //if (!mNeedRebuildProbeVolume) {
-           //    mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
-           //    mAdaptiveProbeVolume->uploadToGPU();
-           //    mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-           //}
-           //   
-           // ProgramDesc rtProgDesc;
-           // rtProgDesc.addShaderModules(mpScene->getShaderModules());
-           // rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-           // rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-           //                                          // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-           //                                          // tracing a shadow ray
-           // rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-           //                                          // should be set as small as possible for maximum performance.
-           // rtProgDesc.setMaxAttributeSize(8);
-           // // Add global type conformances.
-           // rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+           mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+           if (!mNeedRebuildProbeVolume) {
+               mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
+               mAdaptiveProbeVolume->uploadToGPU();
+               mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+           }
+              
+            ProgramDesc rtProgDesc;
+            rtProgDesc.addShaderModules(mpScene->getShaderModules());
+            rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+            rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+                                                     // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+                                                     // tracing a shadow ray
+            rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+                                                     // should be set as small as possible for maximum performance.
+            rtProgDesc.setMaxAttributeSize(8);
+            // Add global type conformances.
+            rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
 
-           // ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-           // sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-           // sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-           // // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-           // auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-           // // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+            ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+            sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+            sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+            // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+            auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+            // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
 
-           // sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-           // //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+            sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+            //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-           // const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
-           // if (mpScene->useEmissiveLights())
-           // {
-           //     if (!mpEmissiveSampler)
-           //     {
-           //         FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-           //         FALCOR_ASSERT(!mpEmissiveSampler);
+            const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
+            if (mpScene->useEmissiveLights())
+            {
+                if (!mpEmissiveSampler)
+                {
+                    FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+                    FALCOR_ASSERT(!mpEmissiveSampler);
 
-           //         switch (mEmissiveSamplerType)
-           //         {
-           //             case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-           //                 mpEmissiveSampler =
-           //                     std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                 break;
-           //             case EmissiveLightSamplerType::LightBVH:
-           //                 mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-           //                     pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-           //                 );
-           //                 break;
-           //             case EmissiveLightSamplerType::Power:
-           //                 mpEmissiveSampler =
-           //                     std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-           //                 break;
-           //             default:
-           //                 FALCOR_THROW("Unknown emissive light sampler type");
-           //         }
-           //     }
-           // }
+                    switch (mEmissiveSamplerType)
+                    {
+                        case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+                            mpEmissiveSampler =
+                                std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                            break;
+                        case EmissiveLightSamplerType::LightBVH:
+                            mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+                                pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+                            );
+                            break;
+                        case EmissiveLightSamplerType::Power:
+                            mpEmissiveSampler =
+                                std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                            break;
+                        default:
+                            FALCOR_THROW("Unknown emissive light sampler type");
+                    }
+                }
+            }
 
-           //mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+           mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
         
-           // if (mpEmissiveSampler)
-           // {
-           //     auto defines = mpEmissiveSampler->getDefines();
-           //     mpRtProgram->addDefines(defines);
-           // }
+            if (mpEmissiveSampler)
+            {
+                auto defines = mpEmissiveSampler->getDefines();
+                mpRtProgram->addDefines(defines);
+            }
 
-           // DefineList lightRelatedDefines;
-           // lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-           // lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+            DefineList lightRelatedDefines;
+            lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+            lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
 
-           // mpRtProgram->addDefines(lightRelatedDefines);
+            mpRtProgram->addDefines(lightRelatedDefines);
 
-           // mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+            mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
     }
 }
 

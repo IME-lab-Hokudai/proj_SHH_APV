@@ -375,13 +375,13 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
         normalSampleW = normalSample;
   }
 
-  float3 shCoeffs[MAX_SH_BASIS];
+  float3 finalSH[MAX_SH_BASIS];
   // 1. Find the Leaf Voxel
-  // int probeIdx = traverseOctree(shadingData.posW);
-  // 2. Compute interpolated SH Coeffs
-  // fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
-  // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
-  // fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, shCoeffs);
+   int probeIdx = traverseOctree(shadingData.posW);
+   // 2. Compute interpolated SH Coeffs
+   //fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+   // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+   // fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, finalSH);
 
   // ===============================================================================================
   // STEP 1: INITIAL SETUP & SELF-SAMPLING
@@ -392,7 +392,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 
   // Fetch the High-Quality SH data from *this* voxel.
   // This is our "Base Layer." If we are in the center of the voxel, we use this 100%.
-  float3 finalSH[9];
+  //float3 finalSH[9];
   fetchHermiteInterpolatedSH(myIdx, vsOut.posW, finalSH);
 
   // ===============================================================================================
