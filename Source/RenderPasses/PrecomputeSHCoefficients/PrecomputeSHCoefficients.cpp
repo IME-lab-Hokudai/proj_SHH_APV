@@ -35,6 +35,7 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "ProbeSamplingData.slang"
 const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 4096*2;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;

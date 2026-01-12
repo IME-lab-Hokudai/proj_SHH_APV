@@ -35,7 +35,8 @@ void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs
 {
     GPUProbe p = gProbeBuffer[probeIdx];
     float3 size = p.maxPoint - p.minPoint;
-    float3 t = saturate((pos - p.minPoint) / size);
+    //float3 t = saturate((pos - p.minPoint) / size);
+    float3 t = (pos - p.minPoint) / size;
 
     int cIdx[8];
     for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
@@ -496,6 +497,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), finalSH);
 
   float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
+  //float3 diffuseColor = irradiance.rgb;
    float3 emissiveColor = emissiveSample.rgb;
    float3 litColor = diffuseColor + emissiveColor;
     return float4(litColor,1.0f);

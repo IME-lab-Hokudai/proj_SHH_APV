@@ -96,7 +96,8 @@ sceneBuilder.addMeshInstance(
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Right Wall', Transform(scaling=float3(0.55, 1.0, 0.55), translation=float3(0.275, 0.275, 0), rotationEulerDeg=float3(0, 0, 90))),
     #sceneBuilder.addNode('Right Wall', Transform(scaling=float3(1.0, 1.0, 1.0), translation=float3(0.5, 0.5, 0), rotationEulerDeg=float3(0, 0, 90))),
-    sceneBuilder.addTriangleMesh(quadMesh, rightWall)
+    #sceneBuilder.addTriangleMesh(quadMesh, rightWall)
+	sceneBuilder.addTriangleMesh(quadMesh, leftWall)
 )
 
 sceneBuilder.addMeshInstance(
