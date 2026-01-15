@@ -101,7 +101,7 @@ sceneBuilder.addMeshInstance(
 )
 
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('Light', Transform(scaling=0.15, translation=float3(0, 0.549, 0), rotationEulerDeg=float3(180, 0, 0))),
+    sceneBuilder.addNode('Light', Transform(scaling=0.15, translation=float3(0, 0.5499, 0), rotationEulerDeg=float3(180, 0, 0))),
     sceneBuilder.addTriangleMesh(quadMesh, light)
 )
 

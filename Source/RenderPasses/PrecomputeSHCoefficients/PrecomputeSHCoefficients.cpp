@@ -41,7 +41,8 @@ const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
-const float ErrorThreshold = 2.0f;//threshold for Erel
+//const float ErrorThreshold = 2.0f;//threshold for Erel
+const float ErrorThreshold = 1.5f;//threshold for Erel
 const bool useRelativeError = true;
 namespace
 {
@@ -626,6 +627,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 auto rtVar = mpRtVars->getRootVar();
                 rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
                 rtVar["gProbePositions"] = mpProbePosBuffer;
+                rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
                 if (mpEmissiveSampler)
                     mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
 
@@ -885,73 +887,73 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                    // );
                    // mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
                }
-               ProgramDesc rtProgDesc;
-               rtProgDesc.addShaderModules(mpScene->getShaderModules());
-               rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-               rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-                                                        // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-                                                        // tracing a shadow ray
-               rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-                                                        // should be set as small as possible for maximum performance.
-               rtProgDesc.setMaxAttributeSize(8);
-               // Add global type conformances.
-               rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
+               //ProgramDesc rtProgDesc;
+               //rtProgDesc.addShaderModules(mpScene->getShaderModules());
+               //rtProgDesc.addShaderLibrary(kProbeSamplingFile);
+               //rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
+               //                                         // primary-ray ClosestHit shader for reflections, 1 for reflection ray
+               //                                         // tracing a shadow ray
+               //rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+               //                                         // should be set as small as possible for maximum performance.
+               //rtProgDesc.setMaxAttributeSize(8);
+               //// Add global type conformances.
+               //rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
 
-               ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-               sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-               sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-               // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-               auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-               // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+               //ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+               //sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
+               //sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
+               //// sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+               //auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
+               //// auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
 
-               sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-               //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+               //sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
+               ////  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
-               const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
-                                                                                   // upon first call to this.
-               if (mpScene->useEmissiveLights())
-               {
-                   if (!mpEmissiveSampler)
-                   {
-                       FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-                       FALCOR_ASSERT(!mpEmissiveSampler);
+               //const auto& pLights = mpScene->getILightCollection(pRenderContext); // REMARK weird design that light collection is created
+               //                                                                    // upon first call to this.
+               //if (mpScene->useEmissiveLights())
+               //{
+               //    if (!mpEmissiveSampler)
+               //    {
+               //        FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+               //        FALCOR_ASSERT(!mpEmissiveSampler);
 
-                       switch (mEmissiveSamplerType)
-                       {
-                       case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-                           mpEmissiveSampler =
-                               std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                           break;
-                       case EmissiveLightSamplerType::LightBVH:
-                           mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-                               pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-                           );
-                           break;
-                       case EmissiveLightSamplerType::Power:
-                           mpEmissiveSampler =
-                               std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                           break;
-                       default:
-                           FALCOR_THROW("Unknown emissive light sampler type");
-                       }
-                   }
-               }
+               //        switch (mEmissiveSamplerType)
+               //        {
+               //        case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+               //            mpEmissiveSampler =
+               //                std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+               //            break;
+               //        case EmissiveLightSamplerType::LightBVH:
+               //            mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+               //                pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+               //            );
+               //            break;
+               //        case EmissiveLightSamplerType::Power:
+               //            mpEmissiveSampler =
+               //                std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+               //            break;
+               //        default:
+               //            FALCOR_THROW("Unknown emissive light sampler type");
+               //        }
+               //    }
+               //}
 
-               mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
+               //mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
 
-               if (mpEmissiveSampler)
-               {
-                   auto defines = mpEmissiveSampler->getDefines();
-                   mpRtProgram->addDefines(defines);
-               }
+               //if (mpEmissiveSampler)
+               //{
+               //    auto defines = mpEmissiveSampler->getDefines();
+               //    mpRtProgram->addDefines(defines);
+               //}
 
-               DefineList lightRelatedDefines;
-               lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-               lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+               //DefineList lightRelatedDefines;
+               //lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+               //lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
 
-               mpRtProgram->addDefines(lightRelatedDefines);
+               //mpRtProgram->addDefines(lightRelatedDefines);
 
-               mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+               //mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
            }
 
            //if (!mbFinishSHPrecompute) // config for precomputing SH coefficients
@@ -1174,7 +1176,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
                                                      // primary-ray ClosestHit shader for reflections, 1 for reflection ray
                                                      // tracing a shadow ray
-            rtProgDesc.setMaxPayloadSize(64);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
+            rtProgDesc.setMaxPayloadSize(128);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
                                                      // should be set as small as possible for maximum performance.
             rtProgDesc.setMaxAttributeSize(8);
             // Add global type conformances.
@@ -1183,12 +1185,12 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
             sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
             sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-            // sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
+             sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
             auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-            // auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
+             auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
 
             sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-            //  sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
+            sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
 
             const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
             if (mpScene->useEmissiveLights())

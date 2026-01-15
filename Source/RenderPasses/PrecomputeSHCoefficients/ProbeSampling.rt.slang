@@ -1,29 +1,5 @@
 /***************************************************************************
- # Copyright (c) 2015-24, NVIDIA CORPORATION. All rights reserved.
- #
- # Redistribution and use in source and binary forms, with or without
- # modification, are permitted provided that the following conditions
- # are met:
- #  * Redistributions of source code must retain the above copyright
- #    notice, this list of conditions and the following disclaimer.
- #  * Redistributions in binary form must reproduce the above copyright
- #    notice, this list of conditions and the following disclaimer in the
- #    documentation and/or other materials provided with the distribution.
- #  * Neither the name of NVIDIA CORPORATION nor the names of its
- #    contributors may be used to endorse or promote products derived
- #    from this software without specific prior written permission.
- #
- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS "AS IS" AND ANY
- # EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- # PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- # CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- # PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- # PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ # ProbeSampling.rt.slang - Updated for 5-Bounce Path Tracing
  **************************************************************************/
 
 import Scene.Raytracing;
@@ -38,57 +14,51 @@ StructuredBuffer<ProbeDirSample> gProbeDirSamples;
 StructuredBuffer<float3> gProbePositions;
 RWStructuredBuffer<ProbeSampleData> gProbeSamplingOutput;
 
-
 static const bool kUseEmissiveLights = USE_EMISSIVE_LIGHTS;
 static const bool kUseAnalyticLights = USE_ANALYTIC_LIGHTS;
+static const uint kMaxBounces = 5; 
 
 cbuffer PerFrameCB
 {
-    uint sampleIndex; // for UniformSampleGenerator. I don't know how to use it properly yet'
+    uint sampleIndex;
     uint numSamplePerProbe;
     EmissiveLightSampler emissiveSampler;
 };
 
+// Updated Payload to handle "Next Ray" data
 struct PrimaryRayData
 {
-    float4 color;
-    float3 s; // hit world position
-    uint depth;
-    float3 n; // hit world normal
+    float3 Li;           // Direct Light contribution at this hit
+    float3 nextRayOrigin;// Where the next bounce starts
+    float3 nextRayDir;   // Where the next bounce goes
+    float3 throughput;   // Color weight (BRDF * Cos / PDF)
+    bool terminated;     // Did the ray hit the sky or get absorbed?
+    
+    // Probe Data (Only saved on 1st hit)
+    float3 s;            // Hit Position
+    float3 n;            // Hit Normal
     float hitT;
+
+    UniformSampleGenerator sg;
 };
 
-/** Describes a light sample.
-Copy from Falcor's PathTracer.slang
- */
 struct LightSample
 {
-    float3 Li;      ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
-    float pdf;      ///< Pdf with respect to solid angle at the shading point.
-    float3 origin;  ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
-    float distance; ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
-    float3 dir;     ///< Ray direction for visibility evaluation (normalized).
-    uint lightType; ///< Light type this sample comes from (LightType casted to uint).
-
+    float3 Li;
+    float pdf;
+    float3 origin;
+    float distance;
+    float3 dir;
+    uint lightType;
     Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
 };
 
-/** Describes a path vertex.
-Copy from Falcor's PathTracer.slang
- */
 struct PathVertex
 {
-    uint index;        ///< Vertex index (0 = camera, 1 = primary hit, 2 = secondary hit, etc.).
-    float3 pos;        ///< Vertex position.
-    float3 faceNormal; ///< Geometry normal at the vertex (zero if not on a surface).
-    bool frontFacing;  ///< True if path vertex is on the front-facing side (if on a surface).
-
-    /** Initializes a path vertex.
-        \param[in] index Vertex index.
-        \param[in] pos Vertex position.
-        \param[in] faceNormal Geometry normal.
-        \param[in] frontFacing Front-facing flag.
-    */
+    uint index;
+    float3 pos;
+    float3 faceNormal;
+    bool frontFacing;
     __init(uint index, float3 pos, float3 faceNormal = float3(0.f), bool frontFacing = true)
     {
         this.index = index;
@@ -96,222 +66,282 @@ struct PathVertex
         this.faceNormal = faceNormal;
         this.frontFacing = frontFacing;
     }
-
-    /** Get position with offset applied in direction of the geometry normal to avoid self-intersection
-        for visibility rays.
-        \param[in] rayDir Direction of the visibility ray (does not need to be normalized).
-        \return Returns the offseted position.
-    */
     float3 getRayOrigin(float3 rayDir)
     {
         return computeRayOrigin(pos, dot(faceNormal, rayDir) >= 0 ? faceNormal : -faceNormal);
     }
-
-    /** Returns the oriented face normal.
-        \return Face normal flipped to the same side as the view vector.
-    */
     float3 getOrientedFaceNormal()
     {
         return frontFacing ? faceNormal : -faceNormal;
     }
 };
 
-/** Generates a light sample on the emissive geometry.
-     \param[in] vertex Path vertex.
-     \param[in] upperHemisphere True if only upper hemisphere should be considered.
-     \param[in,out] sg Sample generator.
-     \param[out] ls Struct describing valid samples.
-     \return True if the sample is valid and has nonzero contribution, false otherwise.
- */
 bool generateEmissiveSample(const PathVertex vertex, const bool upperHemisphere, inout UniformSampleGenerator sg, out LightSample ls)
 {
-    ls = {}; // Default initialization to avoid divergence at returns.
+    ls = {};
     if (!kUseEmissiveLights) return false;
-
     TriangleLightSample tls;
     if (!emissiveSampler.sampleLight(vertex.pos, vertex.getOrientedFaceNormal(), upperHemisphere, sg, tls)) return false;
-
-    // Setup returned sample.
     ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
     ls.pdf = tls.pdf;
-    // Offset shading and light position to avoid self-intersection.
     float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
     ls.origin = vertex.getRayOrigin(lightPos - vertex.pos);
     float3 toLight = lightPos - ls.origin;
     ls.distance = length(toLight);
     ls.dir = normalize(toLight);
-
     return any(ls.Li > 0.f);
 }
 
-//struct ShadowRayData
-//{
-//    bool hit;
-//};
+bool traceVisibilityRay(const Ray ray)
+{
+    VisibilityRayData hitData;
+    hitData.visible = false; // Default to blocked
 
-//[shader("miss")]
-//void shadowMiss(inout ShadowRayData hitData)
-//{
-//    hitData.hit = false;
-//}
+    RayDesc rayDesc;
+    rayDesc.Origin = ray.origin;
+    rayDesc.Direction = ray.dir;
+    rayDesc.TMin = ray.tMin;
+    rayDesc.TMax = ray.tMax;
 
-//[shader("anyhit")]
-//void shadowAnyHit(inout ShadowRayData hitData, BuiltInTriangleIntersectionAttributes attribs)
-//{
-//    hitData.hit = true;
-//}
+    TraceRay(
+        gScene.rtAccel,
+        RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+        0xFF,
+             1, // Ray Index 1 (Shadow/Visibility)
+             rayTypeCount,
+             1, // Miss Index 1 (Shadow/Visibility)
+             rayDesc,
+             hitData
+    );
+
+    return hitData.visible;
+}
+
+struct VisibilityRayData
+{
+    bool visible;
+};
+
+[shader("miss")]
+void shadowMiss(inout VisibilityRayData hitData)
+{
+    hitData.visible = true; // Missed all geometry -> Light is visible
+}
+
+[shader("anyhit")]
+void shadowAnyHit(inout VisibilityRayData hitData, BuiltInTriangleIntersectionAttributes attribs)
+{
+    // Hit something -> Light is blocked
+    hitData.visible = false;
+    AcceptHitAndEndSearch();
+}
 
 [shader("miss")]
 void primaryMiss(inout PrimaryRayData hitData)
 {
-    float3 rayOrgW = WorldRayOrigin();
-
-    float3 color = float3(0.0f, 0.0f, 0.0f);
-    // Direct lighting from analytic light sources.
-    if (kUseAnalyticLights) {
-        for (int i = 0; i < gScene.getLightCount(); i++)
-        {
-            AnalyticLightSample ls;
-            if (evalLightApproximate(rayOrgW, gScene.getLight(i), ls)) 
-            {
-                color += ls.Li; // when miss we can take light color directly
-            }
-        }
-    }
-
-    hitData.color = float4(color, 1.0f);
-    hitData.s = float3(0.f, 0.f, 0.f);
-    hitData.n = float3(0.f, 0.f, 0.f);
+    // Background / Environment Map support could go here.
+    // For now, space is black.
+    hitData.Li = float3(0.f); 
+    hitData.terminated = true; // Stop bouncing
+    
+    // Safety defaults
+    hitData.s = float3(0.f);
+    hitData.n = float3(0.f);
     hitData.hitT = -1.f;
 }
 
 [shader("closesthit")]
 void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersectionAttributes attribs)
 {
-    // Get the hit-point data.
+    // 1. Geometry & Material Setup
     float3 rayDirW = WorldRayDirection();
     float hitT = RayTCurrent();
     uint triangleIndex = PrimitiveIndex();
-
-    // Prepare the shading data.
     const GeometryInstanceID instanceID = getGeometryInstanceID();
     VertexData v = getVertexData(instanceID, triangleIndex, attribs);
     uint materialID = gScene.getMaterialID(instanceID);
     ShadingData sd = gScene.materials.prepareShadingData(v, materialID, -rayDirW);
-
-    // Create material instance and query its properties.
-    let lod = ExplicitLodTextureSampler(0.f);
-    let mi = gScene.materials.getMaterialInstance(sd, lod); // IMaterialInstance
-    let bsdfProperties = mi.getProperties(sd);
-
-    // Get emission (self-emissive surfaces)
-     float3 color = bsdfProperties.emission;
-
-     uint3 launchIndex = DispatchRaysIndex();
-
-     UniformSampleGenerator sg = UniformSampleGenerator(launchIndex.xy, sampleIndex);
-
-     // Direct lighting from analytic light sources.
-    if (kUseAnalyticLights) {
-         for (int i = 0; i < gScene.getLightCount(); i++)
-         {
-              AnalyticLightSample ls;
-              if (evalLightApproximate(sd.posW, gScene.getLight(i), ls)) // there is another function that handle more type of light
-              {
-                  color += mi.eval(sd, ls.dir, sg) * ls.Li;
-              }
-         }
-    }
-
-    if(kUseEmissiveLights){
-        const int numEmissiveSamplesPerTriangle = 4; // hard coded for now
-        int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
-        const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount)); // at least 1 sample per triangle
-        float3 accum = float3(0.0f);
-        for (int s = 0; s < numEmissiveSamples; ++s)
-        {
-            // Prepare a PathVertex for the current shading point
-            PathVertex vertex = PathVertex(0, sd.posW, sd.faceN, sd.frontFacing);
-
-            LightSample ls;
-            // Sample the upper hemisphere (typical for diffuse/irradiance)
-            if (generateEmissiveSample(vertex, true, sg, ls) && ls.pdf > 0.0f)
-            {
-                float3 bsdf = mi.eval(sd, ls.dir, sg);
-                accum += bsdf * ls.Li ;
-            }
-        }
-        color += accum / float(numEmissiveSamples);
-    }
-
-    hitData.color = float4(color, 1.0f);
+    
+    // Save Probe Data (Position/Normal)
     hitData.s = sd.posW;
     hitData.n = normalize(sd.frame.N);
-    //if(!sd.frontFacing)
-    //{
-    //    hitData.n = -hitData.n;
-    //}
-
     hitData.hitT = hitT;
-}
 
-//[shader("anyhit")]
-//void primaryAnyHit(inout PrimaryRayData rayData, BuiltInTriangleIntersectionAttributes attribs)
-//{
-//    // Alpha test for non-opaque geometry.
-//    GeometryInstanceID instanceID = getGeometryInstanceID();
-//    VertexData v = getVertexData(instanceID, PrimitiveIndex(), attribs);
-//    uint materialID = gScene.getMaterialID(instanceID);
-//    if (gScene.materials.alphaTest(v, materialID, 0.f))
-//    {
-//        IgnoreHit();
-//    }
-//}
+    let lod = ExplicitLodTextureSampler(0.f);
+    let mi = gScene.materials.getMaterialInstance(sd, lod);
+    let bsdfProperties = mi.getProperties(sd);
+    
+    // Sample Generator for this hit
+    uint3 launchIndex = DispatchRaysIndex();
+    // We mix hitT into the seed so every bounce gets different random numbers
+    //UniformSampleGenerator sg = UniformSampleGenerator(launchIndex.xy, sampleIndex);
+
+    // -------------------------------------------------------------------------
+    // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
+    // -------------------------------------------------------------------------
+    float3 directLight = bsdfProperties.emission; // Start with self-emission
+
+    // ANALYTIC LIGHTS
+    if (kUseAnalyticLights) {
+        for (int i = 0; i < gScene.getLightCount(); i++) {
+            AnalyticLightSample ls;
+            if (sampleLight(sd.posW, gScene.getLight(i), hitData.sg, ls)) {
+                // If the light is "above" the face, push out. If "below", push in.
+                float3 shadowRayOrigin = computeRayOrigin(sd.posW, dot(sd.faceN, ls.dir) >= 0 ? sd.faceN : -sd.faceN);
+                Ray shadowRay;
+                shadowRay.origin = shadowRayOrigin; // Offset to avoid acne
+                shadowRay.dir = ls.dir;
+                shadowRay.tMin = 0.001f;               // Bias
+                shadowRay.tMax = ls.distance - 0.001f; // Don't hit the light source itself
+
+                if (traceVisibilityRay(shadowRay))
+                {
+                    directLight += mi.eval(sd, ls.dir, hitData.sg) * ls.Li;
+                }
+            }
+        }
+    }
+
+    // EMISSIVE LIGHTS
+    if (kUseEmissiveLights) {
+        const int numEmissiveSamplesPerTriangle = 4;
+        int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
+        const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
+
+        float3 accum = float3(0.0f);
+        for (int s = 0; s < numEmissiveSamples; ++s) {
+            PathVertex vertex = PathVertex(0, sd.posW, sd.faceN, sd.frontFacing);
+            LightSample ls;
+            if (generateEmissiveSample(vertex, true, hitData.sg, ls) && ls.pdf > 0.0f) {
+                // FIX: Use traceVisibilityRay with ls.getVisibilityRay()
+                if (traceVisibilityRay(ls.getVisibilityRay()))
+                {
+                    float3 bsdf = mi.eval(sd, ls.dir, hitData.sg);
+                    accum += bsdf * ls.Li;
+                }
+            }
+        }
+        directLight += accum / float(numEmissiveSamples);
+    }
+    
+    hitData.Li = directLight;
+
+    // -------------------------------------------------------------------------
+    // 3. Indirect Lighting (Generate Next Ray)
+    // -------------------------------------------------------------------------
+    BSDFSample bsdfSample;
+
+    // mi.sample asks the material: "Where does the ray go next?"
+    if (mi.sample(sd, hitData.sg, bsdfSample, true))
+    {
+        // We use faceN (Geometric Normal) to safely offset the ray
+        float3 offsetNormal = dot(sd.faceN, bsdfSample.wo) >= 0 ? sd.faceN : -sd.faceN;
+        hitData.nextRayOrigin = computeRayOrigin(sd.posW, sd.faceN);
+        hitData.nextRayDir = bsdfSample.wo;
+        hitData.throughput = bsdfSample.weight; // This is (F * G * D * Cos) / PDF
+        hitData.terminated = false;
+    }
+    else 
+    {
+        // Ray absorbed (e.g. black diffuse)
+        hitData.terminated = true;
+        hitData.throughput = float3(0.f);
+    }
+}
 
 [shader("raygeneration")]
 void rayGen()
 {
     uint dirIdx = DispatchRaysIndex().x;
     uint probeIdx = DispatchRaysIndex().y;
+    
+    // 1. Initial Setup
+    float3 probePos = gProbePositions[probeIdx];
+    float3 dir = gProbeDirSamples[dirIdx].dir;
 
-    float3 probePos = gProbePositions[probeIdx]; // generated in Falcor coord system
-    float3 dir = gProbeDirSamples[dirIdx].dir;   // generated in Polar coord system Z - up
-
-    // Convert sampling dir generated in Polar coord system Z - up to Falcor coordinates
+    // Convert Polar Z-up to Falcor Y-up
     float3 dirFalcor;
-    dirFalcor.x = dir.y; // right
-    dirFalcor.y = dir.z; // up
-    dirFalcor.z = dir.x; // forward
+    dirFalcor.x = dir.y; 
+    dirFalcor.y = dir.z; 
+    dirFalcor.z = dir.x; 
 
+    // 2. Path Tracing State
+    float3 accumColor = float3(0.f);
+    float3 throughput = float3(1.f);
+    
     RayDesc ray;
     ray.Origin = probePos;
-    //ray.Direction = dir;
     ray.Direction = dirFalcor;
     ray.TMin = 0.001f;
-    ray.TMax = 100.f;
+    ray.TMax = 1000.f; // Increased range
 
-    PrimaryRayData hitData;
-    hitData.depth = 0;
+    // Variables to store the FIRST hit data (for the probe)
+    float3 firstHitPos = float3(0.f);
+    float3 firstHitNorm = float3(0.f);
+    float firstHitT = -1.0f;
 
-    TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+    //UniformSampleGenerator sg = UniformSampleGenerator(DispatchRaysIndex().xy, sampleIndex);
+    UniformSampleGenerator sg = UniformSampleGenerator(uint2(dirIdx, 0), sampleIndex);
+    // 3. The Bounce Loop
+    for (uint depth = 0; depth <= kMaxBounces; ++depth)
+    {
+        PrimaryRayData hitData;
+        hitData.terminated = false;
+        hitData.sg = sg;
+        // Trace
+        TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+        sg = hitData.sg; // Update sample generator state
+        // Capture First Hit Data Only (The probe only cares about the first wall)
+        if (depth == 0)
+        {
+            firstHitPos = hitData.s;
+            firstHitNorm = hitData.n;
+            firstHitT = hitData.hitT;
+        }
 
-    // convert back to Polar coord system for storage
-    float3 nFalcor = hitData.n;
+        if (hitData.terminated)
+        {
+            // Add environment light if you had one here
+            break; 
+        }
+
+        // Accumulate Light: Light = PreviousThroughput * CurrentDirectLight
+        accumColor += throughput * hitData.Li;
+
+        // Prepare for next bounce
+        throughput *= hitData.throughput;
+        
+        // Russian Roulette (Optional Optimization)
+        // Stops rays that become too dark to matter
+        //if (depth > 2)
+        //{
+        //    float p = max(throughput.r, max(throughput.g, throughput.b));
+        //    if (p < 0.01f) break; // Kill ray
+        //}
+
+        // Update Ray
+        ray.Origin = hitData.nextRayOrigin;
+        ray.Direction = hitData.nextRayDir;
+    }
+
+    // 4. Store Result (Convert back to Polar coords for storage)
+    // Normal
+    float3 nFalcor = firstHitNorm;
     float3 nPolar;
-    nPolar.x = nFalcor.z; // forward
-    nPolar.y = nFalcor.x; // right
-    nPolar.z = nFalcor.y; // up
+    nPolar.x = nFalcor.z; 
+    nPolar.y = nFalcor.x; 
+    nPolar.z = nFalcor.y; 
 
-    float3 sFalcor = hitData.s;
+    // Position
+    float3 sFalcor = firstHitPos;
     float3 sPolar;
-    sPolar.x = sFalcor.z; // forward
-    sPolar.y = sFalcor.x; // right
-    sPolar.z = sFalcor.y; // up
+    sPolar.x = sFalcor.z;
+    sPolar.y = sFalcor.x; 
+    sPolar.z = sFalcor.y; 
 
-
-    // Store result in a 2D (flattened) buffer
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].Li = hitData.color;
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].n = float4(nPolar, 1.0f);
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].s = float4(sPolar, 1.0f);
-    gProbeSamplingOutput[probeIdx * numSamplePerProbe + dirIdx].hitT = hitData.hitT;
+    uint outIdx = probeIdx * numSamplePerProbe + dirIdx;
+    gProbeSamplingOutput[outIdx].Li = float4(accumColor, 1.0f); // Final Indirect Color
+    gProbeSamplingOutput[outIdx].n = float4(nPolar, 1.0f);
+    gProbeSamplingOutput[outIdx].s = float4(sPolar, 1.0f);
+    gProbeSamplingOutput[outIdx].hitT = firstHitT;
 }

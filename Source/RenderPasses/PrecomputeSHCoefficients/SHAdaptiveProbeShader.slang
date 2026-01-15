@@ -378,7 +378,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 
   float3 finalSH[MAX_SH_BASIS];
   // 1. Find the Leaf Voxel
-   int probeIdx = traverseOctree(shadingData.posW);
+   //int probeIdx = traverseOctree(shadingData.posW);
    // 2. Compute interpolated SH Coeffs
    //fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
    // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, finalSH);
