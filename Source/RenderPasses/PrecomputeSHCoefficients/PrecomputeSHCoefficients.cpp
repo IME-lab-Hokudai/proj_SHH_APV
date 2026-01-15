@@ -41,8 +41,8 @@ const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
-//const float ErrorThreshold = 2.0f;//threshold for Erel
-const float ErrorThreshold = 1.5f;//threshold for Erel
+const float ErrorThreshold = 2.0f;//threshold for Erel
+//const float ErrorThreshold = 1.5f;//threshold for Erel
 const bool useRelativeError = true;
 namespace
 {

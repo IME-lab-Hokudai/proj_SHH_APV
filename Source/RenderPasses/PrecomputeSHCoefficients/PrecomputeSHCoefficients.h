@@ -109,7 +109,7 @@ private:
     float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
-    bool mNeedRebuildProbeVolume = false;
+    bool mNeedRebuildProbeVolume = true;
 
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };

@@ -40,6 +40,7 @@ struct PrimaryRayData
     float hitT;
 
     UniformSampleGenerator sg;
+    uint depth;
 };
 
 struct LightSample
@@ -179,7 +180,9 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     // -------------------------------------------------------------------------
     // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
     // -------------------------------------------------------------------------
-    float3 directLight = bsdfProperties.emission; // Start with self-emission
+    // For bounces (depth > 0), we rely on NEE (sampleLight) to handle lighting smoothly.
+    // float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
+    float3 directLight = float3(0.0f);
 
     // ANALYTIC LIGHTS
     if (kUseAnalyticLights) {
@@ -288,6 +291,7 @@ void rayGen()
         PrimaryRayData hitData;
         hitData.terminated = false;
         hitData.sg = sg;
+        hitData.depth = depth;
         // Trace
         TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
         sg = hitData.sg; // Update sample generator state
