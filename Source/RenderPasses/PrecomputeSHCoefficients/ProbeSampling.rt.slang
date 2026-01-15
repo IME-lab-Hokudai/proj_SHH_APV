@@ -181,8 +181,8 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
     // -------------------------------------------------------------------------
     // For bounces (depth > 0), we rely on NEE (sampleLight) to handle lighting smoothly.
-    // float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
-    float3 directLight = float3(0.0f);
+     float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
+    //float3 directLight = float3(0.0f);
 
     // ANALYTIC LIGHTS
     if (kUseAnalyticLights) {
@@ -238,7 +238,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     if (mi.sample(sd, hitData.sg, bsdfSample, true))
     {
         // We use faceN (Geometric Normal) to safely offset the ray
-        float3 offsetNormal = dot(sd.faceN, bsdfSample.wo) >= 0 ? sd.faceN : -sd.faceN;
+       // float3 offsetNormal = dot(sd.faceN, bsdfSample.wo) >= 0 ? sd.faceN : -sd.faceN;
         hitData.nextRayOrigin = computeRayOrigin(sd.posW, sd.faceN);
         hitData.nextRayDir = bsdfSample.wo;
         hitData.throughput = bsdfSample.weight; // This is (F * G * D * Cos) / PDF
