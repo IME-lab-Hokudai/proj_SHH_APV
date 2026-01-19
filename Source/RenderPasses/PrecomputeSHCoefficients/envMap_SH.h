@@ -51,6 +51,8 @@ void calculateSHCoeffsGradientsAndHessians(
     const std::vector<ProbeDirSample>& samplingDir
 );
 
+
+
 void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4> & out);
 
 // calculate gradient and hessian of SH basis functions up to l = 2.
@@ -59,6 +61,7 @@ void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<flo
 // note: it is for SH basis (Ylm) NOT for SH coefficients (Flm). Hlm and Glm are used in equation 2 and 4
 // it computes Glm and Hlm wrt direction vector (not spatial position)
 void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, std::array<float3, 9>& glm, std::array<float3x3, 9>& hlm);
+void SHGradientL2(const float3& normDir, std::array<float, 9>& ylm, std::array<float3, 9>& glm);
 
 // note that we calculate up to l = 2 only
 void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples);
@@ -180,6 +183,9 @@ void calculateGradAndHessianSHCoeffLM(
     HessianSHCoeff& outHessian
 );
 
+//for uniform grid
+void calculateGradSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad);
+void calculateSHCoeffsGradients(std::vector<GradSHCoeff>& gradOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
 //-------------------------------------------------------------------------------
 // Compute full 3x3 Hessian of SH coefficient f_l^m at a grid point
 //-------------------------------------------------------------------------------

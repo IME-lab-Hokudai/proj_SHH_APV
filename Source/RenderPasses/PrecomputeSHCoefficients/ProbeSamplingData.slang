@@ -73,4 +73,15 @@ struct GPUProbe
     int pad3[2]; // Keep 16-byte alignment if needed
 };
 
+struct UniformGridCorner
+{
+    // Level 2 SH = 9 Coefficients.
+    float4 coeffs[9]; // .rgb = SH Value
+
+    // Gradients for interpolation
+    float4 gradR[9]; // .xyz = Gradient of Red Channel
+    float4 gradG[9]; // .xyz = Gradient of Green Channel
+    float4 gradB[9]; // .xyz = Gradient of Blue Channel
+};
+
 END_NAMESPACE_FALCOR

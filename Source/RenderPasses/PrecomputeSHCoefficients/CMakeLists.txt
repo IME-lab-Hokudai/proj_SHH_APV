@@ -10,6 +10,8 @@ target_sources(PrecomputeSHCoefficients PRIVATE
 	envMap_SH.cpp
 	AdaptiveProbeVolume.h
 	AdaptiveProbeVolume.cpp
+    UniformProbeVolume.h
+    UniformProbeVolume.cpp
 	ProbeVisualizePass.h
 	ProbeVisualizePass.cpp
     SHShader.slang

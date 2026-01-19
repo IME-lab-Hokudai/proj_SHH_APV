@@ -27,6 +27,7 @@
  **************************************************************************/
 #pragma once
 #include "AdaptiveProbeVolume.h"
+#include "UniformProbeVolume.h"
 #include "envMap_SH.h"
 #include "Falcor.h"
 #include "ProbeVisualizePass.h"
@@ -109,6 +110,7 @@ private:
     float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
+    ref<UniformProbeVolume> mUniformProbeVolume;
     bool mNeedRebuildProbeVolume = true;
 
     // Add this array to track checkbox states

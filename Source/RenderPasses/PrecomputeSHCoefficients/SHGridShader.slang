@@ -1,20 +1,160 @@
 import Scene.Raster; // Imports defaultVS.
+#include "ProbeSamplingData.slang"
 #include "Utils/Math/MathConstants.slangh"
 
 SamplerState gLinearSampler;
 #define MAX_SH_BASIS 9
-// Indexing: probeIndex * numBasis + basisIndex
-StructuredBuffer<float4> gSHCoeffs;
 
-cbuffer gProbeGridInfo
+StructuredBuffer<UniformGridCorner> gUniformProbes;
+cbuffer PerFrameCB
 {
-    int3 resolution;
-    int numBasis;
-    float3 origin;
+    float3 gGridMin;
     float pad0;
-    float3 spacing;
+    float3 gCellSize;
     float pad1;
+    uint3 gProbeCountDim; // Dimensions of VERTICES (e.g., 17, 17, 17)
+    uint pad2;
 };
+
+// ------------------------------------------------------------------
+// Helper: Index Calculation
+// ------------------------------------------------------------------
+// Converts 3D integer coordinates to flattened 1D buffer index
+uint getUniformGridIndex(int3 coord)
+{
+    // Layout: X changes fastest, then Y, then Z.
+    // Index = x + (y * Width) + (z * Width * Height)
+    uint strideY = gProbeCountDim.x;
+    uint strideZ = gProbeCountDim.x * gProbeCountDim.y;
+
+    return coord.x + (coord.y * strideY) + (coord.z * strideZ);
+}
+// ------------------------------------------------------------------
+// 1D Hermite Interpolation (RGB)
+// t: Normalized distance (0..1)
+// v0, v1: Values at endpoints
+// s0, s1: Slopes at endpoints (Must be scaled by segment length!)
+// ------------------------------------------------------------------
+float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
+{
+    float t2 = t * t;
+    float t3 = t2 * t;
+
+    // Standard Cubic Hermite Basis functions
+    float h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    float h10 = t3 - 2.0 * t2 + t;
+    float h01 = -2.0 * t3 + 3.0 * t2;
+    float h11 = t3 - t2;
+
+    return h00 * v0 + h10 * s0 + h01 * v1 + h11 * s1;
+}
+
+// ------------------------------------------------------------------
+// Progressive Tricubic Hermite Interpolation
+// ------------------------------------------------------------------
+void fetchHermiteInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
+{
+    // 1. Calculate Grid Coordinates (Cell Logic)
+    // ----------------------------------------------------------
+    float3 relPos = pos - gGridMin;
+
+    // Determine which "Box" (Cell) we are in
+    int3 cellCoords = int3(floor(relPos / gCellSize));
+
+    // Clamp to valid range (0 to N-2) so we can always look up neighbor +1
+    int3 maxCellIndex = int3(gProbeCountDim) - int3(1, 1, 1);
+    cellCoords = max(int3(0), min(cellCoords, maxCellIndex - int3(1)));
+
+    // 2. Calculate Local 't' (0..1)
+    // ----------------------------------------------------------
+    float3 cellOrigin = gGridMin + float3(cellCoords) * gCellSize;
+    float3 t = (pos - cellOrigin) / gCellSize;
+
+    // 3. Fetch Indices (Using Helper)
+    // ----------------------------------------------------------
+    // We order these to match the loop bit-logic: Bit 0=Z, Bit 1=Y, Bit 2=X
+    int cIdx[8];
+    cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
+    cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
+    cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
+    cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
+    cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
+    cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
+    cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
+    cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
+    float3 size = gCellSize;
+    for (int band = 0; band < 9; ++band)
+    {
+        float3 v[8];
+        // Gradients mapped to Falcor Axes
+        float3 g_FalcorX[8];
+        float3 g_FalcorY[8];
+        float3 g_FalcorZ[8];
+
+        for (int i = 0; i < 8; ++i)
+        {
+            UniformGridCorner c = gUniformProbes[cIdx[i]];
+            v[i] = c.coeffs[band].rgb;
+
+            // ----------------------------------------------------------------
+            // FIXED MAPPING:
+            // Falcor X = SH Y  --> Use .y (d/dy_sh)
+            // Falcor Y = SH Z  --> Use .z (d/dz_sh)
+            // Falcor Z = SH X  --> Use .x (d/dx_sh)
+            // ----------------------------------------------------------------
+            g_FalcorX[i] = float3(c.gradR[band].y, c.gradG[band].y, c.gradB[band].y); 
+            g_FalcorY[i] = float3(c.gradR[band].z, c.gradG[band].z, c.gradB[band].z); 
+            g_FalcorZ[i] = float3(c.gradR[band].x, c.gradG[band].x, c.gradB[band].x); 
+        }
+
+        // ----------------------------------------------------------------
+        // PASS 1: Interpolate along Falcor Z (Stride 1)
+        // C++: i and i+1 differ by size.z
+        // ----------------------------------------------------------------
+        float3 q[4];
+        float3 q_dX[4];
+        float3 q_dY[4];
+
+        for (int i = 0; i < 4; ++i)
+        {
+            int i0 = 2 * i;
+            int i1 = 2 * i + 1;
+
+            // Hermite using Z-Gradient (g_FalcorZ)
+            // Note: Multiply by size.z to scale world-derivative to 0..1 space
+            q[i] = hermite1D(t.z, v[i0], g_FalcorZ[i0] * size.z, v[i1], g_FalcorZ[i1] * size.z);
+
+            // Linearly interpolate the other gradients
+            q_dX[i] = lerp(g_FalcorX[i0], g_FalcorX[i1], t.z);
+            q_dY[i] = lerp(g_FalcorY[i0], g_FalcorY[i1], t.z);
+        }
+
+        // ----------------------------------------------------------------
+        // PASS 2: Interpolate along Falcor Y (Stride 2)
+        // C++: i and i+2 differ by size.y
+        // ----------------------------------------------------------------
+        float3 r[2];
+        float3 r_dX[2];
+
+        for (int i = 0; i < 2; ++i)
+        {
+            int i0 = 2 * i;
+            int i1 = 2 * i + 1;
+
+            // Hermite using Y-Gradient (g_FalcorY)
+            r[i] = hermite1D(t.y, q[i0], q_dY[i0] * size.y, q[i1], q_dY[i1] * size.y);
+
+            r_dX[i] = lerp(q_dX[i0], q_dX[i1], t.y);
+        }
+
+        // ----------------------------------------------------------------
+        // PASS 3: Interpolate along Falcor X (Stride 4)
+        // C++: i and i+4 differ by size.x
+        // ----------------------------------------------------------------
+        // Hermite using X-Gradient (g_FalcorX)
+        finalCoeffs[band] = hermite1D(t.x, r[0], r_dX[0] * size.x, r[1], r_dX[1] * size.x);
+    }
+}
 
 struct MyVSOut : VSOut
 {
@@ -24,11 +164,6 @@ struct MyVSOut : VSOut
 MyVSOut vsMain(VSIn vIn)
 {
     MyVSOut vsOut = (MyVSOut)defaultVS(vIn);
-   // float4 shCoeffs[MAX_SH_BASIS];
-    //ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
-    //sampleSHAtPosition(vsOut.posW, shCoeffs);
-    //vsOut.irradiance = evaluateIrradiance(normalize(vsOut.normalW), shCoeffs);
-    
     return vsOut;
 }
 
@@ -53,85 +188,8 @@ float3 NormalSampleToWorldSpace(float3 normalMapSample, float3 unitNormalW, floa
     return bumpedNormalW;
 }
 
-// 3D to 1D index for the probe grid corresponding to cpu code
-//int width = res.x;
-//int height = res.y;
-//int depth = res.z;
-//for (int probeZ = 0; probeZ < depth; ++probeZ)
-//    for (int probeY = 0; probeY < height; ++probeY)
- //       for (int probeX = 0; probeX < width; ++probeX)
-int getProbeIndex(int3 coord)
-{
-    int width = resolution.x;
-    int height = resolution.y;
-    int depth = resolution.z;
-
-    int3 clamped = clamp(coord, int3(0, 0, 0), resolution - 1);
-    return clamped.x + width * clamped.y + width*height * clamped.z;
-}
-
-void sampleSHAtPosition(float3 worldPos, out float4 outSH[MAX_SH_BASIS])
-{
-    // Convert the world position to the probe grid coordinate space
-    // by subtracting the grid origin and dividing by the probe spacing
-    float3 gridPos = (worldPos - origin) / spacing;
-
-    // Compute the integer base coordinate of the grid cell containing the position
-    //note that this is the lower conner of the voxel (C00)
-    int3 base = int3(floor(gridPos));
-
-    // Compute the fractional part within the grid cell for interpolation weights
-    //relative position of gridPos in the voxel
-    float3 frac = gridPos - float3(base);
-
-    // Initialize output SH coefficients to zero
-    [unroll]
-    for (int i = 0; i < MAX_SH_BASIS; ++i)
-    {
-        outSH[i] = float4(0, 0, 0, 0);
-    }
-
-    // Perform trilinear interpolation from the 8 surrounding probes
-    // Loop over all corners of the cube surrounding the position
-    [unroll]
-    for (int z = 0; z <= 1; ++z)
-    {
-        [unroll]
-        for (int y = 0; y <= 1; ++y)
-        {
-            [unroll]
-            for (int x = 0; x <= 1; ++x)
-            {
-                // Calculate interpolation weights for each dimension
-                // If coordinate is 0, weight is (1 - frac), else frac
-                float3 w = float3(
-                x == 0 ? (1.0 - frac.x) : frac.x,
-                y == 0 ? (1.0 - frac.y) : frac.y,
-                z == 0 ? (1.0 - frac.z) : frac.z
-                );
-
-                // Combine weights for 3D interpolation
-                float weight = w.x * w.y * w.z;
-
-                // Compute the neighbor probe coordinate
-                int3 neighborCoord = base + int3(x, y, z);
-
-                // Convert 3D coordinate to 1D probe index
-                int neighborProbeIndex = getProbeIndex(neighborCoord);
-
-                // Accumulate the weighted SH coefficients from the neighbor probe
-                [loop]
-                for (int i = 0; i < numBasis; ++i)
-                {
-                    outSH[i] += gSHCoeffs[neighborProbeIndex * numBasis + i] * weight;
-                }
-            }
-        }
-    }
-}
-
 // Evaluate 9 SH basis functions at direction n
-float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
+float3 evaluateIrradiance(float3 n,  float3 shCoeffs[MAX_SH_BASIS])
 {
     // Real Spherical Harmonics up to band 2
     // Coordinate convention: x = forward, y = right, z = up
@@ -181,7 +239,7 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
     float A[3] = { 3.141593f, 2.094395f, 0.785398f };
 
     // Dot product: coeffs · basis
-    float4 result =
+    float3 result =
         shCoeffs[0] * Y0 * A[0] +
         shCoeffs[1] * Y1 * A[1] +
         shCoeffs[2] * Y2 * A[1] +
@@ -193,7 +251,7 @@ float4 evaluateIrradiance(float3 n,  float4 shCoeffs[MAX_SH_BASIS])
         shCoeffs[8] * Y8 * A[2];
 
     // Clamp negative lighting
-    return max(result, float4(0.f));
+    return max(result, float3(0.f));
 }
 
 float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
@@ -221,17 +279,16 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
         normalSampleW = normalSample;
   }
 
-  float4 shCoeffs[MAX_SH_BASIS];
-  sampleSHAtPosition(shadingData.posW, shCoeffs);
-  vsOut.irradiance = evaluateIrradiance(normalize(shadingData.faceN), shCoeffs);
+  float3 finalSH[MAX_SH_BASIS];
 
-  float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb / M_PI;
- // float3 diffuseColor = baseColorSample.rgb * vsOut.irradiance.rgb;
-  float3 emissiveColor = emissiveSample.rgb;
-  float3 litColor = diffuseColor + emissiveColor;
-  //float3 litColor = diffuseColor;
-  // float3 litColor = normalSampleW;
-  // float3 litColor = shadingData.faceN;
-    //float3 litColor = vsOut.irradiance.rgb;
+  fetchHermiteInterpolatedSH(vsOut.posW, finalSH);
+
+  float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), finalSH);
+
+  float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
+  //float3 diffuseColor = irradiance.rgb;
+   float3 emissiveColor = emissiveSample.rgb;
+   float3 litColor = diffuseColor + emissiveColor;
+   //float3 litColor = diffuseColor;
     return float4(litColor,1.0f);
 }
