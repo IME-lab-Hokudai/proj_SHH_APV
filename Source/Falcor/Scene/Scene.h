@@ -1337,7 +1337,7 @@ namespace Falcor
         std::unique_ptr<CameraController> mpCamCtrl;
         std::vector<ref<Camera>> mCameras;
         uint32_t mSelectedCamera = 0;
-        float mCameraSpeed = 1.0f;
+        float mCameraSpeed = 100.0f;
         bool mCameraSwitched = false;
         bool mCameraControlsEnabled = true;
         AABB mCameraBounds;

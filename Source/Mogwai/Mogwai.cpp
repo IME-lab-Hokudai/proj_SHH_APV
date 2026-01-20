@@ -946,8 +946,11 @@ int runMain(int argc, char** argv)
         config.deviceDesc.enableRaytracingValidation = true;
 
     config.windowDesc.title = "Mogwai";
-    config.windowDesc.width = 2560;
-    config.windowDesc.height = 1440;
+    //REMARK: set resolution
+  /*  config.windowDesc.width = 2560;
+    config.windowDesc.height = 1440;*/
+    config.windowDesc.width = 1920;
+    config.windowDesc.height = 1080;
     if (widthFlag)
         config.windowDesc.width = args::get(widthFlag);
     if (heightFlag)

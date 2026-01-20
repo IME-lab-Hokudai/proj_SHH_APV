@@ -34,6 +34,7 @@
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "ProbeSamplingData.slang"
+#include <Scene/Material/StandardMaterial.h>
 const int numSamplesPerProbe = 4096;
 //const int numSamplesPerProbe = 4096*2;
 const int verificationRes = 100;
@@ -47,8 +48,8 @@ const bool useRelativeError = true;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
-const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
-//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHAdaptiveProbeShader.slang";
+//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
+const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHAdaptiveProbeShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSampling.rt.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
@@ -789,21 +790,21 @@ if (mNeedRebuildProbeVolume)
             pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
 
              auto shShaderRootVar = mpVars->getRootVar();
-             /*shShaderRootVar["gLinearSampler"] = mpLinearSampler;
+             shShaderRootVar["gLinearSampler"] = mpLinearSampler;
              shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();*/
+             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
 
-             mUniformProbeVolume->bindShaderData(shShaderRootVar);
+             //mUniformProbeVolume->bindShaderData(shShaderRootVar);
              mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
-             /*if (mbShowAdaptiveGrid)
+             if (mbShowAdaptiveGrid)
              {
                 mpProbeVisualizePass->setCameraData(
                     mpScene->getCamera()->getViewProjMatrix()
                 );
                
                 mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-             }*/
+             }
         //}
     }
 }
@@ -1258,13 +1259,13 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            // Restore Leaf Only
            mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
-           //mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-           mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-           /*if (!mNeedRebuildProbeVolume) {
+           mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+           //mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+           if (!mNeedRebuildProbeVolume) {
                mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
                mAdaptiveProbeVolume->uploadToGPU();
                mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-           }*/
+           }
               
             ProgramDesc rtProgDesc;
             rtProgDesc.addShaderModules(mpScene->getShaderModules());
@@ -1332,6 +1333,26 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             mpRtProgram->addDefines(lightRelatedDefines);
 
             mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
+            // Get all materials from the scene
+            auto allMat = mpScene->getMaterials();
+
+            for (auto& pMat : allMat)
+            {
+
+                // 1. Use .get() to retrieve the raw pointer (Material*)
+                // 2. Use standard dynamic_cast to check if it is a StandardMaterial
+                StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
+
+                // 3. Check if cast succeeded (will be nullptr if it's a Hair/Cloth/etc material)
+                if (pStdMat)
+                {
+                    pStdMat->setRoughness(1.0f);
+                    pStdMat->setMetallic(0.0f);
+                    pStdMat->setSpecularTransmission(0.0f);
+                    pStdMat->setIndexOfRefraction(1.0f);
+                }
+            }
+            
     }
 }
 

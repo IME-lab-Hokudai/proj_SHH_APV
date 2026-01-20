@@ -432,6 +432,25 @@ void PathTracer::setScene(RenderContext* pRenderContext, const ref<Scene>& pScen
 
     if (mpScene)
     {
+        //REMARK :  set all standard materials to non-metallic for SH testing
+        auto allMat = pScene->getMaterials();
+
+        for (auto& pMat : allMat)
+        {
+
+            // 1. Use .get() to retrieve the raw pointer (Material*)
+            // 2. Use standard dynamic_cast to check if it is a StandardMaterial
+            StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
+
+            // 3. Check if cast succeeded (will be nullptr if it's a Hair/Cloth/etc material)
+            if (pStdMat)
+            {
+                pStdMat->setRoughness(1.0f);
+                pStdMat->setMetallic(0.0f);
+                pStdMat->setSpecularTransmission(0.0f);
+                pStdMat->setIndexOfRefraction(1.0f);
+            }
+        }
         mUpdateFlagsConnection = mpScene->getUpdateFlagsSignal().connect([&](IScene::UpdateFlags flags) { mUpdateFlags |= flags; });
 
         if (pScene->hasGeometryType(Scene::GeometryType::Custom))
