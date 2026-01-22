@@ -35,21 +35,22 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
-const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 1024;
 //const int numSamplesPerProbe = 4096*2;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
-const float ErrorThreshold = 2.0f;//threshold for Erel
+const float ErrorThreshold = 5.0f;//threshold for Erel
 //const float ErrorThreshold = 1.5f;//threshold for Erel
 const bool useRelativeError = true;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
-//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
-const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHAdaptiveProbeShader.slang";
+const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHGridShader.slang";
+//const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHAdaptiveProbeShader.slang";
 const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapShader.slang";
 const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSampling.rt.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
@@ -691,6 +692,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         //    mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
         //}
 #pragma endregion
+#pragma region  ====Uniform probe volume construction block===
 if (mNeedRebuildProbeVolume)
 {
     // --------------------------------------------------------------------------
@@ -784,6 +786,7 @@ if (mNeedRebuildProbeVolume)
 
     mNeedRebuildProbeVolume = false;
 }
+#pragma endregion
         // visualize probes
         //if (mbFinishSHPrecompute)
         //{
@@ -791,10 +794,10 @@ if (mNeedRebuildProbeVolume)
 
              auto shShaderRootVar = mpVars->getRootVar();
              shShaderRootVar["gLinearSampler"] = mpLinearSampler;
-             shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+     /*        shShaderRootVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+             shShaderRootVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();*/
 
-             //mUniformProbeVolume->bindShaderData(shShaderRootVar);
+             mUniformProbeVolume->bindShaderData(shShaderRootVar);
              mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
              if (mbShowAdaptiveGrid)
@@ -1260,7 +1263,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
 
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-           //mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+           mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
            if (!mNeedRebuildProbeVolume) {
                mAdaptiveProbeVolume->loadFromFile("AdaptiveProbeVolume.txt");
                mAdaptiveProbeVolume->uploadToGPU();
@@ -1333,26 +1336,41 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             mpRtProgram->addDefines(lightRelatedDefines);
 
             mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
-            // Get all materials from the scene
-            auto allMat = mpScene->getMaterials();
+            //REMARK :  set all materials to diffuse for SH testing
+            auto allMat = pScene->getMaterials();
 
             for (auto& pMat : allMat)
             {
+                // STEP 1: Handle the Base properties (Legacy & Common)
+                // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
+                auto pBasicMat = pMat->toBasicMaterial();
 
-                // 1. Use .get() to retrieve the raw pointer (Material*)
-                // 2. Use standard dynamic_cast to check if it is a StandardMaterial
+                if (pBasicMat)
+                {
+                    // 1. Kill the Specular Color / Shininess
+                    // For Legacy OBJ: This makes it matte.
+                    // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
+                    pBasicMat->setSpecularParams(float4(0.0f));
+
+                    // 2. Kill Transmission (Glass/Ghosting)
+                    pBasicMat->setTransmissionColor(float3(0.0f));
+                    pBasicMat->setSpecularTransmission(0.0f);
+                    pBasicMat->setDiffuseTransmission(0.0f);
+                }
+
+                // STEP 2: Handle the PBR-specific properties
+                // This ONLY runs if the material is actually the modern StandardMaterial type.
                 StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
 
-                // 3. Check if cast succeeded (will be nullptr if it's a Hair/Cloth/etc material)
                 if (pStdMat)
                 {
-                    pStdMat->setRoughness(1.0f);
-                    pStdMat->setMetallic(0.0f);
+                    // 3. Force PBR Roughness (The most important setting for modern renderers)
+                    pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
+                    pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
                     pStdMat->setSpecularTransmission(0.0f);
-                    pStdMat->setIndexOfRefraction(1.0f);
+                    pStdMat->setTransmissionColor(float3(0.0f));
                 }
             }
-            
     }
 }
 

@@ -432,25 +432,42 @@ void PathTracer::setScene(RenderContext* pRenderContext, const ref<Scene>& pScen
 
     if (mpScene)
     {
-        //REMARK :  set all standard materials to non-metallic for SH testing
+        //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
         for (auto& pMat : allMat)
         {
+            // STEP 1: Handle the Base properties (Legacy & Common)
+            // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
+            auto pBasicMat = pMat->toBasicMaterial();
 
-            // 1. Use .get() to retrieve the raw pointer (Material*)
-            // 2. Use standard dynamic_cast to check if it is a StandardMaterial
+            if (pBasicMat)
+            {
+                // 1. Kill the Specular Color / Shininess
+                // For Legacy OBJ: This makes it matte.
+                // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
+                pBasicMat->setSpecularParams(float4(0.0f));
+
+                // 2. Kill Transmission (Glass/Ghosting)
+                pBasicMat->setTransmissionColor(float3(0.0f));
+                pBasicMat->setSpecularTransmission(0.0f);
+                pBasicMat->setDiffuseTransmission(0.0f);
+            }
+
+            // STEP 2: Handle the PBR-specific properties
+            // This ONLY runs if the material is actually the modern StandardMaterial type.
             StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
 
-            // 3. Check if cast succeeded (will be nullptr if it's a Hair/Cloth/etc material)
             if (pStdMat)
             {
-                pStdMat->setRoughness(1.0f);
-                pStdMat->setMetallic(0.0f);
+                // 3. Force PBR Roughness (The most important setting for modern renderers)
+                pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
+                pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
                 pStdMat->setSpecularTransmission(0.0f);
-                pStdMat->setIndexOfRefraction(1.0f);
+                pStdMat->setTransmissionColor(float3(0.0f));
             }
         }
+        
         mUpdateFlagsConnection = mpScene->getUpdateFlagsSignal().connect([&](IScene::UpdateFlags flags) { mUpdateFlags |= flags; });
 
         if (pScene->hasGeometryType(Scene::GeometryType::Custom))
