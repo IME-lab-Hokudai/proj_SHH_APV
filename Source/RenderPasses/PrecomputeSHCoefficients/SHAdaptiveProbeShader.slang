@@ -378,9 +378,9 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 
   float3 finalSH[MAX_SH_BASIS];
   // 1. Find the Leaf Voxel
-   int probeIdx = traverseOctree(shadingData.posW);
+   //int probeIdx = traverseOctree(shadingData.posW);
    // 2. Compute interpolated SH Coeffs
-   fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+   //fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
    // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, finalSH);
    // fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, finalSH);
 
@@ -388,111 +388,111 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   // STEP 1: INITIAL SETUP & SELF-SAMPLING
   // ===============================================================================================
   // First, we determine which voxel (Probe) the pixel currently resides in.
-  //int myIdx = traverseOctree(vsOut.posW);
-  //GPUProbe myProbe = gProbeBuffer[myIdx];
+  int myIdx = traverseOctree(vsOut.posW);
+  GPUProbe myProbe = gProbeBuffer[myIdx];
 
-  //// Fetch the High-Quality SH data from *this* voxel.
-  //// This is our "Base Layer." If we are in the center of the voxel, we use this 100%.
-  ////float3 finalSH[9];
-  //fetchHermiteInterpolatedSH(myIdx, vsOut.posW, finalSH);
+  // Fetch the High-Quality SH data from *this* voxel.
+  // This is our "Base Layer." If we are in the center of the voxel, we use this 100%.
+  //float3 finalSH[9];
+  fetchHermiteInterpolatedSH(myIdx, vsOut.posW, finalSH);
 
-  //// ===============================================================================================
-  //// STEP 2: DEFINE BLEND GEOMETRY
-  //// ===============================================================================================
-  //// We need to know how close this pixel is to the walls of the voxel.
-  //float3 myCenter = (myProbe.minPoint + myProbe.maxPoint) * 0.5;
-  //float3 mySize = myProbe.maxPoint - myProbe.minPoint;
+  // ===============================================================================================
+  // STEP 2: DEFINE BLEND GEOMETRY
+  // ===============================================================================================
+  // We need to know how close this pixel is to the walls of the voxel.
+  float3 myCenter = (myProbe.minPoint + myProbe.maxPoint) * 0.5;
+  float3 mySize = myProbe.maxPoint - myProbe.minPoint;
 
-  //// 'offset' is the vector from center to pixel.
-  //float3 offset = vsOut.posW - myCenter;
+  // 'offset' is the vector from center to pixel.
+  float3 offset = vsOut.posW - myCenter;
 
-  //// 'distToWall' tells us how far we are from the boundary (Positive value = Inside).
-  //// e.g., if size is 10 and we are at x=4, distToWall is 1.0.
-  //float3 distToWall = (mySize * 0.5) - abs(offset);
+  // 'distToWall' tells us how far we are from the boundary (Positive value = Inside).
+  // e.g., if size is 10 and we are at x=4, distToWall is 1.0.
+  float3 distToWall = (mySize * 0.5) - abs(offset);
 
-  //// Define the "Safe Zone" vs. "Blend Zone".
-  //// We use 40% (0.4) of the voxel size.
-  //// - Inner 20%: Pure High-Res Data.
-  //// - Outer 40%: Gradually blend to neighbor.
-  //float blendZone = 0.4 * min(min(mySize.x, mySize.y), mySize.z);
+  // Define the "Safe Zone" vs. "Blend Zone".
+  // We use 40% (0.4) of the voxel size.
+  // - Inner 20%: Pure High-Res Data.
+  // - Outer 40%: Gradually blend to neighbor.
+  float blendZone = 0.4 * min(min(mySize.x, mySize.y), mySize.z);
 
-  //// ===============================================================================================
-  //// STEP 3: INDEPENDENT AXIS BLENDING
-  //// ===============================================================================================
-  //// Why independent?
-  //// If we are in a CORNER, we are close to 2 or 3 walls at once (e.g., Left and Top).
-  //// We must blend with *both* the Left Neighbor AND the Top Neighbor to avoid diagonal seams.
+  // ===============================================================================================
+  // STEP 3: INDEPENDENT AXIS BLENDING
+  // ===============================================================================================
+  // Why independent?
+  // If we are in a CORNER, we are close to 2 or 3 walls at once (e.g., Left and Top).
+  // We must blend with *both* the Left Neighbor AND the Top Neighbor to avoid diagonal seams.
 
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS A: X-AXIS (Left/Right Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.x < blendZone)
-  //{
-  //    // 1. Identify which face we are near (-X or +X)
-  //    // faceIdx 0 = Left (-X), faceIdx 1 = Right (+X)
-  //    int faceIdx = (offset.x < 0) ? 0 : 1;
+  // -----------------------------------------------------------------------
+  // BLEND PASS A: X-AXIS (Left/Right Neighbors)
+  // -----------------------------------------------------------------------
+  if (distToWall.x < blendZone)
+  {
+      // 1. Identify which face we are near (-X or +X)
+      // faceIdx 0 = Left (-X), faceIdx 1 = Right (+X)
+      int faceIdx = (offset.x < 0) ? 0 : 1;
 
-  //    // 2. Look up the Pre-Computed Neighbor Index
-  //    // This array was built in C++. If the neighbor is smaller/same size, this is -1.
-  //    // We ONLY blend if the neighbor is Coarser (Larger).
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+      // 2. Look up the Pre-Computed Neighbor Index
+      // This array was built in C++. If the neighbor is smaller/same size, this is -1.
+      // We ONLY blend if the neighbor is Coarser (Larger).
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
 
-  //    if (neighborIdx != -1)
-  //    {
-  //        // 3. Fetch the Neighbor's Low-Res SH Data
-  //        float3 neighborSH[9];
-  //        fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+      if (neighborIdx != -1)
+      {
+          // 3. Fetch the Neighbor's Low-Res SH Data
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
 
-  //        // 4. Calculate Blend Weight
-  //        // Map distance (BlendZone -> 0) to Weight (0.0 -> 1.0)
-  //        // - At blendZone boundary: weight is 0.0 (Pure Self)
-  //        // - At the wall: weight is 1.0 (Pure Neighbor)
-  //        float t = 1.0 - (distToWall.x / blendZone);
-  //        t = smoothstep(0.0, 1.0, t); // Use smooth curve to hide the transition start
+          // 4. Calculate Blend Weight
+          // Map distance (BlendZone -> 0) to Weight (0.0 -> 1.0)
+          // - At blendZone boundary: weight is 0.0 (Pure Self)
+          // - At the wall: weight is 1.0 (Pure Neighbor)
+          float t = 1.0 - (distToWall.x / blendZone);
+          t = smoothstep(0.0, 1.0, t); // Use smooth curve to hide the transition start
 
-  //        // 5. Accumulate
-  //        // We mix the neighbor into our current result.
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
+          // 5. Accumulate
+          // We mix the neighbor into our current result.
+          for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
+      }
+  }
 
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS B: Y-AXIS (Down/Up Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.y < blendZone)
-  //{
-  //    // faceIdx 2 = Down (-Y), faceIdx 3 = Up (+Y)
-  //    int faceIdx = (offset.y < 0) ? 2 : 3;
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+  // -----------------------------------------------------------------------
+  // BLEND PASS B: Y-AXIS (Down/Up Neighbors)
+  // -----------------------------------------------------------------------
+  if (distToWall.y < blendZone)
+  {
+      // faceIdx 2 = Down (-Y), faceIdx 3 = Up (+Y)
+      int faceIdx = (offset.y < 0) ? 2 : 3;
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
 
-  //    if (neighborIdx != -1)
-  //    {
-  //        float3 neighborSH[9];
-  //        fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+      if (neighborIdx != -1)
+      {
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
 
-  //        float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.y / blendZone));
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
+          float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.y / blendZone));
+          for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
+      }
+  }
 
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS C: Z-AXIS (Back/Front Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.z < blendZone)
-  //{
-  //    // faceIdx 4 = Back (-Z), faceIdx 5 = Front (+Z)
-  //    int faceIdx = (offset.z < 0) ? 4 : 5;
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
+  // -----------------------------------------------------------------------
+  // BLEND PASS C: Z-AXIS (Back/Front Neighbors)
+  // -----------------------------------------------------------------------
+  if (distToWall.z < blendZone)
+  {
+      // faceIdx 4 = Back (-Z), faceIdx 5 = Front (+Z)
+      int faceIdx = (offset.z < 0) ? 4 : 5;
+      int neighborIdx = myProbe.coarseNeighbors[faceIdx];
 
-  //    if (neighborIdx != -1)
-  //    {
-  //        float3 neighborSH[9];
-  //        fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+      if (neighborIdx != -1)
+      {
+          float3 neighborSH[9];
+          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
 
-  //        float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.z / blendZone));
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
+          float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.z / blendZone));
+          for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
+      }
+  }
 
   float3 irradiance = evaluateIrradiance(normalize(shadingData.frame.N), finalSH);
 
