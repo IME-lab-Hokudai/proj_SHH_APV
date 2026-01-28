@@ -30,6 +30,8 @@ public:
     float3 getMaxPoint() const { return mMaxPoint; }
     float3 getCellSize() const { return mCellSize; }
 
+    void saveToFile(const std::string& filename) const;
+    void loadFromFile(const std::string& filename);
 private:
     UniformProbeVolume(ref<Device> pDevice);
 
@@ -47,4 +49,6 @@ private:
     // Unified Storage
     std::vector<UniformGridCorner> mProbeData;
     ref<Buffer> mpProbeDataBuffer;
+
+
 };

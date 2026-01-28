@@ -388,13 +388,13 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   // STEP 1: INITIAL SETUP & SELF-SAMPLING
   // ===============================================================================================
   // First, we determine which voxel (Probe) the pixel currently resides in.
-  int myIdx = traverseOctree(vsOut.posW);
+  int myIdx = traverseOctree(shadingData.posW);
   GPUProbe myProbe = gProbeBuffer[myIdx];
 
   // Fetch the High-Quality SH data from *this* voxel.
   // This is our "Base Layer." If we are in the center of the voxel, we use this 100%.
-  //float3 finalSH[9];
-  fetchHermiteInterpolatedSH(myIdx, vsOut.posW, finalSH);
+  // float3 finalSH[9];
+  fetchHermiteInterpolatedSH(myIdx, shadingData.posW, finalSH);
 
   // ===============================================================================================
   // STEP 2: DEFINE BLEND GEOMETRY
@@ -404,7 +404,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   float3 mySize = myProbe.maxPoint - myProbe.minPoint;
 
   // 'offset' is the vector from center to pixel.
-  float3 offset = vsOut.posW - myCenter;
+  float3 offset = shadingData.posW - myCenter;
 
   // 'distToWall' tells us how far we are from the boundary (Positive value = Inside).
   // e.g., if size is 10 and we are at x=4, distToWall is 1.0.
@@ -441,7 +441,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
       {
           // 3. Fetch the Neighbor's Low-Res SH Data
           float3 neighborSH[9];
-          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+          fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
 
           // 4. Calculate Blend Weight
           // Map distance (BlendZone -> 0) to Weight (0.0 -> 1.0)
@@ -468,7 +468,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
       if (neighborIdx != -1)
       {
           float3 neighborSH[9];
-          fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
+          fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
 
           float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.y / blendZone));
           for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
@@ -499,7 +499,7 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
   float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
   //float3 diffuseColor = irradiance.rgb;
    float3 emissiveColor = emissiveSample.rgb;
-   //float3 litColor = diffuseColor + emissiveColor;
-   float3 litColor = diffuseColor;
+   float3 litColor = diffuseColor + emissiveColor;
+   //float3 litColor = diffuseColor;
     return float4(litColor,1.0f);
 }

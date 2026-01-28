@@ -55,7 +55,10 @@ void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Pr
     {
         int lvl = std::min(probe.level, 7);
         // Pass probe.isLeaf to the generator
-        generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], probe.level, probe.isLeaf, mVertices);
+        if(probe.hasInvalidConner)
+             generateProbeCube(probe.minPoint, probe.maxPoint, float3(1.0f, 0.0f, 0.0f), probe.level, probe.isLeaf, mVertices);
+        else
+            generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], probe.level, probe.isLeaf, mVertices);
     }
 
     if (mVertices.empty()) return;
@@ -131,4 +134,56 @@ void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& max
         pushQuad(v2, v3, v7, v6);
         pushQuad(v3, v0, v4, v7);
     }
+}
+
+// Add this function to the end of the file or alongside setVolumeData
+void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const float3& cellSize, const uint3& cellResolution)
+{
+    mVertices.clear();
+
+    // Use a distinct color for Uniform Grid (e.g., Cyan) to distinguish it from Adaptive levels
+    float3 color = float3(0.0f, 1.0f, 1.0f);
+    uint32_t level = 0;
+    bool isLeaf = true; // Uniform cells are always leaves
+
+    // Iterate over all cells in the grid
+    for (uint32_t z = 0; z < cellResolution.z; ++z)
+    {
+        for (uint32_t y = 0; y < cellResolution.y; ++y)
+        {
+            for (uint32_t x = 0; x < cellResolution.x; ++x)
+            {
+                // Compute bounds for this specific cell
+                float3 currentMin = minPoint + float3(x, y, z) * cellSize;
+                float3 currentMax = currentMin + cellSize;
+
+                // Generate the wireframe cube
+                generateProbeCube(currentMin, currentMax, color, level, isLeaf, mVertices);
+            }
+        }
+    }
+
+    if (mVertices.empty()) return;
+
+    // -----------------------------------------------------------------------
+    // Rebuild GPU Resources (Same logic as setVolumeData)
+    // -----------------------------------------------------------------------
+    const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
+    pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
+
+    ref<VertexLayout> pLayout = VertexLayout::create();
+    ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
+
+    // Layout Offsets (Cummulative):
+    // Pos (12) -> Color (12) -> Level (4) -> IsLeaf (4)
+    pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0);
+
+    pLayout->addBufferLayout(0, pBufLayout);
+
+    Vao::BufferVec buffers{ pVertexBuffer };
+    pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
+    mpState->setVao(pVao);
 }

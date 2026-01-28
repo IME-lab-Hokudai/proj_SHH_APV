@@ -20,6 +20,8 @@ public:
     virtual void execute(RenderContext* pRenderContext, const ref<Fbo>& pFbo, bool autoSetVpSc = true) const;
 
     void setVolumeData(const std::vector<AdaptiveProbeVolume::Probe>& probes);
+    // New function to visualize uniform grid
+    void setUniformVolumeData(const float3& minPoint, const float3& cellSize, const uint3& cellResolution);
     void setCameraData(const float4x4& viewProjMat);
 
     void toggleLevel(int level, bool visible)
