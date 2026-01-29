@@ -9,6 +9,7 @@ import ProbeSamplingData;
 import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
 import Utils.Geometry.GeometryHelpers;
+#include "Utils/Math/MathConstants.slangh"
 
 StructuredBuffer<ProbeDirSample> gProbeDirSamples;
 StructuredBuffer<float3> gProbePositions;
@@ -213,7 +214,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
         float3 accum = float3(0.0f);
         for (int s = 0; s < numEmissiveSamples; ++s) {
-            PathVertex vertex = PathVertex(0, sd.posW, sd.faceN, sd.frontFacing);
+            PathVertex vertex = PathVertex(0, sd.posW, sd.frame.N, sd.frontFacing);
             LightSample ls;
             if (generateEmissiveSample(vertex, true, hitData.sg, ls) && ls.pdf > 0.0f) {
                 // FIX: Use traceVisibilityRay with ls.getVisibilityRay()
@@ -271,7 +272,7 @@ void rayGen()
     // 2. Path Tracing State
     float3 accumColor = float3(0.f);
     float3 throughput = float3(1.f);
-    
+   
     RayDesc ray;
     ray.Origin = probePos;
     ray.Direction = dirFalcor;

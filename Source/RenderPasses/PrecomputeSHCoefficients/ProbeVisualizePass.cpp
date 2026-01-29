@@ -55,10 +55,7 @@ void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Pr
     {
         int lvl = std::min(probe.level, 7);
         // Pass probe.isLeaf to the generator
-        if(probe.hasInvalidConner)
-             generateProbeCube(probe.minPoint, probe.maxPoint, float3(1.0f, 0.0f, 0.0f), probe.level, probe.isLeaf, mVertices);
-        else
-            generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], probe.level, probe.isLeaf, mVertices);
+        generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], probe.level, probe.isLeaf, mVertices);
     }
 
     if (mVertices.empty()) return;

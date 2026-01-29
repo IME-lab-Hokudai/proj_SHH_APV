@@ -35,6 +35,28 @@ public:
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
     };
+
+    //
+// Add this helper to quantize positions (merges points closer than 0.1mm)
+    struct CornerKey {
+        int x, y, z;
+
+        bool operator==(const CornerKey& other) const {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+
+    struct CornerKeyHasher {
+        std::size_t operator()(const CornerKey& k) const {
+            // Simple hash combination
+            return ((std::hash<int>()(k.x) ^ (std::hash<int>()(k.y) << 1)) >> 1) ^ (std::hash<int>()(k.z) << 1);
+        }
+    };
+
+    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
+
+    void constrainHangingNodes();
+
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
     void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
@@ -76,7 +98,8 @@ public:
     ref<Buffer> getProbeBuffer() const { return mpProbeBuffer; }
     ref<Buffer> getCornerBuffer() const { return mpCornerBuffer; }
     const std::vector<Probe>& getProbes() const { return mProbes; }
-
+    // In your header (.h) or class definition:
+    std::unordered_map<CornerKey, int, CornerKeyHasher> mCornerLookup;
     // ----------------------------------------------------------------
     // IO Interface
     // ----------------------------------------------------------------

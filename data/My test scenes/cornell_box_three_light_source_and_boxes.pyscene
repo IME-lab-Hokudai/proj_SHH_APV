@@ -1,163 +1,142 @@
-############################################################################
-# Copyright (c) 2015-24, NVIDIA CORPORATION. All rights reserved.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#  * Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#  * Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-#  * Neither the name of NVIDIA CORPORATION nor the names of its
-#    contributors may be used to endorse or promote products derived
-#    from this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS "AS IS" AND ANY
-# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-###########################################################################
 
 # Create materials
 
-light = StandardMaterial('Light')
-#light.emissiveColor = float3(17, 12, 4)
-light.emissiveColor = float3(0, 0, 1)
-light.emissiveFactor = 10
+# 1. STRESS TEST MATERIALS
+# ---------------------------------------------------------
+# Blue Hotspot: Extremely bright, pure Blue. 
+# Used for the small floor light to create sharp gradients.
+lightBlueSharp = StandardMaterial('LightBlueSharp')
+lightBlueSharp.emissiveColor = float3(0, 0, 1)
+lightBlueSharp.emissiveFactor = 40  # High intensity for small area
 
-lightLeft = StandardMaterial('LightLeft')
-lightLeft.emissiveColor = float3(0, 1, 0)
-lightLeft.emissiveFactor = 10
+# Red Fill: Softer, pure Red.
+# Used for the large ceiling light (low frequency).
+lightRedSoft = StandardMaterial('LightRedSoft')
+lightRedSoft.emissiveColor = float3(1, 0, 0)
+lightRedSoft.emissiveFactor = 8 
 
-lightRight = StandardMaterial('LightRight')
-lightRight.emissiveColor = float3(1, 0, 0)
-lightRight.emissiveFactor = 10
+# Green Glance: Medium brightness, Green.
+lightGreen = StandardMaterial('LightGreen')
+lightGreen.emissiveColor = float3(0, 1, 0)
+lightGreen.emissiveFactor = 15
+# ---------------------------------------------------------
 
-#gray
+# Standard Cornell Materials
 floor = StandardMaterial('Floor')
 floor.baseColor = float4(0.725, 0.71, 0.68, 1.0)
-#floor.roughness = 0.5
 floor.roughness = 1.0
 
 backWall = StandardMaterial('Back Wall')
 backWall.baseColor = float4(0.725, 0.71, 0.68, 1.0)
-#backWall.baseColor = float4(0.125, 0.71, 0.68, 1.0)
-#backWall.roughness = 0.5
 backWall.roughness = 1.0
 
-#gray, same as floor
 ceiling = StandardMaterial('Ceiling')
-floor.baseColor = float4(0.725, 0.71, 0.68, 1.0)
-#ceiling.roughness = 0.5
+ceiling.baseColor = float4(0.725, 0.71, 0.68, 1.0)
 ceiling.roughness = 1.0
 
-#red
 leftWall = StandardMaterial('Left Wall')
 leftWall.baseColor = float4(0.63, 0.065, 0.05, 1.0)
-#leftWall.roughness = 0.5
 leftWall.roughness = 1.0
 
-#green
 rightWall = StandardMaterial('Right Wall')
 rightWall.baseColor = float4(0.14, 0.45, 0.091, 1.0)
-#rightWall.roughness = 0.5
 rightWall.roughness = 1.0
 
-shortBoxMat = StandardMaterial('Short Box Mat')
-shortBoxMat.baseColor = float4(0.2, 0.3, 0.8, 1.0) # Deep Blue
-shortBoxMat.roughness = 1.0
-
-tallBoxMat = StandardMaterial('Tall Box Mat')
-tallBoxMat.baseColor = float4(0.8, 0.7, 0.1, 1.0) # Golden Yellow
-tallBoxMat.roughness = 1.0
-
 # Create geometry
-
 quadMesh = TriangleMesh.createQuad()
-cubeMesh = TriangleMesh.createCube() 
 
-# Create mesh instances
+# ---------------------------------------------------------
+# SCENE GEOMETRY (Standard Cornell Box)
+# ---------------------------------------------------------
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Floor', Transform(scaling=float3(0.55, 1.0, 0.55))),
-	#sceneBuilder.addNode('Floor', Transform(scaling=float3(1.0, 1.0, 1.0))),
     sceneBuilder.addTriangleMesh(quadMesh, floor)
 )
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Ceiling', Transform(scaling=float3(0.55, 1.0, 0.55), translation=float3(0, 0.55, 0), rotationEulerDeg=float3(180, 0, 0))),
-    #sceneBuilder.addNode('Ceiling', Transform(scaling=float3(1.0, 1.0, 1.0), translation=float3(0, 1.0, 0), rotationEulerDeg=float3(180, 0, 0))),
     sceneBuilder.addTriangleMesh(quadMesh, ceiling)
 )
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Back Wall', Transform(scaling=float3(0.55, 1.0, 0.55), translation=float3(0, 0.275, -0.275), rotationEulerDeg=float3(90, 0, 0))),
-    #sceneBuilder.addNode('Back Wall', Transform(scaling=float3(1.0, 1.0, 1.0), translation=float3(0, 0.5, -0.5), rotationEulerDeg=float3(90, 0, 0))),
     sceneBuilder.addTriangleMesh(quadMesh, backWall)
 )
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Left Wall', Transform(scaling=float3(0.55, 1.0, 0.55), translation=float3(-0.275, 0.275, 0), rotationEulerDeg=float3(0, 0, -90))),
-    #sceneBuilder.addNode('Left Wall', Transform(scaling=float3(1.0, 1.0, 1.0), translation=float3(-0.5, 0.5, 0), rotationEulerDeg=float3(0, 0, -90))),
     sceneBuilder.addTriangleMesh(quadMesh, leftWall)
 )
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Right Wall', Transform(scaling=float3(0.55, 1.0, 0.55), translation=float3(0.275, 0.275, 0), rotationEulerDeg=float3(0, 0, 90))),
-    #sceneBuilder.addNode('Right Wall', Transform(scaling=float3(1.0, 1.0, 1.0), translation=float3(0.5, 0.5, 0), rotationEulerDeg=float3(0, 0, 90))),
     sceneBuilder.addTriangleMesh(quadMesh, rightWall)
-	#sceneBuilder.addTriangleMesh(quadMesh, leftWall)
 )
 
-# Short Box (Blue)
+# ---------------------------------------------------------
+# STRESS TEST LIGHTING (Asymmetric)
+# ---------------------------------------------------------
+
+# 1. BLUE HOTSPOT (Floor, Back-Left Corner)
+# Position: Near (-0.2, -0.2). Just above floor (y=0.001).
+# Scale: Tiny (0.04) -> Creates sharp shadows/gradients.
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('Short Box', Transform(
-        scaling=float3(0.165, 0.165, 0.165), 
-        translation=float3(0.09, 0.0825, 0.06),
-        rotationEulerDeg=float3(0, -18, 0)
-		#translation=float3(0.0, 0.2, 0.0),
-    )),
-    sceneBuilder.addTriangleMesh(cubeMesh, shortBoxMat) # <--- Using Blue Material
+    sceneBuilder.addNode('LightBlueSharp', Transform(scaling=0.04, translation=float3(-0.2, 0.001, -0.2), rotationEulerDeg=float3(0, 0, 0))),
+    sceneBuilder.addTriangleMesh(quadMesh, lightBlueSharp)
 )
 
-
-# Tall Box (Yellow)
+# 2. RED FILL (Ceiling, Front-Right Corner)
+# Position: Near (0.2, 0.2). Just below ceiling (y=0.549).
+# Scale: Large (0.15) -> Creates smooth, broad lighting.
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('Tall Box', Transform(
-        scaling=float3(0.165, 0.33, 0.165), 
-        translation=float3(-0.09, 0.165, -0.07),
-        rotationEulerDeg=float3(0, 17, 0)
-    )),
-    sceneBuilder.addTriangleMesh(cubeMesh, tallBoxMat) # <--- Using Yellow Material
+    sceneBuilder.addNode('LightRedSoft', Transform(scaling=0.15, translation=float3(0.2, 0.549, 0.2), rotationEulerDeg=float3(180, 0, 0))),
+    sceneBuilder.addTriangleMesh(quadMesh, lightRedSoft)
 )
 
-#ceiling light
+# 3. GREEN GLANCE (Right Wall, Low-Center)
+# Position: On Right Wall (x=0.274), Low height (y=0.1).
+# Scale: Vertical Strip -> Creates directional side lighting.
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('Light', Transform(scaling=0.15, translation=float3(0, 0.5499, 0), rotationEulerDeg=float3(180, 0, 0))),
-    sceneBuilder.addTriangleMesh(quadMesh, light)
+    sceneBuilder.addNode('LightGreen', Transform(scaling=float3(0.1, 1.0, 0.05), translation=float3(0.274, 0.1, -0.1), rotationEulerDeg=float3(0, 0, 90))),
+    sceneBuilder.addTriangleMesh(quadMesh, lightGreen)
 )
 
-#leftWall light
+# WHITE TEST MATERIAL (For the Dynamic Boxes)
+# Pure white, perfectly diffuse. This acts like a "Probe Watcher"
+# allowing you to see the pure light color without texture interference.
+matWhite = StandardMaterial('MatWhite')
+matWhite.baseColor = float4(1.0, 1.0, 1.0, 1.0)
+matWhite.roughness = 1.0
+matWhite.metallic = 0.0
+# ---------------------------------------------------------
+# DYNAMIC TEST OBJECTS
+# ---------------------------------------------------------
+# Use a simple cube or sphere to visualize the lighting on surfaces.
+boxMesh = TriangleMesh.createCube() 
+
+# Box 1: The Blue Stress Test (High Frequency)
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('LightLeft', Transform(scaling=0.15, translation=float3(-0.2749, 0.275, 0), rotationEulerDeg=float3(0, 0, -90))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightLeft)
+    sceneBuilder.addNode('StressBox_Blue', Transform(scaling=0.15, translation=float3(-0.12, 0.075, -0.12))),
+    sceneBuilder.addTriangleMesh(boxMesh, matWhite) # Use white to see colored light clearly
 )
 
-#rightWall light
+# Box 2: The Red Efficiency Test (Low Frequency)
 sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('LightRight', Transform(scaling=0.15, translation=float3(0.2749, 0.275, 0), rotationEulerDeg=float3(0, 0, 90))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightRight)
+    sceneBuilder.addNode('EfficiencyBox_Red', Transform(scaling=0.15, translation=float3(0.15, 0.075, 0.15))),
+    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
 )
 
-# Create camera
+# Box 3: The Green Direction Test (Vector Gradient)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('DirectionBox_Green', Transform(scaling=0.15, translation=float3(0.15, 0.075, -0.05))),
+    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
+)
+
+# ---------------------------------------------------------
+# CAMERA
+# ---------------------------------------------------------
 camera = Camera()
 camera.position = float3(0, 0.28, 1.2)
 camera.target = float3(0, 0.28, 0)

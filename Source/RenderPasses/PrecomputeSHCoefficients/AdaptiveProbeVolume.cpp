@@ -4,6 +4,224 @@
 #include <fstream>
 #include <iomanip>
 
+//
+
+// ------------------------------------------------------------------
+// CPU PORT OF SHADER LOGIC
+// ------------------------------------------------------------------
+
+// 1. Standard Cubic Hermite Basis
+float hermite1D(float t, float v0, float s0, float v1, float s1)
+{
+    float t2 = t * t;
+    float t3 = t2 * t;
+    float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
+    float h10 = t3 - 2.0f * t2 + t;
+    float h01 = -2.0f * t3 + 3.0f * t2;
+    float h11 = t3 - t2;
+    return h00 * v0 + h10 * s0 + h01 * v1 + h11 * s1;
+}
+//
+
+// Derivative of the Cubic Hermite Basis (d/dt)
+float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
+{
+    float t2 = t * t;
+
+    // Derivatives of basis functions
+    // h00 = 2t^3 - 3t^2 + 1  ->  6t^2 - 6t
+    float dh00 = 6.0f * t2 - 6.0f * t;
+
+    // h10 = t^3 - 2t^2 + t   ->  3t^2 - 4t + 1
+    float dh10 = 3.0f * t2 - 4.0f * t + 1.0f;
+
+    // h01 = -2t^3 + 3t^2     ->  -6t^2 + 6t
+    float dh01 = -6.0f * t2 + 6.0f * t;
+
+    // h11 = t^3 - t^2        ->  3t^2 - 2t
+    float dh11 = 3.0f * t2 - 2.0f * t;
+
+    return dh00 * v0 + dh10 * s0 + dh01 * v1 + dh11 * s1;
+}
+// 2. Full Tricubic Hermite Interpolation on CPU
+// This mirrors 'fetchHermiteInterpolatedSH' from your shader exactly.
+void AdaptiveProbeVolume::interpolateHermite_CPU(
+    int coarseProbeIdx,
+    float3 pos,
+    std::vector<float3>& outCoeffs,
+    std::vector<GradSHCoeff>& outGrads) // We must also interpolate gradients!
+{
+    const auto& p = mProbes[coarseProbeIdx];
+    float3 size = p.maxPoint - p.minPoint;
+    float3 t = (pos - p.minPoint) / size;
+
+    // Clamp t
+    t.x = std::max(0.0f, std::min(1.0f, t.x));
+    t.y = std::max(0.0f, std::min(1.0f, t.y));
+    t.z = std::max(0.0f, std::min(1.0f, t.z));
+
+    int cIdx[8];
+    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
+
+    size_t numBands = mCorners[cIdx[0]].shCoeffs.size();
+    outCoeffs.resize(numBands);
+    outGrads.resize(numBands);
+
+    for (size_t band = 0; band < numBands; ++band)
+    {
+        // 1. Fetch Inputs (Same as before)
+        float3 v[8];
+        float3 g_FalcorX[8], g_FalcorY[8], g_FalcorZ[8];
+
+        for (int i = 0; i < 8; ++i) {
+            const auto& c = mCorners[cIdx[i]];
+            v[i] = c.shCoeffs[band];
+            if (band < c.shGradients.size()) {
+                // Swizzle: FalcorX=Y(.y), FalcorY=Z(.z), FalcorZ=X(.x)
+                g_FalcorX[i] = float3(c.shGradients[band].r.y, c.shGradients[band].g.y, c.shGradients[band].b.y);
+                g_FalcorY[i] = float3(c.shGradients[band].r.z, c.shGradients[band].g.z, c.shGradients[band].b.z);
+                g_FalcorZ[i] = float3(c.shGradients[band].r.x, c.shGradients[band].g.x, c.shGradients[band].b.x);
+            }
+            else {
+                g_FalcorX[i] = g_FalcorY[i] = g_FalcorZ[i] = float3(0.0f);
+            }
+        }
+
+        // --- INTERPOLATION PASSES ---
+
+        // PASS 1: Z-Axis (Interpolate Value AND Partial Derivatives)
+        // We need q (value) and dq_dz (derivative)
+        float3 q[4], dq_dz[4];
+        float3 q_dX[4], q_dY[4]; // Linear interp of transverse gradients
+
+        for (int i = 0; i < 4; ++i) {
+            int i0 = 2 * i; int i1 = 2 * i + 1;
+
+            // Value
+            q[i] = float3(
+                hermite1D(t.z, v[i0].x, g_FalcorZ[i0].x * size.z, v[i1].x, g_FalcorZ[i1].x * size.z),
+                hermite1D(t.z, v[i0].y, g_FalcorZ[i0].y * size.z, v[i1].y, g_FalcorZ[i1].y * size.z),
+                hermite1D(t.z, v[i0].z, g_FalcorZ[i0].z * size.z, v[i1].z, g_FalcorZ[i1].z * size.z)
+            );
+
+            // Derivative d/dz (Note: divide by size.z to get back to World Space!)
+            dq_dz[i] = float3(
+                hermite1D_deriv(t.z, v[i0].x, g_FalcorZ[i0].x * size.z, v[i1].x, g_FalcorZ[i1].x * size.z),
+                hermite1D_deriv(t.z, v[i0].y, g_FalcorZ[i0].y * size.z, v[i1].y, g_FalcorZ[i1].y * size.z),
+                hermite1D_deriv(t.z, v[i0].z, g_FalcorZ[i0].z * size.z, v[i1].z, g_FalcorZ[i1].z * size.z)
+            ) / size.z;
+
+            // Transverse Gradients (Linear approximation is enough for cross-terms)
+            q_dX[i] = lerp(g_FalcorX[i0], g_FalcorX[i1], t.z);
+            q_dY[i] = lerp(g_FalcorY[i0], g_FalcorY[i1], t.z);
+        }
+
+        // PASS 2: Y-Axis
+        float3 r[2], dr_dy[2], dr_dz[2];
+        float3 r_dX[2];
+
+        for (int i = 0; i < 2; ++i) {
+            int i0 = 2 * i; int i1 = 2 * i + 1;
+
+            // Value
+            r[i] = float3(
+                hermite1D(t.y, q[i0].x, q_dY[i0].x * size.y, q[i1].x, q_dY[i1].x * size.y),
+                hermite1D(t.y, q[i0].y, q_dY[i0].y * size.y, q[i1].y, q_dY[i1].y * size.y),
+                hermite1D(t.y, q[i0].z, q_dY[i0].z * size.y, q[i1].z, q_dY[i1].z * size.y)
+            );
+
+            // Derivative d/dy
+            dr_dy[i] = float3(
+                hermite1D_deriv(t.y, q[i0].x, q_dY[i0].x * size.y, q[i1].x, q_dY[i1].x * size.y),
+                hermite1D_deriv(t.y, q[i0].y, q_dY[i0].y * size.y, q[i1].y, q_dY[i1].y * size.y),
+                hermite1D_deriv(t.y, q[i0].z, q_dY[i0].z * size.y, q[i1].z, q_dY[i1].z * size.y)
+            ) / size.y;
+
+            // Propagate d/dz (Linear Interp of previous stage)
+            dr_dz[i] = lerp(dq_dz[i0], dq_dz[i1], t.y);
+
+            // Transverse X
+            r_dX[i] = lerp(q_dX[i0], q_dX[i1], t.y);
+        }
+
+        // PASS 3: X-Axis (Final Gather)
+
+        // Final Value
+        outCoeffs[band] = float3(
+            hermite1D(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
+            hermite1D(t.x, r[0].y, r_dX[0].y * size.y, r[1].y, r_dX[1].y * size.x),
+            hermite1D(t.x, r[0].z, r_dX[0].z * size.z, r[1].z, r_dX[1].z * size.x)
+        );
+
+        // Final Gradients
+        // d/dx comes from Hermite deriv of this stage
+        float3 gradX = float3(
+            hermite1D_deriv(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
+            hermite1D_deriv(t.x, r[0].y, r_dX[0].y * size.y, r[1].y, r_dX[1].y * size.x),
+            hermite1D_deriv(t.x, r[0].z, r_dX[0].z * size.z, r[1].z, r_dX[1].z * size.x)
+        ) / size.x;
+
+        // d/dy and d/dz come from linear interpolation of previous stages
+        float3 gradY = lerp(dr_dy[0], dr_dy[1], t.x);
+        float3 gradZ = lerp(dr_dz[0], dr_dz[1], t.x);
+
+        // --- MAP BACK TO YOUR SWIZZLE ---
+        // Your shader expects: 
+        // .x = Falcor Z (gradZ)
+        // .y = Falcor X (gradX)
+        // .z = Falcor Y (gradY)
+        outGrads[band].r = float3(gradZ.x, gradX.x, gradY.x);
+        outGrads[band].g = float3(gradZ.y, gradX.y, gradY.y);
+        outGrads[band].b = float3(gradZ.z, gradX.z, gradY.z);
+    }
+}
+//
+
+void AdaptiveProbeVolume::constrainHangingNodes()
+{
+    const int FACE_CORNERS[6][4] = {
+            {0, 1, 2, 3}, // Face 0: -X (Left)  <-- WAS {0, 2, 4, 6} (WRONG: This was Back)
+            {4, 5, 6, 7}, // Face 1: +X (Right) <-- WAS {1, 3, 5, 7} (WRONG: This was Front)
+            {0, 1, 4, 5}, // Face 2: -Y (Down)  (Correct)
+            {2, 3, 6, 7}, // Face 3: +Y (Up)    (Correct)
+            {0, 2, 4, 6}, // Face 4: -Z (Back)  <-- WAS {0, 1, 2, 3} (WRONG: This was Left)
+            {1, 3, 5, 7}  // Face 5: +Z (Front) <-- WAS {4, 5, 6, 7} (WRONG: This was Right)
+    };
+
+    for (size_t i = 0; i < mProbes.size(); ++i)
+    {
+        Probe& p = mProbes[i];
+        if (!p.isLeaf) continue;
+
+        for (int face = 0; face < 6; ++face)
+        {
+            int neighborIdx = p.coarseNeighbors[face];
+            if (neighborIdx != -1)
+            {
+                Probe& coarseProbe = mProbes[neighborIdx];
+
+                for (int k = 0; k < 4; ++k)
+                {
+                    int localCornerIdx = FACE_CORNERS[face][k];
+                    int globalCornerIdx = p.corners[localCornerIdx];
+                    Corner& c = mCorners[globalCornerIdx];
+
+                    // 1. Calculate Hermite-Interpolated Value from Coarse Neighbor
+                    std::vector<float3> constrainedCoeffs;
+                    std::vector<GradSHCoeff> constrainedGrads; // We only overwrite coeffs for now
+
+                    interpolateHermite_CPU(neighborIdx, c.position, constrainedCoeffs, constrainedGrads);
+
+                    // 2. Overwrite ONLY the Coefficients (Values)
+                    // We keep the Ray-Traced Gradients because they contain the "High Freq" detail
+                    // of the fine voxel, but we force the "DC offset" to match the neighbor.
+                    c.shCoeffs = constrainedCoeffs;
+                    c.shGradients = constrainedGrads;
+                }
+            }
+        }
+    }
+}
 // ------------------------------------------------------------------
 // Helper: Analytic Eigenvalues for 3x3 Symmetric Matrix
 // ------------------------------------------------------------------
@@ -51,7 +269,7 @@ void AdaptiveProbeVolume::startBuild(const ref<Scene>& pScene, float errorThresh
     mCorners.clear();
     mPendingNewCorners.clear();
     mProbesPendingCheck.clear();
-
+    mCornerLookup.clear();
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
 
@@ -196,13 +414,47 @@ void AdaptiveProbeVolume::finishBatch()
             float3 minP = mProbes[probeIdx].minPoint;
             float3 maxP = mProbes[probeIdx].maxPoint;
             float3 center = (minP + maxP) * 0.5f;
+            // 1. Setup the Lookup Logic ---------------------------------------------
+            float quantizationScale = 10000.0f; // Precision ~0.1mm
 
+            auto getCornerKey = [&](float3 p) -> CornerKey {
+                return {
+                    (int)(floor(p.x * quantizationScale + 0.5f)),
+                    (int)(floor(p.y * quantizationScale + 0.5f)),
+                    (int)(floor(p.z * quantizationScale + 0.5f))
+                };
+                };
             // Helper: Create new corner and add to pending list
-            auto addNewCorner = [&](float3 pos) -> int {
+            /*auto addNewCorner = [&](float3 pos) -> int {
                 Corner c; c.position = pos;
                 mCorners.push_back(c);
                 int idx = (int)mCorners.size() - 1;
                 mPendingNewCorners.push_back(idx);
+                return idx;
+                };*/
+            auto addNewCorner = [&](float3 pos) -> int {
+                CornerKey key = getCornerKey(pos);
+
+                // CHECK: Does this corner already exist?
+                auto it = mCornerLookup.find(key);
+                if (it != mCornerLookup.end()) {
+                    // YES: Return existing index.
+                    // DO NOT add to mPendingNewCorners (It's already been processed!)
+                    return it->second;
+                }
+
+                // NO: It's new. Create it.
+                Corner c;
+                c.position = pos;
+                mCorners.push_back(c);
+                int idx = (int)mCorners.size() - 1;
+
+                // Register in map
+                mCornerLookup[key] = idx;
+
+                // Schedule for Ray Tracing
+                mPendingNewCorners.push_back(idx);
+
                 return idx;
                 };
 
@@ -373,7 +625,7 @@ void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
     computeNeighbors();
-
+    constrainHangingNodes();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
