@@ -182,53 +182,54 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
     // -------------------------------------------------------------------------
     // For bounces (depth > 0), we rely on NEE (sampleLight) to handle lighting smoothly.
-     float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
-    //float3 directLight = float3(0.0f);
+     //float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
+    float3 indirectLight = float3(0.0f);
+    if (hitData.depth > 0) {
+        // ANALYTIC LIGHTS
+        if (kUseAnalyticLights) {
+            for (int i = 0; i < gScene.getLightCount(); i++) {
+                AnalyticLightSample ls;
+                if (sampleLight(sd.posW, gScene.getLight(i), hitData.sg, ls)) {
+                    // If the light is "above" the face, push out. If "below", push in.
+                    float3 shadowRayOrigin = computeRayOrigin(sd.posW, dot(sd.faceN, ls.dir) >= 0 ? sd.faceN : -sd.faceN);
+                    Ray shadowRay;
+                    shadowRay.origin = shadowRayOrigin; // Offset to avoid acne
+                    shadowRay.dir = ls.dir;
+                    shadowRay.tMin = 0.001f;               // Bias
+                    shadowRay.tMax = ls.distance - 0.001f; // Don't hit the light source itself
 
-    // ANALYTIC LIGHTS
-    if (kUseAnalyticLights) {
-        for (int i = 0; i < gScene.getLightCount(); i++) {
-            AnalyticLightSample ls;
-            if (sampleLight(sd.posW, gScene.getLight(i), hitData.sg, ls)) {
-                // If the light is "above" the face, push out. If "below", push in.
-                float3 shadowRayOrigin = computeRayOrigin(sd.posW, dot(sd.faceN, ls.dir) >= 0 ? sd.faceN : -sd.faceN);
-                Ray shadowRay;
-                shadowRay.origin = shadowRayOrigin; // Offset to avoid acne
-                shadowRay.dir = ls.dir;
-                shadowRay.tMin = 0.001f;               // Bias
-                shadowRay.tMax = ls.distance - 0.001f; // Don't hit the light source itself
-
-                if (traceVisibilityRay(shadowRay))
-                {
-                    directLight += mi.eval(sd, ls.dir, hitData.sg) * ls.Li;
+                    if (traceVisibilityRay(shadowRay))
+                    {
+                        indirectLight += mi.eval(sd, ls.dir, hitData.sg) * ls.Li;
+                    }
                 }
             }
         }
-    }
 
-    // EMISSIVE LIGHTS
-    if (kUseEmissiveLights) {
-        const int numEmissiveSamplesPerTriangle = 4;
-        int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
-        const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
+        // EMISSIVE LIGHTS
+        if (kUseEmissiveLights) {
+            const int numEmissiveSamplesPerTriangle = 8;
+            int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
+            const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
 
-        float3 accum = float3(0.0f);
-        for (int s = 0; s < numEmissiveSamples; ++s) {
-            PathVertex vertex = PathVertex(0, sd.posW, sd.frame.N, sd.frontFacing);
-            LightSample ls;
-            if (generateEmissiveSample(vertex, true, hitData.sg, ls) && ls.pdf > 0.0f) {
-                // FIX: Use traceVisibilityRay with ls.getVisibilityRay()
-                if (traceVisibilityRay(ls.getVisibilityRay()))
-                {
-                    float3 bsdf = mi.eval(sd, ls.dir, hitData.sg);
-                    accum += bsdf * ls.Li;
+            float3 accum = float3(0.0f);
+            for (int s = 0; s < numEmissiveSamples; ++s) {
+                PathVertex vertex = PathVertex(0, sd.posW, sd.frame.N, sd.frontFacing);
+                LightSample ls;
+                if (generateEmissiveSample(vertex, true, hitData.sg, ls) && ls.pdf > 0.0f) {
+                    // FIX: Use traceVisibilityRay with ls.getVisibilityRay()
+                    if (traceVisibilityRay(ls.getVisibilityRay()))
+                    {
+                        float3 bsdf = mi.eval(sd, ls.dir, hitData.sg); // mi.eval return f(wi,wo)(n dot wi)
+                        accum += bsdf * ls.Li;
+                    }
                 }
             }
+            indirectLight += accum / float(numEmissiveSamples);
         }
-        directLight += accum / float(numEmissiveSamples);
     }
-    
-    hitData.Li = directLight;
+
+    hitData.Li = indirectLight;
 
     // -------------------------------------------------------------------------
     // 3. Indirect Lighting (Generate Next Ray)
@@ -277,7 +278,7 @@ void rayGen()
     ray.Origin = probePos;
     ray.Direction = dirFalcor;
     ray.TMin = 0.001f;
-    ray.TMax = 1000.f; // Increased range
+    ray.TMax = 10000.f;
 
     // Variables to store the FIRST hit data (for the probe)
     float3 firstHitPos = float3(0.f);
@@ -294,7 +295,8 @@ void rayGen()
         hitData.sg = sg;
         hitData.depth = depth;
         // Trace
-        TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+        //TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+        TraceRay(gScene.rtAccel, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, rayTypeCount, 0, ray, hitData);
         sg = hitData.sg; // Update sample generator state
         // Capture First Hit Data Only (The probe only cares about the first wall)
         if (depth == 0)

@@ -43,6 +43,120 @@ float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
 
     return dh00 * v0 + dh10 * s0 + dh01 * v1 + dh11 * s1;
 }
+
+//
+
+// Interpolates between 'a' and 'b' based on weight 't'.
+// If a corner is invalid, it is ignored, and the valid corner takes over 100%.
+float3 robustLerp(float3 a, float3 b, float t, bool validA, bool validB)
+{
+    if (validA && validB)
+    {
+        // Normal case: Both good, use standard lerp
+        return lerp(a, b, t);
+    }
+    else if (validA && !validB)
+    {
+        // B is broken (Leak source).
+        // Force 'a' to extend all the way to 'b'.
+        return a;
+    }
+    else if (!validA && validB)
+    {
+        // A is broken.
+        // Force 'b' to extend all the way to 'a'.
+        return b;
+    }
+    else
+    {
+        // Both broken. Return black (or handle as failure upstream).
+        return float3(0, 0, 0);
+    }
+}
+
+
+//
+
+// CPU Port of the "Smart" Weighted Accumulation Shader
+// Matches the shader's logic: Sum(Weight * Value) / Sum(Weight)
+void AdaptiveProbeVolume::fetchSmartInterpolatedSH(
+    int probeIdx,
+    float3 pos,
+    float3* outCoeffs
+)
+{
+    const Probe& p = mProbes[probeIdx];
+    float3 size = p.maxPoint - p.minPoint;
+    float3 t = (pos - p.minPoint) / size;
+
+    // Clamp
+    t.x = std::max(0.0f, std::min(1.0f, t.x));
+    t.y = std::max(0.0f, std::min(1.0f, t.y));
+    t.z = std::max(0.0f, std::min(1.0f, t.z));
+
+    // Pre-calculate Trilinear Weights
+    float w[8];
+    w[0] = (1 - t.x) * (1 - t.y) * (1 - t.z);
+    w[1] = (1 - t.x) * (1 - t.y) * (t.z);
+    w[2] = (1 - t.x) * (t.y) * (1 - t.z);
+    w[3] = (1 - t.x) * (t.y) * (t.z);
+    w[4] = (t.x) * (1 - t.y) * (1 - t.z);
+    w[5] = (t.x) * (1 - t.y) * (t.z);
+    w[6] = (t.x) * (t.y) * (1 - t.z);
+    w[7] = (t.x) * (t.y) * (t.z);
+
+    // Initialize Accumulators
+    float3 accumSH[9];
+    for (int b = 0; b < 9; ++b) accumSH[b] = float3(0, 0, 0);
+
+    float totalWeight = 0.0f;
+
+    // Loop 8 Corners
+    for (int k = 0; k < 8; ++k)
+    {
+        int cIdx = p.corners[k];
+
+        // 1. DATA CHECK: Skip missing corners
+        if (cIdx < 0) continue;
+
+        const Corner& c = mCorners[cIdx];
+
+        // 2. ROBUSTNESS CHECK: Skip invalid/black corners
+        // Matches Shader: if (dot(c.coeffs[0], c.coeffs[0]) < 1e-6) continue;
+        // We use our helper flag if available, or check the data directly.
+
+        if (!c.isValid ) continue;
+
+        // 3. WEIGHT
+        // We cannot check "Visibility" (Normal Dot) here because a hanging node
+        // is a point in space, not a surface. We assume "Perfect Visibility" (1.0).
+        // This relies on the Spatial Weight (Trilinear) only.
+        float weight = w[k];
+
+        // 4. ACCUMULATE
+        for (int b = 0; b < 9; ++b)
+        {
+            accumSH[b] += c.shCoeffs[b] * weight;
+        }
+        totalWeight += weight;
+    }
+
+    // 5. RENORMALIZE
+    // This "stretches" the valid corners to fill the gap left by invalid ones.
+    if (totalWeight > 1e-6f)
+    {
+        for (int b = 0; b < 9; ++b)
+        {
+            outCoeffs[b] = accumSH[b] / totalWeight;
+        }
+    }
+    else
+    {
+        // Fallback: Total failure. Return Black.
+        for (int b = 0; b < 9; ++b) outCoeffs[b] = float3(0, 0, 0);
+    }
+}
+
 // 2. Full Tricubic Hermite Interpolation on CPU
 // This mirrors 'fetchHermiteInterpolatedSH' from your shader exactly.
 void AdaptiveProbeVolume::interpolateHermite_CPU(
@@ -177,7 +291,51 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
 }
 //
 
+//
+
+//
+
 void AdaptiveProbeVolume::constrainHangingNodes()
+{
+    // Face Indices: 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
+    const int FACE_CORNERS[6][4] = {
+             {0, 1, 2, 3}, {4, 5, 6, 7},
+             {0, 1, 4, 5}, {2, 3, 6, 7},
+             {0, 2, 4, 6}, {1, 3, 5, 7}
+    };
+
+    for (size_t i = 0; i < mProbes.size(); ++i)
+    {
+        Probe& p = mProbes[i];
+        if (!p.isLeaf) continue;
+
+        for (int face = 0; face < 6; ++face)
+        {
+            int neighborIdx = p.coarseNeighbors[face];
+            if (neighborIdx != -1)
+            {
+                for (int k = 0; k < 4; ++k)
+                {
+                    int localCornerIdx = FACE_CORNERS[face][k];
+                    int globalCornerIdx = p.corners[localCornerIdx];
+                    Corner& c = mCorners[globalCornerIdx];
+
+                    // 1. Allocate Array on Stack
+                    float3 smartCoeffs[9];
+
+                    // 2. Fetch Weighted Average (Renormalized)
+                    // This now uses the Accumulation Logic, not the 3-Pass Lerp.
+                    fetchSmartInterpolatedSH(neighborIdx, c.position, smartCoeffs);
+
+                    // 3. Overwrite Hanging Node
+                    if (c.shCoeffs.size() != 9) c.shCoeffs.resize(9);
+                    for (int b = 0; b < 9; ++b) c.shCoeffs[b] = smartCoeffs[b];
+                }
+            }
+        }
+    }
+}
+void AdaptiveProbeVolume::constrainHangingNodesHermite()
 {
     const int FACE_CORNERS[6][4] = {
             {0, 1, 2, 3}, // Face 0: -X (Left)  <-- WAS {0, 2, 4, 6} (WRONG: This was Back)
@@ -316,7 +474,9 @@ void AdaptiveProbeVolume::setCornerData(
     uint32_t batchIndex,
     const std::vector<float3>& coeffs,
     const std::vector<GradSHCoeff>& grads,
-    const std::vector<float3x3>& hessians // Now receives Luminance Hessians
+    const std::vector<float3x3>& hessians,
+    const std::vector<float>& distMeans,
+    const std::vector<float>& distMeanSqs
 )
 {
     // 1. Locate Probe
@@ -330,11 +490,12 @@ void AdaptiveProbeVolume::setCornerData(
     // -----------------------------------------------------------
     c.shCoeffs = coeffs;       // Full RGB for color rendering
     c.shGradients = grads;     // Full RGB for color interpolation
-
+    c.distMean = distMeans;
+    c.distMeanSq = distMeanSqs;
     // -----------------------------------------------------------
     // PART B: CONSTRUCTION METRICS (Use Luminance)
     // -----------------------------------------------------------
-    if (mUseRelativeError) {
+   // if (mUseRelativeError) {
         const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
         // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
@@ -347,7 +508,9 @@ void AdaptiveProbeVolume::setCornerData(
             sumSqL += lum * lum;
         }
         c.coeffVecL2 = std::sqrt(sumSqL);
-    }
+
+         c.isValid = (c.coeffVecL2 < 0.001f)?false : true;
+    //}
 
     // 2. Calculate Curvature of LUMINANCE Field (Hessian)
     float sumSquares = 0.0f;
@@ -383,12 +546,13 @@ void AdaptiveProbeVolume::finishBatch()
         float distSq = dot(diag, diag);
 
         float totalError = 0.0f;
-
+        uint countValidCorner = 0;
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
-
+            if (!c.isValid) continue;
+            countValidCorner++;
             // E_abs = 0.5 * Lambda * dx^2
             float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
 
@@ -402,7 +566,9 @@ void AdaptiveProbeVolume::finishBatch()
                 totalError += e;
             }
         }
-        float avgProbeError = totalError / 8.0f;
+        float avgProbeError = 0.0f;
+        //if (countValidCorner == 0) avgProbeError = mCurrentThreshold + 0.1f;//force subdivision if no 
+        avgProbeError = totalError / float(countValidCorner);
 
         // --------------------------------------------------
         // Step 5: Subdivide
@@ -620,12 +786,14 @@ void AdaptiveProbeVolume::computeNeighbors()
         std::cout << "Found " << totalCoarseNeighbors << " coarse neighbor links." << std::endl;
     }
 }
+//
 
 void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
     computeNeighbors();
-    constrainHangingNodes();
+    //constrainHangingNodes();
+    constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
@@ -665,7 +833,8 @@ void AdaptiveProbeVolume::uploadToGPU()
     for (const auto& c : mCorners)
     {
         GPUCorner gc;
-
+        gc.position = c.position;
+        gc.isValid = c.isValid ? 1 : 0;
         // Safety: ensure we don't read out of bounds if corner has fewer bands
         int numBands = std::min((int)c.shCoeffs.size(), 9);
 
@@ -673,11 +842,12 @@ void AdaptiveProbeVolume::uploadToGPU()
         {
             if (i < numBands)
             {
-                // Value
-                gc.coeffs[i] = float4(c.shCoeffs[i], 0.0f);
+                // PACKING TRICK:
+                                // RGB = Radiance, A = Mean Distance
+                gc.coeffs[i] = float4(c.shCoeffs[i], c.distMean[i]);
 
-                // Gradients
-                gc.gradR[i] = float4(c.shGradients[i].r, 0.0f);
+                // GradR RGB = Gradient X, A = Mean Squared Distance
+                gc.gradR[i] = float4(c.shGradients[i].r, c.distMeanSq[i]);
                 gc.gradG[i] = float4(c.shGradients[i].g, 0.0f);
                 gc.gradB[i] = float4(c.shGradients[i].b, 0.0f);
             }
@@ -706,10 +876,16 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     std::ofstream out(filename);
     if (!out) return;
 
+    uint leafCounter = 0;
+    for (int i = 0; i < mProbes.size(); ++i) {
+        if (mProbes[i].isLeaf)
+            leafCounter++;
+    }
+
     out << "================================================================================\n";
     out << " ADAPTIVE PROBE VOLUME HIERARCHY (Vertex-Sharing)\n";
     out << "================================================================================\n";
-    out << " Probes:    " << mProbes.size() << "\n";
+    out << " Probes:    " << leafCounter << "\n";
     out << " Corners:   " << mCorners.size() << "\n";
     out << " Threshold: " << mCurrentThreshold << "\n";
     out << " Max Level: " << mMaxLevel << "\n";
@@ -816,6 +992,8 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     out.close();
 }
 
+//
+
 void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
 {
     std::ofstream out(filename);
@@ -824,11 +1002,10 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         logError("Failed to open file for saving: " + filename);
         return;
     }
-
     out << std::fixed << std::setprecision(8);
 
-    // 1. Header & Config
-    out << "ADAPTIVE_GRID_V2\n";
+    // 1. Header & Config (UPDATED VERSION TO V3)
+    out << "ADAPTIVE_GRID_V3\n";
     out << mCurrentThreshold << " " << mMaxLevel << " " << (mUseRelativeError ? 1 : 0) << "\n";
 
     // 2. Corners
@@ -839,7 +1016,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         out << c.position.x << " " << c.position.y << " " << c.position.z << " ";
         out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << "\n";
 
-        // SH Coeffs
+        // SH Coeffs (Radiance)
         out << c.shCoeffs.size() << "\n";
         for (const auto& val : c.shCoeffs)
         {
@@ -851,15 +1028,28 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         out << c.shGradients.size() << "\n";
         for (const auto& g : c.shGradients)
         {
-            // Assuming GradSHCoeff has r, g, b (float3)
             out << g.r.x << " " << g.r.y << " " << g.r.z << " ";
             out << g.g.x << " " << g.g.y << " " << g.g.z << " ";
             out << g.b.x << " " << g.b.y << " " << g.b.z << " ";
         }
         out << "\n";
+
+        // --------------------------------------------------------
+        // NEW: Distance Moments (Chebyshev Data)
+        // --------------------------------------------------------
+
+        // Mean Distance
+        out << c.distMean.size() << "\n";
+        for (const auto& val : c.distMean) out << val << " ";
+        out << "\n";
+
+        // Mean Squared Distance
+        out << c.distMeanSq.size() << "\n";
+        for (const auto& val : c.distMeanSq) out << val << " ";
+        out << "\n";
     }
 
-    // 3. Probes
+    // 3. Probes (Unchanged)
     out << "NUM_PROBES " << mProbes.size() << "\n";
     for (const auto& p : mProbes)
     {
@@ -879,7 +1069,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     }
 
     out.close();
-    logInfo("Successfully saved AdaptiveProbeVolume to " + filename);
+    logInfo("Successfully saved AdaptiveProbeVolume (V3) to " + filename);
 }
 
 void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
@@ -896,12 +1086,14 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     mCorners.clear();
     mPendingNewCorners.clear();
     mProbesPendingCheck.clear();
+    mCornerLookup.clear(); // Cleared here... but needs to be filled!
 
     std::string header;
     in >> header;
-    if (header != "ADAPTIVE_GRID_V2")
+
+    if (header != "ADAPTIVE_GRID_V3")
     {
-        logError("Invalid file format or version mismatch: " + filename);
+        logError("Invalid file format or version mismatch (Expected V3): " + filename);
         return;
     }
 
@@ -915,11 +1107,13 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     in >> tag >> numCorners;
 
     mCorners.resize(numCorners);
+
     for (size_t i = 0; i < numCorners; ++i)
     {
         Corner& c = mCorners[i];
         in >> c.position.x >> c.position.y >> c.position.z;
         in >> c.maxLambdaVecL2 >> c.coeffVecL2;
+        c.isValid = c.coeffVecL2 < 0.001 ? false : true;
 
         // SH Coeffs
         size_t numCoeffs;
@@ -940,6 +1134,17 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shGradients[k].g.x >> c.shGradients[k].g.y >> c.shGradients[k].g.z;
             in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
         }
+
+        // NEW: Distance Moments
+        size_t numDist;
+        in >> numDist;
+        c.distMean.resize(numDist);
+        for (size_t k = 0; k < numDist; ++k) in >> c.distMean[k];
+
+        size_t numDistSq;
+        in >> numDistSq;
+        c.distMeanSq.resize(numDistSq);
+        for (size_t k = 0; k < numDistSq; ++k) in >> c.distMeanSq[k];
     }
 
     // 3. Load Probes
@@ -960,7 +1165,6 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         for (int k = 0; k < 8; ++k) in >> p.corners[k];
         for (int k = 0; k < 8; ++k) in >> p.children[k];
     }
-
     in.close();
-    logInfo("Successfully loaded AdaptiveProbeVolume from " + filename);
+    logInfo("Successfully loaded AdaptiveProbeVolume (V3) from " + filename);
 }

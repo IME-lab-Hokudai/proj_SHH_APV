@@ -1740,3 +1740,47 @@ void calculateSHCoeffsGradientsRGBAndHessiansLum(
         );
     }
 }
+
+//
+
+// NEW: Compute SH coefficients for Radial Distance (r) and Squared Distance (r^2)
+void calculateSHCoeffsRadialMoments(
+    std::vector<float>& outMean,      // Output: 9 coeffs for E[r]
+    std::vector<float>& outMeanSq,    // Output: 9 coeffs for E[r^2]
+    const std::vector<ProbeSampleData>& probeSamplingResults,
+    int numSamplePerProbe
+)
+{
+    if (shOrder == -1 || SHBasisTable == nullptr) {
+        // logError("Init SH table first");
+        return;
+    }
+
+    int num_basis = 9;
+    outMean.assign(num_basis, 0.0f);
+    outMeanSq.assign(num_basis, 0.0f);
+
+    float weight = 4.0f * float(M_PI) / float(numSamplePerProbe);
+
+    for (int basisIdx = 0; basisIdx < num_basis; ++basisIdx)
+    {
+        double sumR = 0.0;
+        double sumR2 = 0.0;
+
+        for (int sampleIdx = 0; sampleIdx < numSamplePerProbe; ++sampleIdx)
+        {
+            float dist = probeSamplingResults[sampleIdx].hitT;
+
+            // Handle Sky/Miss: Treat as "Far Away" (e.g., 100m)
+            if (dist < 0.0f) dist = 10000.0f;
+
+            float shBasis = SHBasisTable[num_basis * sampleIdx + basisIdx];
+
+            sumR += (double)dist * shBasis * weight;
+            sumR2 += (double)(dist * dist) * shBasis * weight;
+        }
+
+        outMean[basisIdx] = (float)sumR;
+        outMeanSq[basisIdx] = (float)sumR2;
+    }
+}

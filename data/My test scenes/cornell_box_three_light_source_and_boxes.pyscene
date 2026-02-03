@@ -103,6 +103,8 @@ sceneBuilder.addMeshInstance(
     sceneBuilder.addTriangleMesh(quadMesh, lightGreen)
 )
 
+sphereMesh = TriangleMesh.createSphere()
+
 # WHITE TEST MATERIAL (For the Dynamic Boxes)
 # Pure white, perfectly diffuse. This acts like a "Probe Watcher"
 # allowing you to see the pure light color without texture interference.
@@ -123,16 +125,16 @@ sceneBuilder.addMeshInstance(
 )
 
 # Box 2: The Red Efficiency Test (Low Frequency)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('EfficiencyBox_Red', Transform(scaling=0.15, translation=float3(0.15, 0.075, 0.15))),
-    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('EfficiencyBox_Red', Transform(scaling=0.15, translation=float3(0.15, 0.075, 0.15))),
+#    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
+#)
 
 # Box 3: The Green Direction Test (Vector Gradient)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('DirectionBox_Green', Transform(scaling=0.15, translation=float3(0.15, 0.075, -0.05))),
-    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('DirectionBox_Green', Transform(scaling=0.15, translation=float3(0.15, 0.075, -0.05))),
+#    sceneBuilder.addTriangleMesh(boxMesh, matWhite)
+#)
 
 # ---------------------------------------------------------
 # CAMERA

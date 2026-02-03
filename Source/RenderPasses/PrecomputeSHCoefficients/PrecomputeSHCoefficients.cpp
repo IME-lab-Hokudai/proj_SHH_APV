@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -49,9 +49,10 @@ const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 25.0f;
-const float ErrorThreshold = 2.0f;//threshold for Erel
-//const float ErrorThreshold = 1.0f;//threshold for Erel
-const bool useRelativeError = true;
+const float ErrorThreshold = 10.0f;//threshold for Erel
+//const float ErrorThreshold = 1.5f;//threshold for Erel
+const bool useRelativeError = false;
+//const bool useRelativeError = true;
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -682,9 +683,12 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
                     calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
 
+                    std::vector<float> outMean;      // Output: 9 coeffs for E[r]
+                    std::vector<float> outMeanSq;    // Output: 9 coeffs for E[r^2]
+                    calculateSHCoeffsRadialMoments(outMean, outMeanSq, probeSamplingResults, numSamplesPerProbe);
                     //Feed Data back to Volume
                     // We pass the batch index (probeIdx) and the calculated data
-                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
+                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians, outMean, outMeanSq);
                 }
 
                 delete[] allProbeSamplingData;
@@ -711,7 +715,7 @@ if (mNeedRebuildProbeVolume)
     // 1. Initialize Uniform Grid
     // --------------------------------------------------------------------------
     // You can change the resolution here (e.g., 16x16x16)
-    mUniformProbeVolume->initGrid(mpScene, uint3(7, 7, 7));
+    mUniformProbeVolume->initGrid(mpScene, uint3(12, 12, 12));
 
     // --------------------------------------------------------------------------
     // 2. Prepare for Ray Tracing (One single batch)
@@ -1280,6 +1284,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            }
            // Restore Leaf Only
            mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
            if (!mNeedRebuildProbeVolume) {

@@ -269,10 +269,10 @@ Shape "trianglemesh"
     "point3 P" [ -6.29999 8.03075 10.044 -6.29999 -1.51685 10.044 -6.29999 -1.51685 
                  -4.644 -6.29999 8.03075 -4.644 ]
     "integer indices" [ 0 1 2 0 2 3 ]
-LightSource "distant"
-    "rgb L" [ 10 10 10 ]
-    "point3 to" [ 0 0 0 ]
-    "point3 from" [ 0.88698 0.288862 0.360313 ]
+#LightSource "distant"
+#    "rgb L" [ 10 10 10 ]
+#    "point3 to" [ 0 0 0 ]
+#    "point3 from" [ 0.88698 0.288862 0.360313 ]
 AttributeBegin
     Rotate -7 0 0 1
     ConcatTransform [ -1 0 8.74228e-8 0 -8.74228e-8 0 -1 0 0 1 0 0 0 0 0 1  ]

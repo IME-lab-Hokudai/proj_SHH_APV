@@ -31,3 +31,5 @@
 *.tlog
 *.bak
 *.swp
+*.zip
+/data/My test scenes/San_Miguel

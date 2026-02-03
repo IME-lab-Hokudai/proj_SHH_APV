@@ -26,44 +26,45 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ###########################################################################
 
-sceneBuilder.importScene('dining_room/scene-v4.pbrt')
+#sceneBuilder.importScene('San_Miguel/san-miguel.obj')
+sceneBuilder.importScene('San_Miguel/san-miguel-low-poly.obj')
 Scene.cameraSpeed = 50.0
 # Create emissive material for area lights
-lightMatOverhead = StandardMaterial('Light')
-lightMatOverhead.emissiveColor = float3(1.0, 0.6, 0.2)
-lightMatOverhead.emissiveFactor = 50 
+#lightMatOverhead = StandardMaterial('Light')
+#lightMatOverhead.emissiveColor = float3(1.0, 0.6, 0.2)
+#lightMatOverhead.emissiveFactor = 50 
 
-lightMatSide = StandardMaterial('Light 2')
-lightMatSide.emissiveColor = float3(0.1, 0.4, 1.0)
-lightMatSide.emissiveFactor = 50  
+#lightMatSide = StandardMaterial('Light 2')
+#lightMatSide.emissiveColor = float3(0.1, 0.4, 1.0)
+#lightMatSide.emissiveFactor = 50  
 
 # Create quad mesh for lights
 quadMesh = TriangleMesh.createQuad()
 
 # Add overhead area light (large quad at ceiling height, facing down)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), rotationEulerDeg=float3(180, 0, 0))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), rotationEulerDeg=float3(180, #0, 0))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
+#)
 
 # Add side area light (smaller quad on one side, for additional illumination)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), rotationEulerDeg=float3(0, 0, -90))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), rotationEulerDeg=float3(0, 0, #-90))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
+#)
 
 # Create camera (typical view looking into the atrium from one end)
 camera = Camera()
-camera.position = float3(-12, 2, 0)  # Eye position inside the scaled scene
-camera.target = float3(0, 2, 0)
+camera.position = float3(23.2189, 2.7061, 5.5287)  # Eye position inside the scaled scene
+camera.target = float3(22.3062, 2.3375, 5.3524)
 camera.up = float3(0, 1, 0)
-camera.focalLength = 16.0
+camera.focalLength = 20.0
 camera.farPlane = 10000.0  # Default is often 1000.0, which might be too short
 camera.nearPlane = 0.1     # Keep near plane small to see close objects
 sceneBuilder.addCamera(camera)
 
 # Add directional light
-#dirLight = DirectionalLight('Directional light')
-#dirLight.intensity = float3(50.0, 50.0, 45.0)
-#dirLight.direction = float3(0.5, -1.0, 0.2)
-#sceneBuilder.addLight(dirLight)
+dirLight = DirectionalLight('Directional light')
+dirLight.intensity = float3(60.0, 60.0, 60.0)
+dirLight.direction = float3(0.1, -0.934, -0.357)
+sceneBuilder.addLight(dirLight)

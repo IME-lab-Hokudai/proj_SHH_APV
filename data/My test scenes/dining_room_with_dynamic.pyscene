@@ -37,8 +37,12 @@ lightMatSide = StandardMaterial('Light 2')
 lightMatSide.emissiveColor = float3(0.1, 0.4, 1.0)
 lightMatSide.emissiveFactor = 50  
 
+bunnyMat = StandardMaterial('BunnyMat')
+bunnyMat.baseColor = float4(0.5, 0.5, 0.5, 1.0)
+bunnyMat.roughness = 1.0
 # Create quad mesh for lights
 quadMesh = TriangleMesh.createQuad()
+bunnyMesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 
 # Add overhead area light (large quad at ceiling height, facing down)
 sceneBuilder.addMeshInstance(
@@ -52,12 +56,23 @@ sceneBuilder.addMeshInstance(
     sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
 )
 
+bunnyNodeId = sceneBuilder.addNode('Bunny', Transform(translation=float3(-5, 3, 0), rotationEuler=float3(0, 0, 0), scaling=0.7))
+sceneBuilder.addMeshInstance(
+    bunnyNodeId,
+    sceneBuilder.addTriangleMesh(bunnyMesh, bunnyMat)
+)
+
+anim = Animation('sphereAnim',bunnyNodeId,10.0)
+anim.addKeyframe(0.0, Transform(translation=float3(-5, 3, 0), scaling=0.7))
+anim.addKeyframe(10.0, Transform(translation=float3(5, 3, 0), scaling=0.7))
+sceneBuilder.addAnimation(anim)
+
 # Create camera (typical view looking into the atrium from one end)
 camera = Camera()
 camera.position = float3(-12, 2, 0)  # Eye position inside the scaled scene
 camera.target = float3(0, 2, 0)
 camera.up = float3(0, 1, 0)
-camera.focalLength = 16.0
+camera.focalLength = 35.0
 camera.farPlane = 10000.0  # Default is often 1000.0, which might be too short
 camera.nearPlane = 0.1     # Keep near plane small to see close objects
 sceneBuilder.addCamera(camera)

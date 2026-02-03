@@ -34,6 +34,10 @@ public:
 
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
+        bool isValid;
+        std::vector<float> distMean;   // New
+        std::vector<float> distMeanSq; // New
+        float constraintWeight = 0.0f;
     };
 
     //
@@ -53,9 +57,14 @@ public:
         }
     };
 
+    void interpolateRobust_CPU(int probeIdx, float3 pos, std::vector<float3>& outCoeffs);
+
+    void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3* finalCoeffs);
+
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
 
     void constrainHangingNodes();
+    void constrainHangingNodesHermite();
 
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
@@ -79,7 +88,9 @@ public:
         uint32_t batchIndex,
         const std::vector<float3>& coeffs,
         const std::vector<GradSHCoeff>& grads,
-        const std::vector<float3x3>& hessians // Now receives Luminance Hessians
+        const std::vector<float3x3>& hessians,
+        const std::vector<float>& distMeans,
+        const std::vector<float>& distMeanSqs
     );
 
     // Calculate Error per Probe, Subdivide if needed, Generate new Corners
@@ -88,6 +99,8 @@ public:
     int traverseOctreeCPU(float3 pos) const;
 
     void computeNeighbors();
+
+    void interpolateLinear_CPU(int coarseProbeIdx, float3 pos, std::vector<float>& outDist, std::vector<float>& outDistSq);
 
     // ----------------------------------------------------------------
     // Resources & Debug
@@ -124,7 +137,7 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 5;
+    int mMaxLevel = 7;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;

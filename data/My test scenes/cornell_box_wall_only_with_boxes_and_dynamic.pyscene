@@ -113,10 +113,10 @@ sceneBuilder.addMeshInstance(
 # Short Box (Blue)
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode('Short Box', Transform(
-        scaling=float3(0.165, 0.2, 0.165), 
+        scaling=float3(0.165, 0.165, 0.165), 
         #translation=float3(0.09, 0.0825, 0.06),
  #       rotationEulerDeg=float3(0, -18, 0)
- translation=float3(-0.15, 0.101, -0.14),
+ translation=float3(-0.15, 0.1, -0.14),
     )),
     sceneBuilder.addTriangleMesh(cubeMesh, shortBoxMat) # <--- Using Blue Material
 )
@@ -157,6 +157,11 @@ sphereNodeID = sceneBuilder.addNode('Sphere', Transform(translation=float3(0.13,
 sceneBuilder.addMeshInstance(
     sphereNodeID,
     sceneBuilder.addTriangleMesh(sphereMesh, sphereMat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('Bunny', Transform(translation=float3(0.0, 0.3, 0), rotationEuler=float3(0, 0, 0), scaling=0.1)),
+    sceneBuilder.addTriangleMesh(bunnyMesh, sphereMat)
 )
 
 sceneBuilder.addMeshInstance(

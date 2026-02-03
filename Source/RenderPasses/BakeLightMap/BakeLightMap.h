@@ -26,12 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #pragma once
-#include "AdaptiveProbeVolume.h"
-#include "UniformProbeVolume.h"
-#include "envMap_SH.h"
 #include "Falcor.h"
-#include "ProbeVisualizePass.h"
-#include "Core/Pass/FullScreenPass.h"
 #include "RenderGraph/RenderPass.h"
 #include "RenderGraph/RenderPassHelpers.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
@@ -39,17 +34,17 @@
 
 using namespace Falcor;
 
-class PrecomputeSHCoefficients : public RenderPass
+class BakeLightMap : public RenderPass
 {
 public:
-    FALCOR_PLUGIN_CLASS(PrecomputeSHCoefficients, "PrecomputeSHCoefficients", "Insert pass description here.");
+    FALCOR_PLUGIN_CLASS(BakeLightMap, "BakeLightMap", "Insert pass description here.");
 
-    static ref<PrecomputeSHCoefficients> create(ref<Device> pDevice, const Properties& props)
+    static ref<BakeLightMap> create(ref<Device> pDevice, const Properties& props)
     {
-        return make_ref<PrecomputeSHCoefficients>(pDevice, props);
+        return make_ref<BakeLightMap>(pDevice, props);
     }
 
-    PrecomputeSHCoefficients(ref<Device> pDevice, const Properties& props);
+    BakeLightMap(ref<Device> pDevice, const Properties& props);
 
     virtual Properties getProperties() const override;
     virtual RenderPassReflection reflect(const CompileData& compileData) override;
@@ -61,59 +56,17 @@ public:
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
 private:
+
     ref<Scene> mpScene;
     ref<Program> mpProgram;
-    ref<GraphicsState> mpGraphicsState;
-    ref<RasterizerState> mpRasterState;
     ref<ProgramVars> mpVars;
     ref<Sampler> mpLinearSampler;
-    // Internal state
-    ref<Fbo> mpFbo;
-    /// Selected output size.
     RenderPassHelpers::IOSize mOutputSizeSelection = RenderPassHelpers::IOSize::Default;
-    /// Output size in pixels when 'Fixed' size is selected.
-    uint2 mFixedOutputSize = {512, 512};
+    uint2 mFixedOutputSize = { 512, 512 };
 
-    ref<FullScreenPass> mpFullScreenPass;
-    ref<EnvMap> mpEnvMap;
-    bool mbShowReconstructedEnvMap = false;
-    bool mbShowAdaptiveGrid = false;
-    ProbeGrid mUniformProbeGrid;
-    ref<Buffer> mpGridSHCoeffsBuffer; //SH coeffs of all probes
-    ref<Buffer> mpProbePosBuffer; // probe center positions in world space
-    ref<Buffer> mpProbeDirSamplesBuffer;
-    ref<Buffer> mpProbeSamplingResultBuffer;
-
-    //visualize probe grid
-    ref<ProbeVisualizePass> mpProbeVisualizePass;
-
-    // for probe sampling using ray tracing
+    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform;
+    std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;
+    mutable LightBVHSampler::Options mLightBVHOptions;
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
-
-    bool mbFinishSHPrecompute = false;
-    //bool mbFinishSHPrecompute = false;
-    //std::string sceneName = "arcade";
-    std::string sceneName = "cornell";
-    uint32_t mSampleIndex = 0xdeadbeef;
-
-    // emissive light sampler
-    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform; ///< Emissive light sampler to use for NEE.
-    std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler; ///< Emissive light sampler or nullptr if not used.
-    mutable LightBVHSampler::Options mLightBVHOptions; ///< Current options for the light BVH sampler. not used yet. just here to compile the code
-    
-    //ref<SampleGenerator> mpSampleGenerator;            ///< GPU pseudo-random sample generator.
-
-    bool mbVerify = false;
-    std::vector<float3> verificationPositions;
-    std::vector<ProbeDirSample> samplingDirs;
-    float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
-
-    ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
-    ref<UniformProbeVolume> mUniformProbeVolume;
-    bool mNeedRebuildProbeVolume = false;
-
-    // Add this array to track checkbox states
-    bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
-    bool mbDrawLeafOnly = false; 
 };
