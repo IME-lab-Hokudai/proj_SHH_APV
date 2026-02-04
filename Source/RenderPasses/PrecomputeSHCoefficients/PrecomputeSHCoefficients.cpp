@@ -683,12 +683,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
                     calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
 
-                    std::vector<float> outMean;      // Output: 9 coeffs for E[r]
-                    std::vector<float> outMeanSq;    // Output: 9 coeffs for E[r^2]
-                    calculateSHCoeffsRadialMoments(outMean, outMeanSq, probeSamplingResults, numSamplesPerProbe);
+                    //std::vector<float> outMean;      // Output: 9 coeffs for E[r]
+                    //std::vector<float> outMeanSq;    // Output: 9 coeffs for E[r^2]
+                    //calculateSHCoeffsRadialMoments(outMean, outMeanSq, probeSamplingResults, numSamplesPerProbe);
                     //Feed Data back to Volume
                     // We pass the batch index (probeIdx) and the calculated data
-                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians, outMean, outMeanSq);
+                    //mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians, outMean, outMeanSq);
+                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
                 }
 
                 delete[] allProbeSamplingData;
@@ -1261,7 +1262,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            RasterizerState::Desc rasterDesc;
            rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
            rasterDesc.setCullMode(RasterizerState::CullMode::None);
-           rasterDesc.setDepthBias(100000, 1.0f);
+           rasterDesc.setDepthBias(10000, 1.0f);
            mpRasterState = RasterizerState::create(rasterDesc);
 
            // default depth stencil state

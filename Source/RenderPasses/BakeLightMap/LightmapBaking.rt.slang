@@ -9,10 +9,11 @@ import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
 import Utils.Geometry.GeometryHelpers;
 #include "Utils/Math/MathConstants.slangh"
+#include "BakeDataStructures.slang"
 
 // Bindings (adjust registers as per your Falcor pass)
 StructuredBuffer<TexelSample> gTexelSamples;
-RWStructuredBuffer<float3> gIrradianceAccum;
+RWStructuredBuffer<float4> gIrradianceAccum;
 TextureCube<float3> gEnvMap;
 SamplerState gEnvSampler;
 
@@ -27,14 +28,6 @@ cbuffer PerFrameCB
     uint numTexels;
     float bias;             // Surface offset bias (e.g., 0.02)
     EmissiveLightSampler emissiveSampler;
-};
-
-// Texel data (precomputed)
-struct TexelSample
-{
-    float3 posW;
-    float3 normalW;
-    uint texelIndex;        // Flat index into gIrradianceAccum
 };
 
 // Simplified payload (no probe-specific data)
@@ -324,5 +317,5 @@ void rayGen()
     }
 
     // Accumulate radiance (post-process multiplies by PI / totalSamples)
-    gIrradianceAccum[ts.texelIndex] += accumColor;
+    gIrradianceAccum[ts.texelIndex] += float4(accumColor, 1.0f);
 }

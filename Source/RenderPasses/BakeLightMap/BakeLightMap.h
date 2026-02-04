@@ -51,6 +51,7 @@ public:
     virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
     virtual void renderUI(Gui::Widgets& widget) override;
+    void loadLightmap(const std::filesystem::path& path);
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
@@ -60,13 +61,33 @@ private:
     ref<Scene> mpScene;
     ref<Program> mpProgram;
     ref<ProgramVars> mpVars;
-    ref<Sampler> mpLinearSampler;
+    ref<GraphicsState> mpGraphicsState;
+    ref<RasterizerState> mpRasterState;
+    ref<Fbo> mpUVFbo;
+    ref<Fbo> mpFbo;
+
     RenderPassHelpers::IOSize mOutputSizeSelection = RenderPassHelpers::IOSize::Default;
     uint2 mFixedOutputSize = { 512, 512 };
-
+    uint32_t mLightmapWidth = 1024;
+    uint32_t mLightmapHeight = 1024;
     EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform;
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;
     mutable LightBVHSampler::Options mLightBVHOptions;
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
+
+    ref<ComputePass> mpExtractPass;
+    ref<ComputePass> mpNormalizePass;
+    ref<Buffer> mpTexelBuffer;
+    ref<Buffer> mpCounterBuffer;
+    ref<Buffer> mpAccumBuffer;
+    // In BakeLightMap.h
+    ref<Texture> mpResultTex;
+    uint32_t mNumExtractedTexels = 0;
+    bool mNeedsPreparation = true;
+    uint32_t mCurrentSample = 0;
+    uint32_t mTotalSamples = 128; // Set your target quality here
+    bool mbloadLightMap = true;
+    ref<Texture> mpLoadedLightmap;
+    ref<Sampler> mpLinearSampler;
 };

@@ -474,9 +474,9 @@ void AdaptiveProbeVolume::setCornerData(
     uint32_t batchIndex,
     const std::vector<float3>& coeffs,
     const std::vector<GradSHCoeff>& grads,
-    const std::vector<float3x3>& hessians,
-    const std::vector<float>& distMeans,
-    const std::vector<float>& distMeanSqs
+    const std::vector<float3x3>& hessians
+    //const std::vector<float>& distMeans,
+    //const std::vector<float>& distMeanSqs
 )
 {
     // 1. Locate Probe
@@ -490,8 +490,8 @@ void AdaptiveProbeVolume::setCornerData(
     // -----------------------------------------------------------
     c.shCoeffs = coeffs;       // Full RGB for color rendering
     c.shGradients = grads;     // Full RGB for color interpolation
-    c.distMean = distMeans;
-    c.distMeanSq = distMeanSqs;
+    //c.distMean = distMeans;
+    //c.distMeanSq = distMeanSqs;
     // -----------------------------------------------------------
     // PART B: CONSTRUCTION METRICS (Use Luminance)
     // -----------------------------------------------------------

@@ -88,9 +88,9 @@ public:
         uint32_t batchIndex,
         const std::vector<float3>& coeffs,
         const std::vector<GradSHCoeff>& grads,
-        const std::vector<float3x3>& hessians,
-        const std::vector<float>& distMeans,
-        const std::vector<float>& distMeanSqs
+        const std::vector<float3x3>& hessians
+        //const std::vector<float>& distMeans,
+        //const std::vector<float>& distMeanSqs
     );
 
     // Calculate Error per Probe, Subdivide if needed, Generate new Corners
