@@ -8,8 +8,8 @@ VSOut vsMain(VSIn v)
     const GeometryInstanceID instanceID = { v.instanceID };
 
     // Map UVs [0, 1] to NDC [-1, 1] for lightmap unwrapping
-    float2 uv = v.texC; 
-    vout.posH = float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, 0.0f, 1.0f); 
+    float2 uv = v.texC;
+    vout.posH = float4(uv.x * 2.0f - 1.0f, uv.y * 2.0f - 1.0f, 0.0f, 1.0f);
 
     // Compute standard world space attributes
     float4x4 worldMat = gScene.getWorldMatrix(instanceID);

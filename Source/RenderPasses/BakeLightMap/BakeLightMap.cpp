@@ -43,9 +43,9 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 
 BakeLightMap::BakeLightMap(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
+    mpFbo = Fbo::create(mpDevice);
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
-
     mpLinearSampler = mpDevice->createSampler(samplerDesc);
 }
 
@@ -71,99 +71,105 @@ RenderPassReflection BakeLightMap::reflect(const CompileData& compileData)
 
 void BakeLightMap::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpScene) return;
     // STEP 1: Rasterize Scene into UV Space
-    if (mbloadLightMap) {
-        auto pTargetFbo = renderData.getTexture("output");
-        const float4 clearColor(0, 0, 0, 1);
-        mpFbo->attachColorTarget(pTargetFbo, 0);
+    auto pTargetFbo = renderData.getTexture("output");
+    const float4 clearColor(0, 0, 0, 1);
+    mpFbo->attachColorTarget(pTargetFbo, 0);
+    // IMPORTANT: Set Viewport to match the 'output' texture size
 
-        // Update frame dimension based on render pass output.
-        auto pDepth = renderData.getTexture("depth");
-        mpFbo->attachDepthStencilTarget(pDepth);
-        auto applyVar = mpVars->getRootVar();
-        applyVar["gLightmap"] = mpLoadedLightmap;
-        applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
-    }
-    else {
-        if (mNeedsPreparation) {
-            pRenderContext->clearFbo(mpUVFbo.get(), float4(0), 1.0f, 0, FboAttachmentType::Color);
+    // Update frame dimension based on render pass output.
+    auto pDepth = renderData.getTexture("depth");
+    pRenderContext->clearDsv(pDepth->getDSV().get(), 1.f, 0);
+    mpFbo->attachDepthStencilTarget(pDepth);
+    pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::Color);
+    if (mpScene) {
+        if (mbloadLightMap) {
 
+
+            auto applyVar = mpVars->getRootVar();
+            applyVar["gLightmap"] = mpLoadedLightmap;
+            applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
-
-            pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
-            auto var = mpExtractPass->getRootVar();
-            var["gPosW"] = mpUVFbo->getColorTexture(0);
-            var["gNormW"] = mpUVFbo->getColorTexture(1);
-            var["gTexelSamples"] = mpTexelBuffer;
-            var["gCounter"] = mpCounterBuffer;
-            var["CB"]["gResolution"] = uint2(mLightmapWidth, mLightmapHeight);
-            mpExtractPass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
-            mNeedsPreparation = false; // Only do this again if scene changes
-            mCurrentSample = 0;        // Reset baking progress
-
-            // --- Readback the Texel Count ---
-            uint32_t extractedCount = 0;
-            // Since it is a 1-element buffer, we read 4 bytes (sizeof(uint32_t))
-            mpCounterBuffer->getBlob(&extractedCount, 0, sizeof(uint32_t));
-
-            // Store it in a class member so the RT pass can use it
-            mNumExtractedTexels = extractedCount;
         }
-        // -------------------------------------------------------------------------
-        // STEP 3: ITERATIVE BAKING (Ray Tracing Accumulation)
-        // ------------------------------------------------------------------------
-        if (mCurrentSample < mTotalSamples)
-        {
-            if (mCurrentSample == 0) {
-                pRenderContext->clearUAV(mpAccumBuffer->getUAV().get(), float4(0));
+        else {
+            if (mNeedsPreparation) {
+                pRenderContext->clearFbo(mpUVFbo.get(), float4(0), 1.0f, 0, FboAttachmentType::Color);
+
+                mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+
+                pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
+                auto var = mpExtractPass->getRootVar();
+                var["gPosW"] = mpUVFbo->getColorTexture(0);
+                var["gNormW"] = mpUVFbo->getColorTexture(1);
+                var["gTexelSamples"] = mpTexelBuffer;
+                var["gCounter"] = mpCounterBuffer;
+                var["CB"]["gResolution"] = uint2(mLightmapWidth, mLightmapHeight);
+                mpExtractPass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
+                mNeedsPreparation = false; // Only do this again if scene changes
+                mCurrentSample = 0;        // Reset baking progress
+
+                // --- Readback the Texel Count ---
+                uint32_t extractedCount = 0;
+                // Since it is a 1-element buffer, we read 4 bytes (sizeof(uint32_t))
+                mpCounterBuffer->getBlob(&extractedCount, 0, sizeof(uint32_t));
+
+                // Store it in a class member so the RT pass can use it
+                mNumExtractedTexels = extractedCount;
             }
-            auto rtVar = mpRtVars->getRootVar();
-
-            // Bind the data we extracted in the preparation step
-            rtVar["gTexelSamples"] = mpTexelBuffer;
-
-            // Output and Sample Progress
-            rtVar["gIrradianceAccum"] = mpAccumBuffer;
-            rtVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
-            rtVar["PerFrameCB"]["numTexels"] = mNumExtractedTexels;
-            rtVar["PerFrameCB"]["bias"] = 0.0f;
-
-            if (mpEmissiveSampler)
-                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-            // Launch Ray Tracer
-            // We launch a 1D grid. The shader uses gCounter[0] to stop extra threads.
-            uint32_t threadCount = mLightmapWidth * mLightmapHeight;
-            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(threadCount, 1, 1));
-
-            mCurrentSample++;
-            // STEP 4: FINALIZATION (Run only when we hit the target)
-            if (mCurrentSample == mTotalSamples)
+            // -------------------------------------------------------------------------
+            // STEP 3: ITERATIVE BAKING (Ray Tracing Accumulation)
+            // ------------------------------------------------------------------------
+            if (mCurrentSample < mTotalSamples)
             {
-                auto var = mpNormalizePass->getRootVar();
-                // Bind the 1D Buffer and 2D Texture
-                var["gAccumBuffer"] = mpAccumBuffer;
-                var["gOutput"] = mpResultTex;
-
-                // Bind the constants
-                var["CB"]["gTotalSamples"] = mTotalSamples;
-                var["CB"]["gWidth"] = mLightmapWidth; // Essential for 2D -> 1D mapping
-
-                mpNormalizePass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
-
-                // --- NEW: Save to File ---
-                //ref<Texture> pOutputTex = renderData.getTexture("output");
-                if (mpResultTex)
-                {
-                    // Define your path. You can use Falcor's Project Directory or a hardcoded one.
-                    std::string path = "BakedLightmap.exr"; // Use .exr for high dynamic range
-                    mpResultTex->captureToFile(0, 0, path, Bitmap::FileFormat::ExrFile);
-                    printf("Lightmap saved to: %s\n", path.c_str());
+                if (mCurrentSample == 0) {
+                    pRenderContext->clearUAV(mpAccumBuffer->getUAV().get(), float4(0));
                 }
+                auto rtVar = mpRtVars->getRootVar();
 
-                printf("Lightmap baking complete (%u samples).\n", mTotalSamples);
+                // Bind the data we extracted in the preparation step
+                rtVar["gTexelSamples"] = mpTexelBuffer;
+
+                // Output and Sample Progress
+                rtVar["gIrradianceAccum"] = mpAccumBuffer;
+                rtVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
+                rtVar["PerFrameCB"]["numTexels"] = mNumExtractedTexels;
+                rtVar["PerFrameCB"]["bias"] = 0.01f;
+
+                if (mpEmissiveSampler)
+                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+                // Launch Ray Tracer
+                // We launch a 1D grid. The shader uses gCounter[0] to stop extra threads.
+                uint32_t threadCount = mLightmapWidth * mLightmapHeight;
+                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(threadCount, 1, 1));
+
+                mCurrentSample++;
+                // STEP 4: FINALIZATION (Run only when we hit the target)
+                if (mCurrentSample == mTotalSamples)
+                {
+                    auto var = mpNormalizePass->getRootVar();
+                    // Bind the 1D Buffer and 2D Texture
+                    var["gAccumBuffer"] = mpAccumBuffer;
+                    var["gOutput"] = mpResultTex;
+
+                    // Bind the constants
+                    var["CB"]["gTotalSamples"] = mTotalSamples;
+                    var["CB"]["gWidth"] = mLightmapWidth; // Essential for 2D -> 1D mapping
+
+                    mpNormalizePass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
+
+                    // --- NEW: Save to File ---
+                    //ref<Texture> pOutputTex = renderData.getTexture("output");
+                    if (mpResultTex)
+                    {
+                        // Define your path. You can use Falcor's Project Directory or a hardcoded one.
+                        std::string path = "BakedLightmap.exr"; // Use .exr for high dynamic range
+                        mpResultTex->captureToFile(0, 0, path, Bitmap::FileFormat::ExrFile, Bitmap::ExportFlags::Uncompressed);
+                        printf("Lightmap saved to: %s\n", path.c_str());
+                    }
+
+                    printf("Lightmap baking complete (%u samples).\n", mTotalSamples);
+                }
             }
         }
     }
@@ -174,8 +180,9 @@ void BakeLightMap::loadLightmap(const std::filesystem::path& path)
 {
     // Load as a 2D texture. Falcor handles EXR (HDR) automatically.
     // We set loadAsSrgb to false because lightmaps contain linear radiance data.
+    //mpLoadedLightmap = Texture::createFromFile(mpDevice, path, true, false, ResourceBindFlags::ShaderResource, Bitmap::ImportFlags::ConvertToFloat16);
     mpLoadedLightmap = Texture::createFromFile(mpDevice, path, true, false, ResourceBindFlags::ShaderResource);
-
+    mpLoadedLightmap->setName("lightMap");
     if (mpLoadedLightmap) {
         printf("Successfully loaded lightmap: %s\n", path.string().c_str());
     }
@@ -200,18 +207,19 @@ void BakeLightMap::setScene(RenderContext* pRenderContext, const ref<Scene>& pSc
             RasterizerState::Desc rasterDesc;
             rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
             rasterDesc.setCullMode(RasterizerState::CullMode::None);
-            rasterDesc.setDepthBias(10000, 1.0f);
+            rasterDesc.setDepthBias(100000, 1.0f);
             mpRasterState = RasterizerState::create(rasterDesc);
 
             // default depth stencil state
             DepthStencilState::Desc dsDesc;
             ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
-            mpFbo = Fbo::create(mpDevice);
+            
             mpGraphicsState = GraphicsState::create(mpDevice);
             mpGraphicsState->setProgram(mpProgram);
             mpGraphicsState->setRasterizerState(mpRasterState);
             mpGraphicsState->setFbo(mpFbo);
             mpGraphicsState->setDepthStencilState(pDsState);
+
             loadLightmap("BakedLightmap.exr");
         }
         else {
@@ -233,7 +241,7 @@ void BakeLightMap::setScene(RenderContext* pRenderContext, const ref<Scene>& pSc
             mpCounterBuffer->setName("CounterBuffer");
             mpAccumBuffer = mpDevice->createStructuredBuffer(sizeof(float4), totalTexels);
             mpAccumBuffer->setName("AccumBuffer");
-            mpResultTex = mpDevice->createTexture2D(mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr, ResourceBindFlags::ShaderResource | ResourceBindFlags::RenderTarget | ResourceBindFlags::UnorderedAccess);
+            mpResultTex = mpDevice->createTexture2D(mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::ShaderResource | ResourceBindFlags::RenderTarget | ResourceBindFlags::UnorderedAccess);
             mpResultTex->setName("BakeResultTex");
             ProgramDesc desc;
             desc.addShaderModules(mpScene->getShaderModules());
@@ -247,7 +255,7 @@ void BakeLightMap::setScene(RenderContext* pRenderContext, const ref<Scene>& pSc
             RasterizerState::Desc rasterDesc;
             rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
             rasterDesc.setCullMode(RasterizerState::CullMode::None);
-            //rasterDesc.setDepthBias(100000, 1.0f);
+            
             mpRasterState = RasterizerState::create(rasterDesc);
 
             // default depth stencil state
