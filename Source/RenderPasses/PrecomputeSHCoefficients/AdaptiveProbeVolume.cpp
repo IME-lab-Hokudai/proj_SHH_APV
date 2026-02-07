@@ -842,12 +842,13 @@ void AdaptiveProbeVolume::uploadToGPU()
         {
             if (i < numBands)
             {
-                // PACKING TRICK:
-                                // RGB = Radiance, A = Mean Distance
-                gc.coeffs[i] = float4(c.shCoeffs[i], c.distMean[i]);
+                // PACKING:
+                //gc.coeffs[i] = float4(c.shCoeffs[i], c.distMean[i]);
+                gc.coeffs[i] = float4(c.shCoeffs[i], 0.0f);
 
                 // GradR RGB = Gradient X, A = Mean Squared Distance
-                gc.gradR[i] = float4(c.shGradients[i].r, c.distMeanSq[i]);
+                //gc.gradR[i] = float4(c.shGradients[i].r, c.distMeanSq[i]);
+                gc.gradR[i] = float4(c.shGradients[i].r, 0.0f);
                 gc.gradG[i] = float4(c.shGradients[i].g, 0.0f);
                 gc.gradB[i] = float4(c.shGradients[i].b, 0.0f);
             }
@@ -1039,14 +1040,14 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         // --------------------------------------------------------
 
         // Mean Distance
-        out << c.distMean.size() << "\n";
-        for (const auto& val : c.distMean) out << val << " ";
-        out << "\n";
+        //out << c.distMean.size() << "\n";
+        //for (const auto& val : c.distMean) out << val << " ";
+        //out << "\n";
 
-        // Mean Squared Distance
-        out << c.distMeanSq.size() << "\n";
-        for (const auto& val : c.distMeanSq) out << val << " ";
-        out << "\n";
+        //// Mean Squared Distance
+        //out << c.distMeanSq.size() << "\n";
+        //for (const auto& val : c.distMeanSq) out << val << " ";
+        //out << "\n";
     }
 
     // 3. Probes (Unchanged)
@@ -1136,7 +1137,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         }
 
         // NEW: Distance Moments
-        size_t numDist;
+        /*size_t numDist;
         in >> numDist;
         c.distMean.resize(numDist);
         for (size_t k = 0; k < numDist; ++k) in >> c.distMean[k];
@@ -1144,7 +1145,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         size_t numDistSq;
         in >> numDistSq;
         c.distMeanSq.resize(numDistSq);
-        for (size_t k = 0; k < numDistSq; ++k) in >> c.distMeanSq[k];
+        for (size_t k = 0; k < numDistSq; ++k) in >> c.distMeanSq[k];*/
     }
 
     // 3. Load Probes
