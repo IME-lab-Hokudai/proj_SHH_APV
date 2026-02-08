@@ -26,7 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ###########################################################################
 
-sceneBuilder.importScene('dining_room/scene-v4.pbrt')
+#sceneBuilder.importScene('dining_room/scene-v4.pbrt')
+sceneBuilder.importScene('dining_room/scene-v4 - Copy.pbrt')
 Scene.cameraSpeed = 50.0
 # Create emissive material for area lights
 lightMatOverhead = StandardMaterial('Light')

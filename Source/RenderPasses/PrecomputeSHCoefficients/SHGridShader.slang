@@ -68,8 +68,8 @@ void fetchHermiteInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
     // 2. Calculate Local 't' (0..1)
     // ----------------------------------------------------------
     float3 cellOrigin = gGridMin + float3(cellCoords) * gCellSize;
-    float3 t = (pos - cellOrigin) / gCellSize;
-
+    //float3 t = (pos - cellOrigin) / gCellSize;
+    float3 t = saturate((pos - cellOrigin) / gCellSize);
     // 3. Fetch Indices (Using Helper)
     // ----------------------------------------------------------
     // We order these to match the loop bit-logic: Bit 0=Z, Bit 1=Y, Bit 2=X

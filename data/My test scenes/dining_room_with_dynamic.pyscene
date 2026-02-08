@@ -26,7 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ###########################################################################
 
-sceneBuilder.importScene('dining_room/scene-v4.pbrt')
+#sceneBuilder.importScene('dining_room/scene-v4.pbrt')
+#sceneBuilder.importScene('dining_room/scene-v4 - Copy.pbrt')
 Scene.cameraSpeed = 50.0
 # Create emissive material for area lights
 lightMatOverhead = StandardMaterial('Light')
@@ -45,36 +46,59 @@ quadMesh = TriangleMesh.createQuad()
 bunnyMesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 
 # Add overhead area light (large quad at ceiling height, facing down)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), rotationEulerDeg=float3(180, 0, 0))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), #rotationEulerDeg=float3(180, 0, 0))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
+#)
 
 # Add side area light (smaller quad on one side, for additional illumination)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), rotationEulerDeg=float3(0, 0, -90))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), #rotationEulerDeg=float3(0, 0, -90))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
+#)
 
-bunnyNodeId = sceneBuilder.addNode('Bunny', Transform(translation=float3(-5, 3, 0), rotationEuler=float3(0, 0, 0), scaling=0.7))
-sceneBuilder.addMeshInstance(
-    bunnyNodeId,
-    sceneBuilder.addTriangleMesh(bunnyMesh, bunnyMat)
-)
+#bunnyNodeId = sceneBuilder.addNode('Bunny', Transform(translation=float3(-5, 3, 0), rotationEuler=float3(0, 0, 0), scaling=0.7))
+#sceneBuilder.addMeshInstance(
+#    bunnyNodeId,
+#    sceneBuilder.addTriangleMesh(bunnyMesh, bunnyMat)
+#)
 
-anim = Animation('sphereAnim',bunnyNodeId,10.0)
-anim.addKeyframe(0.0, Transform(translation=float3(-5, 3, 0), scaling=0.7))
-anim.addKeyframe(10.0, Transform(translation=float3(5, 3, 0), scaling=0.7))
-sceneBuilder.addAnimation(anim)
+# 1. Define Grid Parameters
+rows_y = 4          # Number of bunnies vertically
+cols_x = 6           # Number of bunnies horizontally
+spacing = 2        # Distance between bunnies
+top_left = float3(-5, 5.5, -2)
+bunny_scaling = 0.6
+
+# 3. Create the Grid
+for y in range(rows_y):
+    for x in range(cols_x):
+        # Calculate position: X moves right, Y moves up
+        pos = float3(top_left.x + x * spacing, 
+                     top_left.y - y * spacing, 
+                     top_left.z)
+        
+        # Create a unique node for each bunny
+        node_name = f'Bunny_VGrid_{x}_{y}'
+        node_id = sceneBuilder.addNode(node_name, Transform(translation=pos, scaling=bunny_scaling))
+        
+        # Add the mesh instance to the node
+        sceneBuilder.addMeshInstance(node_id, sceneBuilder.addTriangleMesh(bunnyMesh, bunnyMat))
+
+#anim = Animation('sphereAnim',bunnyNodeId,10.0)
+#anim.addKeyframe(0.0, Transform(translation=float3(-5, 3, 0), scaling=0.7))
+#anim.addKeyframe(10.0, Transform(translation=float3(5, 3, 0), scaling=0.7))
+#sceneBuilder.addAnimation(anim)
 
 # Create camera (typical view looking into the atrium from one end)
 camera = Camera()
-camera.position = float3(-12, 2, 0)  # Eye position inside the scaled scene
-camera.target = float3(0, 2, 0)
+camera.position = float3(-0.5676, 4.2288, 8.6073)  # Eye position inside the scaled scene
+camera.target = float3(-0.5812, 4.2221, 7.6074)
 camera.up = float3(0, 1, 0)
-camera.focalLength = 35.0
-camera.farPlane = 10000.0  # Default is often 1000.0, which might be too short
+camera.focalLength = 30.0
+camera.farPlane = 1000.0  # Default is often 1000.0, which might be too short
 camera.nearPlane = 0.1     # Keep near plane small to see close objects
+camera.name = 'TestCamera'
 sceneBuilder.addCamera(camera)
 
 # Add directional light
