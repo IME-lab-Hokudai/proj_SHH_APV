@@ -207,19 +207,14 @@ void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float
 {
     GPUProbe p = gProbeBuffer[probeIdx];
     float3 size = p.maxPoint - p.minPoint;
-
     // Normalized position within voxel (0..1)
     float3 t = saturate((pos - p.minPoint) / size);
-
     // Initialize Accumulators
     float3 accumSH[9];
     for (int k = 0; k < 9; ++k) accumSH[k] = float3(0, 0, 0);
-
     float totalWeight = 0.0f;
-
     int cIdx[8];
     for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
-
     // Iterate all 8 corners
     for (int i = 0; i < 8; ++i)
     {
@@ -227,14 +222,11 @@ void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float
         // 1. DATA CHECK
         // ------------------------------------------------------------------
         if (cIdx[i] < 0) continue;
-
         GPUCorner c = gCornerBuffer[cIdx[i]];
-
         // Check Validity (Fixes Leaks)
         // If the CPU said this corner is invalid, we strictly ignore it (Weight = 0).
         // This effectively performs the "robust extrapolation" automatically.
         if (c.isValid == 0) continue;
-
         // ------------------------------------------------------------------
         // 2. VISIBILITY WEIGHT (Fixes Wall Bleeding)
         // ------------------------------------------------------------------
@@ -242,12 +234,11 @@ void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float
         float3 toProbe = cornerPos - pos;
         float dist = length(toProbe);
         float3 dir = toProbe / dist; // Direction: Pixel -> Probe
-
         // Smooth Backface Culling
         // Instead of > 0.05 (Hard Cutoff), use the dot product as a scalar weight.
         // This fades the probe out smoothly as it goes behind the surface.
-        float wVis = max(0.001f, dot(normal, dir));
-
+        float dotVal = dot(normal, dir);
+        float wVis = smoothstep(-0.1f, 0.1f, dotVal);
         // ------------------------------------------------------------------
         // 3. SPATIAL WEIGHT (Trilinear)
         // ------------------------------------------------------------------
@@ -255,12 +246,10 @@ void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float
         float wy = (i & 2) ? t.y : (1.0 - t.y);
         float wz = (i & 1) ? t.z : (1.0 - t.z);
         float wSpatial = wx * wy * wz;
-
         // ------------------------------------------------------------------
         // 4. COMBINE
         // ------------------------------------------------------------------
         float wFinal = wSpatial * wVis;
-
         // Accumulate
         for (int band = 0; band < 9; ++band)
         {
@@ -268,7 +257,6 @@ void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float
         }
         totalWeight += wFinal;
     }
-
     // ----------------------------------------------------------------------
     // 5. RENORMALIZE (The "Robust" Magic)
     // ----------------------------------------------------------------------

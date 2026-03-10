@@ -295,8 +295,8 @@ void rayGen()
         hitData.sg = sg;
         hitData.depth = depth;
         // Trace
-        //TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
-        TraceRay(gScene.rtAccel, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+       TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+        //TraceRay(gScene.rtAccel, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, rayTypeCount, 0, ray, hitData);
         sg = hitData.sg; // Update sample generator state
         // Capture First Hit Data Only (The probe only cares about the first wall)
         if (depth == 0)

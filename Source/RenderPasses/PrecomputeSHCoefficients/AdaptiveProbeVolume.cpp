@@ -509,7 +509,7 @@ void AdaptiveProbeVolume::setCornerData(
         }
         c.coeffVecL2 = std::sqrt(sumSqL);
 
-         c.isValid = (c.coeffVecL2 < 0.001f)?false : true;
+         c.isValid = (c.coeffVecL2 < 0.0001f)?false : true;
     //}
 
     // 2. Calculate Curvature of LUMINANCE Field (Hessian)
@@ -793,7 +793,7 @@ void AdaptiveProbeVolume::uploadToGPU()
     // Ensure neighbors are computed before uploading!
     computeNeighbors();
     //constrainHangingNodes();
-    //constrainHangingNodesHermite();
+    constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
@@ -1050,7 +1050,6 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         //out << "\n";
     }
 
-    // 3. Probes (Unchanged)
     out << "NUM_PROBES " << mProbes.size() << "\n";
     for (const auto& p : mProbes)
     {
