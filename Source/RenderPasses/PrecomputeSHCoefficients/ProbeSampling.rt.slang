@@ -166,7 +166,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     
     // Save Probe Data (Position/Normal)
     hitData.s = sd.posW;
-    hitData.n = normalize(sd.frame.N);
+    hitData.n = normalize(sd.faceN);
     hitData.hitT = hitT;
 
     let lod = ExplicitLodTextureSampler(0.f);
@@ -208,7 +208,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
         // EMISSIVE LIGHTS
         if (kUseEmissiveLights) {
-            const int numEmissiveSamplesPerTriangle = 8;
+            const int numEmissiveSamplesPerTriangle = 4;
             int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
             const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
 
@@ -295,8 +295,8 @@ void rayGen()
         hitData.sg = sg;
         hitData.depth = depth;
         // Trace
-       TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
-        //TraceRay(gScene.rtAccel, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+       //TraceRay(gScene.rtAccel, 0, 0xFF, 0, rayTypeCount, 0, ray, hitData);
+       TraceRay(gScene.rtAccel, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, rayTypeCount, 0, ray, hitData);
         sg = hitData.sg; // Update sample generator state
         // Capture First Hit Data Only (The probe only cares about the first wall)
         if (depth == 0)

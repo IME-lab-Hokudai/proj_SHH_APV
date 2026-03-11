@@ -31,29 +31,11 @@ struct ProbeGrid
     std::vector<float3> probesPos;
 };
 
-//for lat-long env map
-//void initSHTable(int sh_order, int width, int height);
-//void decomposeSH(std::vector<float4>& out, const Falcor::ref<EnvMap>& envMap);
-//void reconstructSH(std::vector<float4>& sh_coeff, const Falcor::ref<EnvMap>& envMap, Falcor::ref<Device> pDevice);
-
-// for probe sampling using ray tracing
-void initSHTable(int sh_order, const std::vector<ProbeDirSample>& dirSamples);
 void calculateSHCoeffs(
     std::vector<float3>& out,                // Output SH coefficients (num_basis)
     const std::vector<ProbeSampleData>& probeSamplingResults, // Probe sampling results, size = numSamples
     int numSamplePerProbe
 );
-void calculateSHCoeffsGradientsAndHessians(
-    std::vector<GradSHCoeff>& gradOut,
-    std::vector<HessianSHCoeff>& hessianOut,
-    const float3& gridPos,
-    const std::vector<ProbeSampleData>& probeSamplingResults,
-    const std::vector<ProbeDirSample>& samplingDir
-);
-
-
-
-void reconstructSH(const ProbeGrid& grid, int numSamplePerProbe, std::vector<float4> & out);
 
 // calculate gradient and hessian of SH basis functions up to l = 2.
 // gradient is calculated indirectly using solid spherical harmonics as described in Iwasaki sensei paper
@@ -72,8 +54,6 @@ void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirS
  */
 void getLMFromBasisIdx(int basisIdx, int& l, int& m);
 
-float3 computeKrivanekBasisGradient(int l, int m, float r, float3 dir, float evalYlmminus);
-void computeKrivanekCoeffLMGradient(float3 x, std::vector<ProbeSampleData> samplingData, int basisIdx, float3& outGrad);
     // this is used in testing using finite difference
 void initSHBasisGradientAndHessianTables(
     const std::vector<float3>& dirSamples,
@@ -82,135 +62,11 @@ void initSHBasisGradientAndHessianTables(
     std::vector<float3x3>& SHHessianTableXPrime
 );
 
-float4* TranposeData(float4* data, int width, int height);
-
-//create uniform probe grid
-void computeProbesPos(ProbeGrid& grid);
-
-void saveProbeGridToFile(const ProbeGrid& grid, const std::string& path);
-void saveProbeGridToFileWithGradAndHessian(const ProbeGrid& grid, const std::string& path);
-bool loadProbeGridFromFileWithGradAndHessian(ProbeGrid& out, const std::string& path);
-bool loadProbeGridFromFile( ProbeGrid& out, const std::string& path);
-
 void generateUniformSphereDirSamples(int sampleCount, std::vector<ProbeDirSample> &out);
 
-//-------------------------------------------------------------------------------
-// Function: gradOmega
-// Purpose : Compute the spatial gradient of Ω_i with respect to the grid point x.
-//
-// Equation 3:
-//   ∂Ω_i/∂x = (4π / N) * ((n_x * r + 3 * q_x * cosξ) / (r² * cosξ))
-//   (and similarly for ∂Ω_i/∂y, ∂Ω_i/∂z)
-//
-// Input Parameters:
-//   s  : float3 - Position of the environmental patch (source point on the scene surface)
-//   x  : float3 - Position of the grid point where gradient of Ω_i is evaluated
-//   n  : float3 - Surface normal at the environmental patch
-//   N  : int  - number of samples
-//
-// Intermediate Terms:
-//   q      = s - x                     // Vector from grid point to patch
-//   r      = ||q||                     // Distance between grid point and patch
-//   cosξ   = -(n · q) / r              // Cosine of angle between n and q
-//
-// Output:
-//   Returns float3(∂Ω_i/∂x, ∂Ω_i/∂y, ∂Ω_i/∂z)
-//   - The spatial gradient of Ω_i evaluated at grid point x.
-//
-// Notes:
-//   - Used for precomputed SH grid construction or adaptive refinement.
-//   - Avoids division by near-zero cosξ or r using numerical guards.
-//   - The direction of q (from x → s) follows the convention of incoming radiance.
-//-------------------------------------------------------------------------------
+float3 gradientOmega(const float3& q, const float3& n, float rInv, float cosXi, float factor);
 
-float3 gradientOmega(float3 s, float3 x, float3 n, float N);
-
-
-//-------------------------------------------------------------------------------
-// Compute the full 3x3 Hessian of the solid angle Ω_i
-//-------------------------------------------------------------------------------
-// Inputs:
-//   s  : float3 - Position of the environmental patch (source point on the scene surface)
-//   x  : float3 - Position of the grid point where gradient of Ω_i is evaluated
-//   n  : float3 - Surface normal at the environmental patch
-//   N  : int  - number of samples
-// Equation 5 and 6
-// ∂_xx Ω_i= -∂_(q_x ) ∂_(q_x ) Ω_i= -4π/N⋅(6n_x q_x r-3cosξ(r^2- 5q_x^2))/(r^4 cosξ)
-// ∂_yx Ω_i = -∂_(q_y) ∂_(q_x) Ω_i = -4π / N((3n_x q_y + 3q_x n_y) / (r ^ 3 cosξ) + (15q_x q_y) / r ^ 4)
-// Returns:
-//    3x3 Hessian matrix H, where H(i,j) = ∂²Ω_i / ∂x_i ∂x_j
-//
-// Notes:
-//   - q = s - x
-//   - r = length(q)
-//   - cosξ = -(n ⋅ q)/r
-//   - Hessian contains both pure derivatives (∂²/∂x², ∂²/∂y², ∂²/∂z²)
-//     and mixed derivatives (∂²/∂x∂y, etc.)
-//   - Be careful of singularities when cosξ → 0; clamp with a small epsilon
-//-------------------------------------------------------------------------------
-float3x3 hessianOmega(const float3& s, const float3& x, const float3& n, int N);
-
-//-------------------------------------------------------------------------------
-// Function: grad_SH
-// Purpose : Compute the full spatial gradient ∇f_l^m at a grid point.
-//
-// Equation 2:
-//   ∇f_l^m ≈ Σ_i L(ω_i) [ (∇Ω_i) * Y_l^m(ω_i) + Ω_i * ∇Y_l^m(ω_i) ]
-//
-// Input Parameters:
-//   s_list : pointer to float3 array - Positions of environmental patches
-//   n_list : pointer to float3 array - Normals of environmental patches
-//   L_list : pointer to float array  - Radiance (or irradiance) per patch
-//   x      : float3                  - Grid point position
-//   N  : int  - number of samples
-//   l, m   : int                     - SH band and order indices
-//
-// Intermediate Terms:
-//   q      = s - x                   // Vector from grid point to patch
-//   r      = ||q||                   // Distance between grid point and patch
-//   ω_i    = normalize(q)            // Direction from grid to patch
-//   cosξ   = -(n · q) / r            // Cosine of incident angle
-//
-// Output:
-//   Returns float3(∂_x f_l^m, ∂_y f_l^m, ∂_z f_l^m)
-//   - The spatial gradient of f_l^m evaluated at grid point x.
-void calculateGradAndHessianSHCoeffLM(
-    const float3 &x,
-    const std::vector<ProbeSampleData>& samplingData,
-    const std::vector<ProbeDirSample>& samplingDir,
-    const int &basisIdx,
-    GradSHCoeff& outGrad,
-    HessianSHCoeff& outHessian
-);
-
-//for uniform grid
-void calculateGradSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad);
-void calculateSHCoeffsGradients(std::vector<GradSHCoeff>& gradOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
-//-------------------------------------------------------------------------------
-// Compute full 3x3 Hessian of SH coefficient f_l^m at a grid point
-//-------------------------------------------------------------------------------
-// Inputs:
-//   x                 : float3, grid point
-//   s_list            : array of float3, patch/sample positions
-//   n_list            : array of float3, patch normals
-//   L_list            : array of float, patch radiance/intensity
-//   N                 : int, number of samples
-//   l, m              : SH band and order
-//   SHBasisTable      : float*, precomputed Y_l^m for all samples
-//   SHGradientTable   : float3*, precomputed ∇Y_l^m for all samples
-//   SHHessianTable    : glm::mat3*, precomputed ∇²Y_l^m for all samples
-//
-// Returns:
-//   full Hessian ∂² f_l^m / ∂x_j ∂x_k
-//-------------------------------------------------------------------------------
-HessianSHCoeff hessianSHCoeffLM(
-    const float3& x,
-    const std::vector<ProbeSampleData>& samplingData,
-    const int& basisIdx
-);
-
-
-// ****functions for verifying SH gradient and hessian calculation using numerical finite differentiation****
+float3x3 hessianOmega(const float3& q, const float3& n, float rInv, float cosXi, float factor);
 
 // Generate a single vector containing all positions needed for ∂f/∂x finite difference
 // Order per sample: [center, x+h, x-h]
@@ -229,15 +85,8 @@ void calculateChannelRGradAndHessianSHCoeffLM(
     float3x3& outHessian
 );
 
-float3 testComputeSHGrad();
-
 void calculateGradRGBAndHessianLumSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad, float3x3& outHessian);
-
 void calculateSHCoeffsGradientsRGBAndHessiansLum(std::vector<GradSHCoeff>& gradOut, std::vector<float3x3>& hessianOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
-
-void calculateSHCoeffsRadialMoments(
-    std::vector<float>& outMean,      // Output: 9 coeffs for E[r]
-    std::vector<float>& outMeanSq,    // Output: 9 coeffs for E[r^2]
-    const std::vector<ProbeSampleData>& probeSamplingResults,
-    int numSamplePerProbe
-);
+//for uniform grid
+void calculateGradSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad);
+void calculateSHCoeffsGradients(std::vector<GradSHCoeff>& gradOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
