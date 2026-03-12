@@ -433,11 +433,27 @@ void AdaptiveProbeVolume::startBuild(const ref<Scene>& pScene, float errorThresh
 
     auto bounds = pScene->getSceneBounds();
 
+    float boundsScale = 0.96f;
+
+    // Scale the scene bounds about its center.
+    float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
+    float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
+    halfExtent *= boundsScale;
+
+    float3 scaledMin = center - halfExtent;
+    float3 scaledMax = center + halfExtent;
+
+    // 1. Create Root Probe
+    //Probe root;
+    //root.level = 0;
+    //root.minPoint = bounds.minPoint;
+    //root.maxPoint = bounds.maxPoint;
+
     // 1. Create Root Probe
     Probe root;
     root.level = 0;
-    root.minPoint = bounds.minPoint;
-    root.maxPoint = bounds.maxPoint;
+    root.minPoint = scaledMin;
+    root.maxPoint = scaledMax;
 
     float3 size = root.maxPoint - root.minPoint;
 

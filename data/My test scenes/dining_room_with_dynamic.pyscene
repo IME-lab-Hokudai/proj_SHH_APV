@@ -27,7 +27,7 @@
 ###########################################################################
 
 #sceneBuilder.importScene('dining_room/scene-v4.pbrt')
-sceneBuilder.importScene('dining_room/scene-v4 - Copy.pbrt')
+#sceneBuilder.importScene('dining_room/scene-v4 - Copy.pbrt')
 Scene.cameraSpeed = 50.0
 # Create emissive material for area lights
 lightMatOverhead = StandardMaterial('Light')
@@ -46,16 +46,16 @@ quadMesh = TriangleMesh.createQuad()
 bunnyMesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 
 # Add overhead area light (large quad at ceiling height, facing down)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), rotationEulerDeg=float3(180, 0, 0))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('OverheadLight', Transform(scaling=float3(2.5, 0.01, 2.5), translation=float3(0, 6.9, 0), rotationEulerDeg=float3(180, 0, 0))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatOverhead)
+#)
 
 # Add side area light (smaller quad on one side, for additional illumination)
-sceneBuilder.addMeshInstance(
-    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), rotationEulerDeg=float3(0, 0, -90))),
-    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
-)
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('SideLight', Transform(scaling=float3(1.5, 0.01, 1.5), translation=float3(-6.29, 3, 0), rotationEulerDeg=float3(0, 0, -90))),
+#    sceneBuilder.addTriangleMesh(quadMesh, lightMatSide)
+#)
 
 #bunnyNodeId = sceneBuilder.addNode('Bunny', Transform(translation=float3(-5, 3, 0), rotationEuler=float3(0, 0, 0), scaling=0.7))
 #sceneBuilder.addMeshInstance(
@@ -65,7 +65,7 @@ sceneBuilder.addMeshInstance(
 
 # 1. Define Grid Parameters
 rows_y = 4          # Number of bunnies vertically
-cols_x = 6           # Number of bunnies horizontally
+cols_x = 5           # Number of bunnies horizontally
 spacing = 2        # Distance between bunnies
 top_left = float3(-5, 5.5, -1)
 bunny_scaling = 0.6
@@ -92,8 +92,8 @@ for y in range(rows_y):
 
 # Create camera (typical view looking into the atrium from one end)
 camera = Camera()
-camera.position = float3(-0.5676, 4.2288, 8.6073)  # Eye position inside the scaled scene
-camera.target = float3(-0.5812, 4.2221, 7.6074)
+camera.position = float3(-0.3958, 4.0853, 9.8735)  # Eye position inside the scaled scene
+camera.target = float3(-0.4288, 4.0125, 8.8767)
 camera.up = float3(0, 1, 0)
 camera.focalLength = 30.0
 camera.farPlane = 1000.0  # Default is often 1000.0, which might be too short

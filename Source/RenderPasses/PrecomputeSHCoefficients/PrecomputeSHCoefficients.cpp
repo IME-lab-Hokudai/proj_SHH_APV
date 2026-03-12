@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -48,33 +48,35 @@ const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 const float ErrorThreshold = 5.0f;
-//const float ErrorThreshold =2;//threshold for Erel
+//const float ErrorThreshold =2.0f;//threshold for Erel
 //const float ErrorThreshold = 1.0f;//threshold for Erel
 //const float ErrorThreshold = 0.5f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
-//const uint3 unifromGridSize = uint3(16, 16, 16);
+const uint3 unifromGridSize = uint3(16, 16, 16);
 //const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-const uint3 unifromGridSize = uint3(64, 64, 64);
+//const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string saveToFileName = "UniformGrid32.txt";
 //const std::string saveToFileName = "UniformGrid32NoCull.txt";
-//const std::string saveToFileName = "UniformGrid16.txt";
+const std::string saveToFileName = "UniformGrid16.txt";
 //const std::string saveToFileName = "UniformGrid16NoCull.txt";
-const std::string saveToFileName = "UniformGrid64.txt";
+//const std::string saveToFileName = "UniformGrid64.txt";
 //const std::string saveToFileName = "UniformGrid64NoCull.txt";
-//const std::string saveToFileName = "AdaptiveErr3.txt";
+//const std::string saveToFileName = "AdaptiveErr5.txt";
+//const std::string saveToFileName = "AdaptiveErr2.txt";
 //const std::string saveToFileName = "AdaptiveErr3NoCull.txt";
 //const std::string saveToFileName = "AdaptiveErr1NoCull.txt";
 //const std::string saveToFileName = "AdaptiveErr0point5NoCull.txt";
 //const std::string saveToFileName = "AdaptiveErr1point5NoCull.txt";
 //const std::string loadFromFileName = "UniformGrid32.txt";
 //const std::string loadFromFileName = "UniformGrid32NoCull.txt";
-//const std::string loadFromFileName = "UniformGrid16.txt";
+const std::string loadFromFileName = "UniformGrid16.txt";
 //const std::string loadFromFileName = "UniformGrid16NoCull.txt";
-const std::string loadFromFileName = "UniformGrid64.txt";
+//const std::string loadFromFileName = "UniformGrid64.txt";
 //const std::string loadFromFileName = "UniformGrid64NoCull.txt";
-//const std::string loadFromFileName = "AdaptiveErr3.txt";
+//const std::string loadFromFileName = "AdaptiveErr5.txt";
+//const std::string loadFromFileName = "AdaptiveErr2.txt";
 //const std::string loadFromFileName = "AdaptiveErr3NoCull.txt";
 //const std::string loadFromFileName = "AdaptiveErr1point5NoCull.txt";
 //const std::string loadFromFileName = "AdaptiveErr1NoCull.txt";

@@ -21,9 +21,24 @@ void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution
     mProbeCountDim = mCellResolution + uint3(1, 1, 1);
     mTotalProbes = mProbeCountDim.x * mProbeCountDim.y * mProbeCountDim.z;
 
+
+
     auto bounds = pScene->getSceneBounds();
-    mMinPoint = bounds.minPoint;
-    mMaxPoint = bounds.maxPoint;
+
+    float boundsScale = 0.96f;
+
+    // Scale the scene bounds about its center.
+    float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
+    float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
+    halfExtent *= boundsScale;
+
+    float3 scaledMin = center - halfExtent;
+    float3 scaledMax = center + halfExtent;
+
+    //mMinPoint = bounds.minPoint;
+    //mMaxPoint = bounds.maxPoint;
+    mMinPoint = scaledMin;
+    mMaxPoint = scaledMax;
 
     // Cell size is based on the volume bounds divided by CELL count
     float3 dims = float3(std::max(1u, mCellResolution.x), std::max(1u, mCellResolution.y), std::max(1u, mCellResolution.z));
