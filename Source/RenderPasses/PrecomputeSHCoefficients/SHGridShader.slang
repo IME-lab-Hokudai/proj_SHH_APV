@@ -259,25 +259,28 @@ float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
     BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
-    float4 baseColorSample = float4(0, 0, 0, 1);
-    float4 emissiveSample = float4(0, 0, 0, 1);
-    float4 specularSample = float4(0, 0, 0, 1);
-    float3 normalSample;
-    float3 normalSampleW;
-   if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
+    float4 baseColorSample = (float4)baseColorMat.baseColor;
+    float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
+    float4 specularSample = baseColorMat.specular;
+    float3 normalSample = normalize(vsOut.normalW);
+    float3 normalSampleW = normalSample;
+    // 2. Sample textures ONLY if they actually exist in the slot
+    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
         baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
+    }
+
+    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture) {
         emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
+    }
+
+    if (baseColorMat.texSpecular.getMode() == TextureHandle::Mode::Texture) {
         specularSample = gScene.materials.sampleTexture(baseColorMat.texSpecular, gLinearSampler, vsOut.texC, 0.f);
-        normalSample = gScene.materials.sampleTexture(baseColorMat.texNormalMap, gLinearSampler, vsOut.texC, 0.f).rgb;
-        normalSampleW = NormalSampleToWorldSpace(normalSample, normalize(vsOut.normalW), vsOut.tangentW.rgb);
-   }
-  else {
-        baseColorSample = (float4)baseColorMat.baseColor;
-        emissiveSample = float4(baseColorMat.emissive,1);
-        specularSample = baseColorMat.specular;
-        normalSample = normalize(vsOut.normalW);
-        normalSampleW = normalSample;
-  }
+    }
+
+    if (baseColorMat.texNormalMap.getMode() == TextureHandle::Mode::Texture) {
+        float3 texNormal = gScene.materials.sampleTexture(baseColorMat.texNormalMap, gLinearSampler, vsOut.texC, 0.f).rgb;
+        normalSampleW = NormalSampleToWorldSpace(texNormal, normalize(vsOut.normalW), vsOut.tangentW.rgb);
+    }
 
   float3 finalSH[MAX_SH_BASIS];
 

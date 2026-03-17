@@ -59,7 +59,7 @@ const uint3 unifromGridSize = uint3(16, 16, 16);
 //const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string saveToFileName = "UniformGrid32.txt";
 //const std::string saveToFileName = "UniformGrid32NoCull.txt";
-const std::string saveToFileName = "UniformGrid16.txt";
+//const std::string saveToFileName = "UniformGrid16.txt";
 //const std::string saveToFileName = "UniformGrid16NoCull.txt";
 //const std::string saveToFileName = "UniformGrid64.txt";
 //const std::string saveToFileName = "UniformGrid64NoCull.txt";
@@ -71,7 +71,7 @@ const std::string saveToFileName = "UniformGrid16.txt";
 //const std::string saveToFileName = "AdaptiveErr1point5NoCull.txt";
 //const std::string loadFromFileName = "UniformGrid32.txt";
 //const std::string loadFromFileName = "UniformGrid32NoCull.txt";
-const std::string loadFromFileName = "UniformGrid16.txt";
+//const std::string loadFromFileName = "UniformGrid16.txt";
 //const std::string loadFromFileName = "UniformGrid16NoCull.txt";
 //const std::string loadFromFileName = "UniformGrid64.txt";
 //const std::string loadFromFileName = "UniformGrid64NoCull.txt";
@@ -81,6 +81,9 @@ const std::string loadFromFileName = "UniformGrid16.txt";
 //const std::string loadFromFileName = "AdaptiveErr1point5NoCull.txt";
 //const std::string loadFromFileName = "AdaptiveErr1NoCull.txt";
 //const std::string loadFromFileName = "AdaptiveErr0point5NoCull.txt";
+
+const std::string saveToFileName = "AdaptiveErr5SubwayCorridor.txt";
+const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";

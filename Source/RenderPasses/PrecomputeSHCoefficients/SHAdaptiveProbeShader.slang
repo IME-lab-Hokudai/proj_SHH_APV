@@ -178,104 +178,6 @@ void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoef
     }
 }
 
-//
-
-// Your provided Robust Interpolator
-float3 robustLerp(float3 a, float3 b, float t, bool validA, bool validB)
-{
-    if (validA && validB)
-    {
-        return lerp(a, b, t);
-    }
-    else if (validA && !validB)
-    {
-        return a; // B is invalid/occluded, A extends
-    }
-    else if (!validA && validB)
-    {
-        return b; // A is invalid/occluded, B extends
-    }
-    else
-    {
-        return float3(0, 0, 0);
-    }
-}
-
-//
-
-void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3 normal, out float3 finalCoeffs[9])
-{
-    GPUProbe p = gProbeBuffer[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
-    // Normalized position within voxel (0..1)
-    float3 t = saturate((pos - p.minPoint) / size);
-    // Initialize Accumulators
-    float3 accumSH[9];
-    for (int k = 0; k < 9; ++k) accumSH[k] = float3(0, 0, 0);
-    float totalWeight = 0.0f;
-    int cIdx[8];
-    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
-    // Iterate all 8 corners
-    for (int i = 0; i < 8; ++i)
-    {
-        // ------------------------------------------------------------------
-        // 1. DATA CHECK
-        // ------------------------------------------------------------------
-        if (cIdx[i] < 0) continue;
-        GPUCorner c = gCornerBuffer[cIdx[i]];
-        // Check Validity (Fixes Leaks)
-        // If the CPU said this corner is invalid, we strictly ignore it (Weight = 0).
-        // This effectively performs the "robust extrapolation" automatically.
-        if (c.isValid == 0) continue;
-        // ------------------------------------------------------------------
-        // 2. VISIBILITY WEIGHT (Fixes Wall Bleeding)
-        // ------------------------------------------------------------------
-        float3 cornerPos = c.position;
-        float3 toProbe = cornerPos - pos;
-        float dist = length(toProbe);
-        float3 dir = toProbe / dist; // Direction: Pixel -> Probe
-        // Smooth Backface Culling
-        // Instead of > 0.05 (Hard Cutoff), use the dot product as a scalar weight.
-        // This fades the probe out smoothly as it goes behind the surface.
-        float dotVal = dot(normal, dir);
-        float wVis = smoothstep(-0.1f, 0.1f, dotVal);
-        // ------------------------------------------------------------------
-        // 3. SPATIAL WEIGHT (Trilinear)
-        // ------------------------------------------------------------------
-        float wx = (i & 4) ? t.x : (1.0 - t.x);
-        float wy = (i & 2) ? t.y : (1.0 - t.y);
-        float wz = (i & 1) ? t.z : (1.0 - t.z);
-        float wSpatial = wx * wy * wz;
-        // ------------------------------------------------------------------
-        // 4. COMBINE
-        // ------------------------------------------------------------------
-        float wFinal = wSpatial * wVis;
-        // Accumulate
-        for (int band = 0; band < 9; ++band)
-        {
-            accumSH[band] += c.coeffs[band].rgb * wFinal;
-        }
-        totalWeight += wFinal;
-    }
-    // ----------------------------------------------------------------------
-    // 5. RENORMALIZE (The "Robust" Magic)
-    // ----------------------------------------------------------------------
-    // Dividing by totalWeight automatically "stretches" the valid/visible probes
-    // to fill 100% of the result, filling gaps left by invalid/occluded probes.
-    if (totalWeight > 1e-6)
-    {
-        for (int band = 0; band < 9; ++band)
-        {
-            finalCoeffs[band] = accumSH[band] / totalWeight;
-        }
-    }
-    else
-    {
-        // Fallback: If ALL probes are invalid/occluded (e.g. inside a wall), return 0.
-        for (int band = 0; band < 9; ++band) finalCoeffs[band] = float3(0, 0, 0);
-    }
-}
-
 // ------------------------------------------------------------------
 // Taylor-Weighted Interpolation (Annen et al. 2004 / Ward & Heckbert)
 // ------------------------------------------------------------------
@@ -470,254 +372,41 @@ float3 evaluateIrradiance(float3 n,  float3 shCoeffs[MAX_SH_BASIS])
     //return max(result, float3(0.f));
     return result;
 }
-//
-
-// Helper to evaluate scalar SH (using the same basis constants as evaluateIrradiance)
-float evalSH_Scalar(float3 n, float weights[9])
-{
-    float x = n.z;
-    float y = n.x;
-    float z = n.y;
-
-    // Band 0
-    float Y0 = 0.2820947917738781f; // l=0, m=0
-
-    // Band 1
-    float Y1 = -0.4886025119029200f * y; // l=1, m=-1
-    float Y2 = 0.4886025119029200f * z;  // l=1, m=0
-    float Y3 = -0.4886025119029200f * x; // l=1, m=1
-
-    // Band 2
-    float Y4 = 1.0925484305920792f * x * y;                       // l=2, m=-2
-    float Y5 = -1.0925484305920792f * y * z;                      // l=2, m=-1
-    float Y6 = 0.9461746957575601f * z * z - 0.3153915652525200f; // l=2, m=0
-    float Y7 = -1.0925484305920792f * x * z;                      // l=2, m=1
-    float Y8 = 0.546274f * (x * x - y * y);                       // l=2, m=2
-
-    return weights[0] * Y0 + weights[1] * Y1 + weights[2] * Y2 + weights[3] * Y3 +
-           weights[4] * Y4 + weights[5] * Y5 + weights[6] * Y6 + weights[7] * Y7 + weights[8] * Y8;
-}
-
-void fetchVisibilityWeightedSH(int probeIdx, float3 pos, float3 normal, out float3 finalCoeffs[9])
-{
-    GPUProbe p = gProbeBuffer[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
-    float3 t = saturate((pos - p.minPoint) / size);
-
-    float3 accumSH[9];
-    for (int k = 0; k < 9; ++k) accumSH[k] = float3(0, 0, 0);
-    float totalWeight = 0.00001f;
-
-    int cIdx[8];
-    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
-
-    float cellScale = length(size); // For normalization
-
-    for (int i = 0; i < 8; ++i)
-    {
-        GPUCorner c = gCornerBuffer[cIdx[i]];
-
-        float3 cornerPos = c.position;
-        float3 toPixel = pos - cornerPos;
-        float dist = length(toPixel);
-        float3 dir = normalize(cornerPos - pos); // FIXED: from pixel → probe
-
-        // Trilinear
-        float wx = (i & 4) ? t.x : (1.0 - t.x);
-        float wy = (i & 2) ? t.y : (1.0 - t.y);
-        float wz = (i & 1) ? t.z : (1.0 - t.z);
-
-        float wTri = wx * wy * wz;
-
-        // Backface
-        float wNormal = max(0.05f, dot(normal, dir));
-
-        // Moments unpack & eval
-        float momentsMean[9], momentsMeanSq[9];
-        for (int b = 0; b < 9; ++b) {
-            momentsMean[b] = c.coeffs[b].w;
-            momentsMeanSq[b] = c.gradR[b].w;
-        }
-        float mean = evalSH_Scalar(dir, momentsMean);
-        float meanSq = evalSH_Scalar(dir, momentsMeanSq);
-
-        // Normalized Chebyshev
-        float normDist = dist / cellScale;
-        float normMean = mean / cellScale;
-        float normMeanSq = meanSq / (cellScale * cellScale);
-        float normVariance = abs(normMeanSq - normMean * normMean);
-        float t_sub_mean = normDist - normMean;
-        float cheb = normVariance / (normVariance + t_sub_mean * t_sub_mean + 1e-6f);
-        float wChebyshev = (normDist <= normMean) ? 1.0f : max(cheb, 0.0f);
-
-        // Combine
-        float wCombined = wTri * wNormal * wChebyshev;
-        wCombined = max(0.0002f, wCombined);
-
-        for (int b = 0; b < 9; ++b) {
-            accumSH[b] += c.coeffs[b].rgb * wCombined;
-        }
-        totalWeight += wCombined;
-    }
-
-    // Normalize + fallback
-    if (totalWeight < 0.001f) {
-        // Fallback to first corner (or nearest)
-        for (int b = 0; b < 9; ++b) {
-            finalCoeffs[b] = gCornerBuffer[cIdx[0]].coeffs[b].rgb;
-        }
-    } else {
-        for (int b = 0; b < 9; ++b) {
-            finalCoeffs[b] = accumSH[b] / totalWeight;
-            // finalCoeffs[b] *= 2.0f * M_PI;  // if needed
-        }
-    }
-}
 
 float4 psMain(MyVSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 {
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
     BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
-    float4 baseColorSample = float4(0, 0, 0, 1);
-    float4 emissiveSample = float4(0, 0, 0, 1);
-    float4 specularSample = float4(0, 0, 0, 1);
-    float3 normalSample;
-    float3 normalSampleW;
-   if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
+    float4 baseColorSample = (float4)baseColorMat.baseColor;
+    float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
+    float4 specularSample = baseColorMat.specular;
+    float3 normalSample = normalize(vsOut.normalW);
+    float3 normalSampleW = normalSample;
+    // 2. Sample textures ONLY if they actually exist in the slot
+    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
         baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
+    }
+
+    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture) {
         emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
+    }
+
+    if (baseColorMat.texSpecular.getMode() == TextureHandle::Mode::Texture) {
         specularSample = gScene.materials.sampleTexture(baseColorMat.texSpecular, gLinearSampler, vsOut.texC, 0.f);
-        normalSample = gScene.materials.sampleTexture(baseColorMat.texNormalMap, gLinearSampler, vsOut.texC, 0.f).rgb;
-        normalSampleW = NormalSampleToWorldSpace(normalSample, normalize(vsOut.normalW), vsOut.tangentW.rgb);
-   }
-  else {
-        baseColorSample = (float4)baseColorMat.baseColor;
-        emissiveSample = float4(baseColorMat.emissive,1);
-        specularSample = baseColorMat.specular;
-        normalSample = normalize(vsOut.normalW);
-        normalSampleW = normalSample;
-  }
+    }
+
+    if (baseColorMat.texNormalMap.getMode() == TextureHandle::Mode::Texture) {
+        float3 texNormal = gScene.materials.sampleTexture(baseColorMat.texNormalMap, gLinearSampler, vsOut.texC, 0.f).rgb;
+        normalSampleW = NormalSampleToWorldSpace(texNormal, normalize(vsOut.normalW), vsOut.tangentW.rgb);
+    }
 
   float3 finalSH[MAX_SH_BASIS];
   // 1. Find the Leaf Voxel
    int probeIdx = traverseOctree(shadingData.posW);
    // 2. Compute interpolated SH Coeffs
-   //fetchVisibilityWeightedSH(probeIdx, shadingData.posW, shadingData.frame.N, finalSH);
  fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
-   // fetchTaylorInterpolatedSH(probeIdx, shadingData.posW, finalSH);
-   //fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, finalSH);
-   //fetchSmartInterpolatedSH(probeIdx, shadingData.posW, shadingData.faceN, finalSH);
-  // ===============================================================================================
-  // STEP 1: INITIAL SETUP & SELF-SAMPLING
-  // ===============================================================================================
-  // First, we determine which voxel (Probe) the pixel currently resides in.
-  //int probeIdx = traverseOctree(shadingData.posW);
-  //GPUProbe myProbe = gProbeBuffer[probeIdx];
-
-  //// Fetch the High-Quality SH data from *this* voxel.
-  //// This is our "Base Layer." If we are in the center of the voxel, we use this 100%.
-  //// float3 finalSH[9];
-  ////fetchHermiteInterpolatedSH(myIdx, shadingData.posW, finalSH);
-  //fetchSmartInterpolatedSH(probeIdx, shadingData.posW, shadingData.faceN, finalSH);
-  //// ===============================================================================================
-  //// STEP 2: DEFINE BLEND GEOMETRY
-  //// ===============================================================================================
-  //// We need to know how close this pixel is to the walls of the voxel.
-  //float3 myCenter = (myProbe.minPoint + myProbe.maxPoint) * 0.5;
-  //float3 mySize = myProbe.maxPoint - myProbe.minPoint;
-
-  //// 'offset' is the vector from center to pixel.
-  //float3 offset = shadingData.posW - myCenter;
-
-  //// 'distToWall' tells us how far we are from the boundary (Positive value = Inside).
-  //// e.g., if size is 10 and we are at x=4, distToWall is 1.0.
-  //float3 distToWall = (mySize * 0.5) - abs(offset);
-
-  //// Define the "Safe Zone" vs. "Blend Zone".
-  //// We use 40% (0.4) of the voxel size.
-  //// - Inner 20%: Pure High-Res Data.
-  //// - Outer 40%: Gradually blend to neighbor.
-  //float blendZone = 0.4 * min(min(mySize.x, mySize.y), mySize.z);
-
-  //// ===============================================================================================
-  //// STEP 3: INDEPENDENT AXIS BLENDING
-  //// ===============================================================================================
-  //// Why independent?
-  //// If we are in a CORNER, we are close to 2 or 3 walls at once (e.g., Left and Top).
-  //// We must blend with *both* the Left Neighbor AND the Top Neighbor to avoid diagonal seams.
-
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS A: X-AXIS (Left/Right Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.x < blendZone)
-  //{
-  //    // 1. Identify which face we are near (-X or +X)
-  //    // faceIdx 0 = Left (-X), faceIdx 1 = Right (+X)
-  //    int faceIdx = (offset.x < 0) ? 0 : 1;
-
-  //    // 2. Look up the Pre-Computed Neighbor Index
-  //    // This array was built in C++. If the neighbor is smaller/same size, this is -1.
-  //    // We ONLY blend if the neighbor is Coarser (Larger).
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
-
-  //    if (neighborIdx != -1)
-  //    {
-  //        // 3. Fetch the Neighbor's Low-Res SH Data
-  //        float3 neighborSH[9];
-  //        // fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
-  //        fetchSmartInterpolatedSH(neighborIdx, shadingData.posW, shadingData.faceN, neighborSH);
-  //        // 4. Calculate Blend Weight
-  //        // Map distance (BlendZone -> 0) to Weight (0.0 -> 1.0)
-  //        // - At blendZone boundary: weight is 0.0 (Pure Self)
-  //        // - At the wall: weight is 1.0 (Pure Neighbor)
-  //        float t = 1.0 - (distToWall.x / blendZone);
-  //        t = smoothstep(0.0, 1.0, t); // Use smooth curve to hide the transition start
-
-  //        // 5. Accumulate
-  //        // We mix the neighbor into our current result.
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
-
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS B: Y-AXIS (Down/Up Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.y < blendZone)
-  //{
-  //    // faceIdx 2 = Down (-Y), faceIdx 3 = Up (+Y)
-  //    int faceIdx = (offset.y < 0) ? 2 : 3;
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
-
-  //    if (neighborIdx != -1)
-  //    {
-  //        float3 neighborSH[9];
-  //        // fetchHermiteInterpolatedSH(neighborIdx, shadingData.posW, neighborSH);
-  //        fetchSmartInterpolatedSH(neighborIdx, shadingData.posW, shadingData.faceN, neighborSH);
-  //        float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.y / blendZone));
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
-
-  //// -----------------------------------------------------------------------
-  //// BLEND PASS C: Z-AXIS (Back/Front Neighbors)
-  //// -----------------------------------------------------------------------
-  //if (distToWall.z < blendZone)
-  //{
-  //    // faceIdx 4 = Back (-Z), faceIdx 5 = Front (+Z)
-  //    int faceIdx = (offset.z < 0) ? 4 : 5;
-  //    int neighborIdx = myProbe.coarseNeighbors[faceIdx];
-
-  //    if (neighborIdx != -1)
-  //    {
-  //        float3 neighborSH[9];
-  //        // fetchHermiteInterpolatedSH(neighborIdx, vsOut.posW, neighborSH);
-  //        fetchSmartInterpolatedSH(neighborIdx, shadingData.posW, shadingData.faceN, neighborSH);
-  //        float t = smoothstep(0.0, 1.0, 1.0 - (distToWall.z / blendZone));
-  //        for (int i = 0; i < 9; ++i) finalSH[i] = lerp(finalSH[i], neighborSH[i], t);
-  //    }
-  //}
-
+  
   float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
 
   float3 diffuseColor = baseColorSample.rgb * irradiance.rgb / M_PI;
