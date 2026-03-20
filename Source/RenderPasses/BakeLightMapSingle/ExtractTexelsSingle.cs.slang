@@ -24,7 +24,7 @@ void main(uint3 id : SV_DispatchThreadID) {
         
         TexelSample ts;
         ts.posW = pos.xyz;
-        ts.normalW = gNormW[id.xy].xyz;
+        ts.normalW = normalize(gNormW[id.xy].xyz);
         ts.texelIndex = id.y * gResolution.x + id.x; // Original pixel address
         
         gTexelSamples[bufferIdx] = ts;

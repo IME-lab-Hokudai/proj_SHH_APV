@@ -306,14 +306,14 @@ void rayGen()
             firstHitT = hitData.hitT;
         }
 
+        // Accumulate Light: Light = PreviousThroughput * CurrentDirectLight
+        accumColor += throughput * hitData.Li;
+
         if (hitData.terminated)
         {
             // Add environment light if you had one here
             break; 
         }
-
-        // Accumulate Light: Light = PreviousThroughput * CurrentDirectLight
-        accumColor += throughput * hitData.Li;
 
         // Prepare for next bounce
         throughput *= hitData.throughput;

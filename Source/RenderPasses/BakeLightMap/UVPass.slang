@@ -18,8 +18,7 @@ VSOut vsMain(VSIn v)
     // Unpack and transform normal to world space
     float3 normal = v.unpack().normal;
     vout.normalW = mul(gScene.getInverseTransposeWorldMatrix(instanceID), normal);
-    //float3x3 invTrans = (float3x3)gScene.getInverseTransposeWorldMatrix(instanceID);
-    //vout.normalW = normalize(mul(invTrans, float3(0, 0, 1))); // test with fixed input
+
     // Pass through IDs for material/instance lookup if needed
     vout.instanceID = instanceID;
     vout.materialID = gScene.getMaterialID(instanceID);

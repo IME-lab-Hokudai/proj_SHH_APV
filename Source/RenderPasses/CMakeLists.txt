@@ -1,5 +1,6 @@
 add_subdirectory(AccumulatePass)
 add_subdirectory(BakeLightMap)
+add_subdirectory(BakeLightMapSingle)
 add_subdirectory(BlitPass)
 add_subdirectory(BSDFOptimizer)
 add_subdirectory(BSDFViewer)
