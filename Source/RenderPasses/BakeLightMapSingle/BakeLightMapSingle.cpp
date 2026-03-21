@@ -32,6 +32,7 @@
 #include "Utils/Logger.h"
 const char kBakingFile[] = "RenderPasses/BakeLightMapSingle/LightmapBakingSingle.rt.slang";
 const char kUVrasterFile[] = "RenderPasses/BakeLightMapSingle/UVPassSingle.slang";
+const char kUVrasterPillarFile[] = "RenderPasses/BakeLightMapSingle/UVPassPillar.slang";
 const char kExtractFile[] = "RenderPasses/BakeLightMapSingle/ExtractTexelsSingle.cs.slang";
 const char kNormalizeFile[] = "RenderPasses/BakeLightMapSingle/NormalizeLightmapSingle.cs.slang";
 const char kPreviewFile[] = "RenderPasses/BakeLightMapSingle/ApplyLightmapSingle.slang";
@@ -82,111 +83,254 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
     pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::Color);
     if (mpScene) {
         if (mbloadLightMap) {
-
-
             auto applyVar = mpVars->getRootVar();
-            applyVar["gLightmap"] = mpLoadedLightmap;
             applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-            applyVar["PerFrameCB"]["gReceiverInstanceID"] = mReceiverInstanceID;
+            applyVar["gFloorLightmap"] = mpFloorLightmap;
+            applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
+            applyVar["gRightWallLightmap"] = mpRightWallLightmap;
+            applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
+            applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
+            applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
+            applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
+            applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
+            applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
+            applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
+            applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
+            applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
+            applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
+
+            applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
+            applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
+            applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
+            applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
+            applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
+            applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
+            applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
+            applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
+            applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
+            applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
+            applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
+            applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
+            applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
         }
         else {
-            if (mNeedsPreparation) {
-                 // -------------------------------------------------------------------------
-                //UNWRAP UV
-                // ------------------------------------------------------------------------
-                pRenderContext->clearFbo(mpUVFbo.get(), float4(0), 1.0f, 0, FboAttachmentType::Color);
-                auto var = mpVars->getRootVar();
-                var["BakeCB"]["gReceiverInstanceID"] = mReceiverInstanceID;
-
-                mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
-
-                pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
-                var = mpExtractPass->getRootVar();
-                var["gPosW"] = mpUVFbo->getColorTexture(0);
-                var["gNormW"] = mpUVFbo->getColorTexture(1);
-                var["gTexelSamples"] = mpTexelBuffer;
-                var["gCounter"] = mpCounterBuffer;
-                var["CB"]["gResolution"] = uint2(mLightmapWidth, mLightmapHeight);
-                mpExtractPass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
-                mCurrentSample = 0; 
-                // --- Readback the Texel Count ---
-                uint32_t extractedCount = 0;
-                // Since it is a 1-element buffer, we read 4 bytes (sizeof(uint32_t))
-                mpCounterBuffer->getBlob(&extractedCount, 0, sizeof(uint32_t));
-
-                // Store it in a class member so the RT pass can use it
-                mNumExtractedTexels = extractedCount;
-                mNeedsPreparation = false; // Only do this again if scene changes
-            }
-            // -------------------------------------------------------------------------
-            // ITERATIVE BAKING (Ray Tracing Accumulation)
-            // ------------------------------------------------------------------------
-            if (mCurrentSample < mTotalSamples)
+            if (mCurrentTargetIndex < mBakeTargets.size())
             {
-                if (mCurrentSample == 0) {
-                    pRenderContext->clearUAV(mpAccumBuffer->getUAV().get(), float4(0));
-                }
-                auto rtVar = mpRtVars->getRootVar();
+                const auto& target = mBakeTargets[mCurrentTargetIndex];
 
-                // Bind the data we extracted in the preparation step
-                rtVar["gTexelSamples"] = mpTexelBuffer;
-
-                // Output and Sample Progress
-                rtVar["gIrradianceAccum"] = mpAccumBuffer;
-                rtVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
-                rtVar["PerFrameCB"]["numTexels"] = mNumExtractedTexels;
-                rtVar["PerFrameCB"]["bias"] = 0.01f;
-
-                if (mpEmissiveSampler)
-                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-                // Launch Ray Tracer
-                // We launch a 1D grid. The shader uses gCounter[0] to stop extra threads.
-                uint32_t threadCount = mNumExtractedTexels;
-                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(threadCount, 1, 1));
-
-                mCurrentSample++;
-                // STEP 4: FINALIZATION (Run only when we hit the target)
-                if (mCurrentSample == mTotalSamples)
+                if (target.type == BakeTargetType::Pillar)
                 {
-                    auto var = mpNormalizePass->getRootVar();
-                    // Bind the 1D Buffer and 2D Texture
-                    var["gAccumBuffer"] = mpAccumBuffer;
-                    var["gOutput"] = mpResultTex;
+                    mpGraphicsState->setProgram(mpProgramPillar);
+                    mpVars = ProgramVars::create(mpDevice, mpProgramPillar->getReflector());
+                }
+                else
+                {
+                    mpGraphicsState->setProgram(mpProgram);
+                    mpVars = ProgramVars::create(mpDevice, mpProgram->getReflector());
+                }
+                // -------------------------------------------------------------------------
+                // PREPARE CURRENT TARGET (only once per target)
+                // -------------------------------------------------------------------------
+                if (mNeedsPreparation)
+                {
+                    mLightmapWidth = target.width;
+                    mLightmapHeight = target.height;
+                    GraphicsState::Viewport vp(0.0f, 0.0f, (float)mLightmapWidth, (float)mLightmapHeight, 0.0f, 1.0f);
+                    mpGraphicsState->setViewport(0, vp);
+                    ref<Texture> pPosTex = mpDevice->createTexture2D(
+                        mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float,
+                        1, 1, nullptr,
+                        ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource
+                    );
+                    pPosTex->setName("PosTex");
 
-                    // Bind the constants
-                    var["CB"]["gTotalSamples"] = mTotalSamples;
-                    var["CB"]["gWidth"] = mLightmapWidth; // Essential for 2D -> 1D mapping
+                    ref<Texture> pNormTex = mpDevice->createTexture2D(
+                        mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float,
+                        1, 1, nullptr,
+                        ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource
+                    );
+                    pNormTex->setName("NormTex");
 
-                    mpNormalizePass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
-                    
-                    // --- NEW: Save to File ---
-                    if (mpResultTex)
+                    mpUVFbo = Fbo::create(mpDevice);
+                    mpUVFbo->attachColorTarget(pPosTex, 0);
+                    mpUVFbo->attachColorTarget(pNormTex, 1);
+
+                    uint32_t totalTexels = mLightmapWidth * mLightmapHeight;
+
+                    mpTexelBuffer = mpDevice->createStructuredBuffer(sizeof(TexelSample), totalTexels);
+                    mpTexelBuffer->setName("TexelBuffer");
+
+                    mpCounterBuffer = mpDevice->createBuffer(
+                        sizeof(uint32_t),
+                        ResourceBindFlags::UnorderedAccess,
+                        MemoryType::DeviceLocal
+                    );
+                    mpCounterBuffer->setName("CounterBuffer");
+
+                    mpAccumBuffer = mpDevice->createStructuredBuffer(sizeof(float4), totalTexels);
+                    mpAccumBuffer->setName("AccumBuffer");
+
+                    mpResultTex = mpDevice->createTexture2D(
+                        mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA16Float,
+                        1, 1, nullptr,
+                        ResourceBindFlags::ShaderResource | ResourceBindFlags::RenderTarget | ResourceBindFlags::UnorderedAccess
+                    );
+                    mpResultTex->setName("BakeResultTex");
+
+                    mpGraphicsState->setFbo(mpUVFbo);
+                    pRenderContext->clearFbo(mpUVFbo.get(), float4(0), 1.0f, 0, FboAttachmentType::Color);
+
+                    auto var = mpVars->getRootVar();
+                    var["BakeCB"]["gReceiverInstanceID"] = target.instanceID;
+
+                    mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
+
+                    pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
+
+                    auto extractVar = mpExtractPass->getRootVar();
+                    extractVar["gPosW"] = mpUVFbo->getColorTexture(0);
+                    extractVar["gNormW"] = mpUVFbo->getColorTexture(1);
+                    extractVar["gTexelSamples"] = mpTexelBuffer;
+                    extractVar["gCounter"] = mpCounterBuffer;
+                    extractVar["CB"]["gResolution"] = uint2(mLightmapWidth, mLightmapHeight);
+
+                    mpExtractPass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
+
+                    uint32_t extractedCount = 0;
+                    mpCounterBuffer->getBlob(&extractedCount, 0, sizeof(uint32_t));
+                    mNumExtractedTexels = extractedCount;
+
+                    logInfo("Prepared target '{}' (instanceID={}), extracted {} texels.",
+                        target.name, target.instanceID, mNumExtractedTexels);
+
+                    mCurrentSample = 0;
+                    mNeedsPreparation = false;
+
+                    if (mNumExtractedTexels == 0)
                     {
-                        // Define your path. You can use Falcor's Project Directory or a hardcoded one.
-                        std::string path = "BakedFloor.exr"; // Use .exr for high dynamic range
-                        mpResultTex->captureToFile(0, 0, path, Bitmap::FileFormat::ExrFile, Bitmap::ExportFlags::Uncompressed);
-                        printf("Lightmap saved to: %s\n", path.c_str());
+                        logWarning("Target '{}' has no extracted texels. Skipping.", target.name);
+                        //mCurrentTargetIndex++;
+                        mCurrentTargetIndex = 0;
+                        mNeedsPreparation = true;
+                        return;
                     }
-                    printf("Lightmap baking complete (%u samples).\n", mTotalSamples);
+                }
+
+                // -------------------------------------------------------------------------
+                // ITERATIVE BAKING (Ray Tracing Accumulation)
+                // -------------------------------------------------------------------------
+                if (mCurrentSample < mTotalSamples)
+                {
+                    if (mCurrentSample == 0)
+                    {
+                        pRenderContext->clearUAV(mpAccumBuffer->getUAV().get(), float4(0));
+                    }
+
+                    auto rtVar = mpRtVars->getRootVar();
+                    rtVar["gTexelSamples"] = mpTexelBuffer;
+                    rtVar["gIrradianceAccum"] = mpAccumBuffer;
+                    rtVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
+                    rtVar["PerFrameCB"]["numTexels"] = mNumExtractedTexels;
+                    rtVar["PerFrameCB"]["bias"] = 0.01f;
+
+                    if (mpEmissiveSampler)
+                    {
+                        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+                    }
+
+                    uint32_t threadCount = mNumExtractedTexels;
+                    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(threadCount, 1, 1));
+
+                    mCurrentSample++;
+
+                    // ---------------------------------------------------------------------
+                    // FINALIZATION
+                    // ---------------------------------------------------------------------
+                    if (mCurrentSample == mTotalSamples)
+                    {
+                        auto normalizeVar = mpNormalizePass->getRootVar();
+                        normalizeVar["gAccumBuffer"] = mpAccumBuffer;
+                        normalizeVar["gOutput"] = mpResultTex;
+                        normalizeVar["CB"]["gTotalSamples"] = mTotalSamples;
+                        normalizeVar["CB"]["gWidth"] = mLightmapWidth;
+
+                        mpNormalizePass->execute(pRenderContext, mLightmapWidth, mLightmapHeight);
+
+                        if (mpResultTex)
+                        {
+                            mpResultTex->captureToFile(
+                                0,
+                                0,
+                                target.outputPath,
+                                Bitmap::FileFormat::ExrFile,
+                                Bitmap::ExportFlags::Uncompressed
+                            );
+                            logInfo("Lightmap saved to: {}", target.outputPath);
+                        }
+
+                        logInfo("Finished baking '{}' ({} samples).", target.name, mTotalSamples);
+
+                        mCurrentTargetIndex++;
+                        mCurrentSample = 0;
+                        mNumExtractedTexels = 0;
+                        mNeedsPreparation = true;
+                    }
                 }
             }
         }
     }
 }
+
 void BakeLightMapSingle::renderUI(Gui::Widgets& widget) {}
 
-void BakeLightMapSingle::loadLightmap(const std::filesystem::path& path)
+void BakeLightMapSingle::loadLightmaps()
 {
     // Load as a 2D texture. Falcor handles EXR (HDR) automatically.
     // We set loadAsSrgb to false because lightmaps contain linear radiance data.
-    //mpLoadedLightmap = Texture::createFromFile(mpDevice, path, true, false, ResourceBindFlags::ShaderResource, Bitmap::ImportFlags::ConvertToFloat16);
-    mpLoadedLightmap = Texture::createFromFile(mpDevice, path, true, false, ResourceBindFlags::ShaderResource);
-    mpLoadedLightmap->setName("lightMap");
-    if (mpLoadedLightmap) {
-        printf("Successfully loaded lightmap: %s\n", path.string().c_str());
-    }
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size())
+            {
+                logWarning("Bake target index {} is out of range.", idx);
+                return;
+            }
+
+            const auto& target = mBakeTargets[idx];
+
+            dst = Texture::createFromFile(
+                mpDevice,
+                target.outputPath,
+                true,
+                false,
+                ResourceBindFlags::ShaderResource
+            );
+
+            if (dst)
+            {
+                dst->setName(debugName);
+                logInfo("Successfully loaded lightmap '{}' from {}", target.name, target.outputPath);
+            }
+            else
+            {
+                logWarning("Failed to load lightmap '{}' from {}", target.name, target.outputPath);
+            }
+        };
+
+    loadOne(0, mpFloorLightmap, "FloorLightmap");
+    loadOne(1, mpLeftWallLightmap, "LeftWallLightmap");
+    loadOne(2, mpRightWallLightmap, "RightWallLightmap");
+    loadOne(3, mpRoofLeftLightmap, "RoofLeftLightmap");
+    loadOne(4, mpRoofRightLightmap, "RoofRightLightmap");
+
+    loadOne(5, mpPillar0Lightmap, "Pillar0Lightmap");
+    loadOne(6, mpPillar1Lightmap, "Pillar1Lightmap");
+    loadOne(7, mpPillar2Lightmap, "Pillar2Lightmap");
+    loadOne(8, mpPillar3Lightmap, "Pillar3Lightmap");
+    loadOne(9, mpPillar4Lightmap, "Pillar4Lightmap");
+    loadOne(10, mpPillar5Lightmap, "Pillar5Lightmap");
+    loadOne(11, mpPillar6Lightmap, "Pillar6Lightmap");
+    loadOne(12, mpPillar7Lightmap, "Pillar7Lightmap");
 }
 
 void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -194,6 +338,22 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
     mpScene = pScene;
     if (mpScene)
     {
+        mBakeTargets =
+        {
+            //{ "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
+            //{ "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
+            //{ "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
+            //{ "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
+            //{ "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
+            { "Pillar0",  3, 512, 512, "BakedPillar0.exr" , BakeTargetType::Pillar},
+            { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar },
+            { "Pillar2",  5, 512, 512, "BakedPillar2.exr" , BakeTargetType::Pillar},
+            { "Pillar3",  6, 512, 512, "BakedPillar3.exr" , BakeTargetType::Pillar},
+            { "Pillar4",  7, 512, 512, "BakedPillar4.exr" , BakeTargetType::Pillar},
+            { "Pillar5",  8, 512, 512, "BakedPillar5.exr" , BakeTargetType::Pillar},
+            { "Pillar6",  9, 512, 512, "BakedPillar6.exr" , BakeTargetType::Pillar},
+            { "Pillar7", 10, 512, 512, "BakedPillar7.exr" , BakeTargetType::Pillar},
+        };
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
             previewDesc.addShaderModules(mpScene->getShaderModules());
@@ -221,36 +381,34 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
             mpGraphicsState->setFbo(mpFbo);
             mpGraphicsState->setDepthStencilState(pDsState);
 
-            loadLightmap("BakedFloor.exr");
+            loadLightmaps();
         }
         else {
-            // 1. Create the UV FBO (Position and Normal maps)
-            ref<Texture> pPosTex = mpDevice->createTexture2D(mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr, ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource);
-            pPosTex->setName("PosTex");
+            //logInfo("Geometry instance count = {}", mpScene->getGeometryInstanceCount());
 
-            ref<Texture> pNormTex = mpDevice->createTexture2D(mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr, ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource);
-            pNormTex->setName("NormText");
+            //for (uint32_t instanceID = 0; instanceID < mpScene->getGeometryInstanceCount(); ++instanceID)
+            //{
+            //    const auto& inst = mpScene->getGeometryInstance(instanceID);
+            //    logInfo("instanceID={} meshID={} materialID={} globalMatrixID={}",
+            //        (uint32_t)instanceID,
+            //        (uint32_t)inst.geometryID,
+            //        (uint32_t)inst.materialID,
+            //        (uint32_t)inst.globalMatrixID);
+            //}
 
-            mpUVFbo = Fbo::create(mpDevice);
-
-            mpUVFbo->attachColorTarget(pPosTex, 0);
-            mpUVFbo->attachColorTarget(pNormTex, 1);
-            uint32_t totalTexels = mLightmapWidth * mLightmapHeight;
-            mpTexelBuffer = mpDevice->createStructuredBuffer(sizeof(TexelSample), totalTexels); // Adjust struct size to match TexelSample
-            mpTexelBuffer->setName("TexelBuffer");
-            mpCounterBuffer = mpDevice->createBuffer(sizeof(uint32_t), ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal);
-            mpCounterBuffer->setName("CounterBuffer");
-            mpAccumBuffer = mpDevice->createStructuredBuffer(sizeof(float4), totalTexels);
-            mpAccumBuffer->setName("AccumBuffer");
-            mpResultTex = mpDevice->createTexture2D(mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA16Float, 1, 1, nullptr, ResourceBindFlags::ShaderResource | ResourceBindFlags::RenderTarget | ResourceBindFlags::UnorderedAccess);
-            mpResultTex->setName("BakeResultTex");
             ProgramDesc desc;
             desc.addShaderModules(mpScene->getShaderModules());
             desc.addShaderLibrary(kUVrasterFile)
                 .vsEntry("vsMain")  // Vertex shader entry point
                 .psEntry("psMain"); // Pixel shader entry point;
             mpProgram = Program::create(mpDevice, desc, mpScene->getSceneDefines());
-            mpVars = ProgramVars::create(mpDevice, mpProgram->getReflector());
+
+            ProgramDesc descPillar;
+            descPillar.addShaderModules(mpScene->getShaderModules());
+            descPillar.addShaderLibrary(kUVrasterPillarFile)
+                .vsEntry("vsMain")  // Vertex shader entry point
+                .psEntry("psMain"); // Pixel shader entry point;
+            mpProgramPillar = Program::create(mpDevice, descPillar, mpScene->getSceneDefines());
 
             // rasterizer state
             RasterizerState::Desc rasterDesc;
@@ -266,12 +424,8 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
             ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
 
             mpGraphicsState = GraphicsState::create(mpDevice);
-            mpGraphicsState->setProgram(mpProgram);
             mpGraphicsState->setRasterizerState(mpRasterState);
-            mpGraphicsState->setFbo(mpUVFbo);
             mpGraphicsState->setDepthStencilState(pDsState);
-            GraphicsState::Viewport vp(0.0f, 0.0f, (float)mLightmapWidth, (float)mLightmapHeight, 0.0f, 1.0f);
-            mpGraphicsState->setViewport(0, vp);
 
             mpExtractPass = ComputePass::create(mpDevice, kExtractFile, "main", mpScene->getSceneDefines());
             mpNormalizePass = ComputePass::create(mpDevice, kNormalizeFile, "main", mpScene->getSceneDefines());

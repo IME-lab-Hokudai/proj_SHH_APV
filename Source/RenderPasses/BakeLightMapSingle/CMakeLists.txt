@@ -9,6 +9,7 @@ target_sources(BakeLightMapSingle PRIVATE
 	LightmapBakingSingle.rt.slang
 	NormalizeLightmapSingle.cs.slang
 	ApplyLightmapSingle.slang
+	UVPassPillar.slang
 )
 
 target_copy_shaders(BakeLightMapSingle RenderPasses/BakeLightMapSingle)

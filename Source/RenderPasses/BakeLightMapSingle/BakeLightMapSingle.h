@@ -51,16 +51,33 @@ public:
     virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
     virtual void renderUI(Gui::Widgets& widget) override;
-    void loadLightmap(const std::filesystem::path& path);
+    void loadLightmaps();
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
 private:
+    enum class BakeTargetType
+    {
+        Quad,
+        Pillar
+    };
+
+    struct BakeTarget
+    {
+        std::string name;
+        uint32_t instanceID;
+        uint32_t width;
+        uint32_t height;
+        std::string outputPath;
+        BakeTargetType type = BakeTargetType::Quad;
+    };
 
     ref<Scene> mpScene;
     ref<Program> mpProgram;
     ref<ProgramVars> mpVars;
+    ref<Program> mpProgramPillar;
+
     ref<GraphicsState> mpGraphicsState;
     ref<RasterizerState> mpRasterState;
     ref<Fbo> mpUVFbo;
@@ -86,10 +103,39 @@ private:
     uint32_t mNumExtractedTexels = 0;
     bool mNeedsPreparation = true;
     uint32_t mCurrentSample = 0;
-    uint32_t mTotalSamples = 512; // Set your target quality here
-    bool mbloadLightMap = true;
-    ref<Texture> mpLoadedLightmap;
+    uint32_t mTotalSamples = 1; // Set your target quality here
+    bool mbloadLightMap = false;
+    //bool mbloadLightMap = true;
     ref<Sampler> mpLinearSampler;
 
-    uint32_t mReceiverInstanceID = 0;
+    std::vector<BakeTarget> mBakeTargets;
+    uint32_t mCurrentTargetIndex = 0;
+
+    ref<Texture> mpFloorLightmap;
+    ref<Texture> mpLeftWallLightmap;
+    ref<Texture> mpRightWallLightmap;
+    ref<Texture> mpRoofLeftLightmap;
+    ref<Texture> mpRoofRightLightmap;
+    ref<Texture> mpPillar0Lightmap;
+    ref<Texture> mpPillar1Lightmap;
+    ref<Texture> mpPillar2Lightmap;
+    ref<Texture> mpPillar3Lightmap;
+    ref<Texture> mpPillar4Lightmap;
+    ref<Texture> mpPillar5Lightmap;
+    ref<Texture> mpPillar6Lightmap;
+    ref<Texture> mpPillar7Lightmap;
+
+    uint32_t mFloorInstanceID = 0;
+    uint32_t mLeftWallInstanceID = 1;
+    uint32_t mRightWallInstanceID = 2;
+    uint32_t mRoofLeftInstanceID = 11;
+    uint32_t mRoofRightInstanceID = 12;
+    uint32_t mPillar0InstanceID = 3;
+    uint32_t mPillar1InstanceID = 4;
+    uint32_t mPillar2InstanceID = 5;
+    uint32_t mPillar3InstanceID = 6;
+    uint32_t mPillar4InstanceID = 7;
+    uint32_t mPillar5InstanceID = 8;
+    uint32_t mPillar6InstanceID = 9;
+    uint32_t mPillar7InstanceID = 10;
 };
