@@ -4,6 +4,8 @@ import Scene.Raster;
 cbuffer BakeCB
 {
     uint gReceiverInstanceID;
+    float3 gPillarCenterW;
+    float3 gPillarHalfExtentW;
 };
 
 struct PSOut

@@ -112,6 +112,24 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
             applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
             applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
             applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
+
+            applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
+            applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
+            applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
+            applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
+            applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
+            applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
+            applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
+            applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
+
+            applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
         }
         else {
@@ -183,7 +201,8 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
 
                     auto var = mpVars->getRootVar();
                     var["BakeCB"]["gReceiverInstanceID"] = target.instanceID;
-
+                    var["BakeCB"]["gPillarCenterW"] = target.pillarCenterW;
+                    var["BakeCB"]["gPillarHalfExtentW"] = target.pillarHalfExtentW;
                     mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
                     pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
@@ -210,8 +229,8 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
                     if (mNumExtractedTexels == 0)
                     {
                         logWarning("Target '{}' has no extracted texels. Skipping.", target.name);
-                        //mCurrentTargetIndex++;
-                        mCurrentTargetIndex = 0;
+                        mCurrentTargetIndex++;
+                        //mCurrentTargetIndex = 0;
                         mNeedsPreparation = true;
                         return;
                     }
@@ -340,19 +359,19 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
     {
         mBakeTargets =
         {
-            //{ "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
-            //{ "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
-            //{ "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
-            //{ "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
-            //{ "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
-            { "Pillar0",  3, 512, 512, "BakedPillar0.exr" , BakeTargetType::Pillar},
-            { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar },
-            { "Pillar2",  5, 512, 512, "BakedPillar2.exr" , BakeTargetType::Pillar},
-            { "Pillar3",  6, 512, 512, "BakedPillar3.exr" , BakeTargetType::Pillar},
-            { "Pillar4",  7, 512, 512, "BakedPillar4.exr" , BakeTargetType::Pillar},
-            { "Pillar5",  8, 512, 512, "BakedPillar5.exr" , BakeTargetType::Pillar},
-            { "Pillar6",  9, 512, 512, "BakedPillar6.exr" , BakeTargetType::Pillar},
-            { "Pillar7", 10, 512, 512, "BakedPillar7.exr" , BakeTargetType::Pillar},
+            { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
+            { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
+            { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
+            { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
+            { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
+            { "Pillar0",  3, 512, 512, "BakedPillar0.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar2",  5, 512, 512, "BakedPillar2.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar3",  6, 512, 512, "BakedPillar3.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar4",  7, 512, 512, "BakedPillar4.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar5",  8, 512, 512, "BakedPillar5.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
+            { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
         };
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
