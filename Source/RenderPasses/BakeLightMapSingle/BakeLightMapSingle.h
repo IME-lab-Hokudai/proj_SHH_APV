@@ -105,9 +105,9 @@ private:
     uint32_t mNumExtractedTexels = 0;
     bool mNeedsPreparation = true;
     uint32_t mCurrentSample = 0;
-    uint32_t mTotalSamples = 1024; // Set your target quality here
-    //bool mbloadLightMap = false;
-    bool mbloadLightMap = true;
+    uint32_t mTotalSamples = 4096; // Set your target quality here
+    bool mbloadLightMap = false;
+    //bool mbloadLightMap = true;
     ref<Sampler> mpLinearSampler;
 
     std::vector<BakeTarget> mBakeTargets;
