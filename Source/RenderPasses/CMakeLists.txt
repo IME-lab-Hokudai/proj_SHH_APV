@@ -1,4 +1,5 @@
 add_subdirectory(AccumulatePass)
+add_subdirectory(AdaptiveSHDemo)
 add_subdirectory(BakeLightMap)
 add_subdirectory(BakeLightMapSingle)
 add_subdirectory(BlitPass)
