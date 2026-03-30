@@ -131,6 +131,25 @@ for i, z in enumerate(ad_z_pos):
         sceneBuilder.addTriangleMesh(quadMesh, ad_right_mats[i])
     )
 
+# --- 6. DYNAMIC BUNNY ---
+bunny_mat = StandardMaterial('BunnyMaterial')
+bunny_mat.baseColor = float4(0.7, 0.7, 0.7, 1.0)
+bunny_mat.roughness = 1.0
+
+#bunny_mesh = TriangleMesh.createFromFile('meshes/bunny.obj')
+bunny_mesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'DynamicBunny',
+        Transform(
+            scaling=float3(2.0, 2.0, 2.0),
+            translation=float3(0.0, 3.0, 18.0),
+            rotationEulerDeg=float3(0, 180, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(bunny_mesh, bunny_mat)
+)
+
 # --- CAMERA ---
 camera = Camera()
 camera.position = float3(0, 5, 36)

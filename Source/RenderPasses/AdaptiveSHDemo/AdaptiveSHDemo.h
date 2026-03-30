@@ -126,5 +126,9 @@ private:
     uint32_t mPillar7InstanceID = 10;
 
     // First dynamic object for now.
-    uint32_t mDynamicBunnyInstanceID = 27; // replace with actual runtime ID
+    // Dynamic raster pass
+    ref<Program> mpDynamicProgram;
+    ref<ProgramVars> mpDynamicVars;
+    uint32_t mCurrentSample = 0;
+    uint32_t mFirstDynamicInstanceID = 27;
 };

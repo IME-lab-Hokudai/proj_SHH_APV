@@ -124,6 +124,8 @@ float2 projectCubeFaceUV(float3 posW, float3 normalW, float3 centerW, float3 hal
 
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
+    uint iid = vsOut.instanceID.index;
+    if (iid >= 27) discard;
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
     BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
@@ -228,7 +230,6 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
         litColor = albedo * irradiance / 3.14159265f;
     }
-
     litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);
 }

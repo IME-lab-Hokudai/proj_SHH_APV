@@ -1,57 +1,21 @@
 import Scene.Raster;
+import Rendering.Lights.EmissiveLightSampler;
+import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Utils.Sampling.UniformSampleGenerator;
+import Scene.RaytracingInline;
+import Utils.Geometry.GeometryHelpers;
+#include "Utils/Math/MathConstants.slangh"
 
 // Lightmaps
 SamplerState gLinearSampler;
-
-Texture2D gFloorLightmap;
-Texture2D gLeftWallLightmap;
-Texture2D gRightWallLightmap;
-Texture2D gRoofLeftLightmap;
-Texture2D gRoofRightLightmap;
-
-Texture2D gPillar0Lightmap;
-Texture2D gPillar1Lightmap;
-Texture2D gPillar2Lightmap;
-Texture2D gPillar3Lightmap;
-Texture2D gPillar4Lightmap;
-Texture2D gPillar5Lightmap;
-Texture2D gPillar6Lightmap;
-Texture2D gPillar7Lightmap;
+static const bool kUseEmissiveLights = USE_EMISSIVE_LIGHTS;
+static const bool kUseAnalyticLights = USE_ANALYTIC_LIGHTS;
 
 cbuffer PerFrameCB
 {
-    uint gFloorInstanceID;
-    uint gLeftWallInstanceID;
-    uint gRightWallInstanceID;
-    uint gRoofLeftInstanceID;
-    uint gRoofRightInstanceID;
-
-    uint gPillar0InstanceID;
-    uint gPillar1InstanceID;
-    uint gPillar2InstanceID;
-    uint gPillar3InstanceID;
-    uint gPillar4InstanceID;
-    uint gPillar5InstanceID;
-    uint gPillar6InstanceID;
-    uint gPillar7InstanceID;
-
-    float3 gPillar0CenterW;
-    float3 gPillar1CenterW;
-    float3 gPillar2CenterW;
-    float3 gPillar3CenterW;
-    float3 gPillar4CenterW;
-    float3 gPillar5CenterW;
-    float3 gPillar6CenterW;
-    float3 gPillar7CenterW;
-
-    float3 gPillar0HalfExtentW;
-    float3 gPillar1HalfExtentW;
-    float3 gPillar2HalfExtentW;
-    float3 gPillar3HalfExtentW;
-    float3 gPillar4HalfExtentW;
-    float3 gPillar5HalfExtentW;
-    float3 gPillar6HalfExtentW;
-    float3 gPillar7HalfExtentW;
+    uint gFirstDynamicInstanceID;
+    uint sampleIndex;
+    EmissiveLightSampler emissiveSampler;
 };
 
 VSOut vsMain(VSIn vIn)
@@ -60,175 +24,123 @@ VSOut vsMain(VSIn vIn)
     return vsOut;
 }
 
-float2 projectCubeFaceUV(float3 posW, float3 normalW, float3 centerW, float3 halfExtentW)
+struct LightSample
 {
-    float3 p = (posW - centerW) / max(halfExtentW, float3(1e-6f));
-    p = clamp(p, -1.0f, 1.0f);
+    float3 Li;
+    float pdf;
+    float3 origin;
+    float distance;
+    float3 dir;
+    uint lightType;
+    Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
+};
 
-    float3 n = normalize(normalW);
-    float3 an = abs(n);
-
-    float2 uv;
-    uint faceIndex = 0;
-
-    if (an.x >= an.y && an.x >= an.z)
+struct PathVertex
+{
+    uint index;
+    float3 pos;
+    float3 faceNormal;
+    bool frontFacing;
+    __init(uint index, float3 pos, float3 faceNormal = float3(0.f), bool frontFacing = true)
     {
-        if (n.x > 0.0f)
-        {
-            uv = float2(-p.z, p.y);
-            faceIndex = 0; // +X
-        }
-        else
-        {
-            uv = float2(p.z, p.y);
-            faceIndex = 1; // -X
-        }
+        this.index = index;
+        this.pos = pos;
+        this.faceNormal = faceNormal;
+        this.frontFacing = frontFacing;
     }
-    else if (an.z >= an.x && an.z >= an.y)
+    float3 getRayOrigin(float3 rayDir)
     {
-        if (n.z > 0.0f)
-        {
-            uv = float2(p.x, p.y);
-            faceIndex = 2; // +Z
-        }
-        else
-        {
-            uv = float2(-p.x, p.y);
-            faceIndex = 3; // -Z
-        }
+        return computeRayOrigin(pos, dot(faceNormal, rayDir) >= 0 ? faceNormal : -faceNormal);
     }
-    else
+    float3 getOrientedFaceNormal()
     {
-        if (n.y > 0.0f)
-        {
-            uv = float2(p.x, -p.z);
-            faceIndex = 4; // +Y
-        }
-        else
-        {
-            uv = float2(p.x, p.z);
-            faceIndex = 5; // -Y
-        }
+        return frontFacing ? faceNormal : -faceNormal;
     }
+};
 
-    uv = saturate(uv * 0.5f + 0.5f);
-
-    uint tileX = faceIndex % 3;
-    uint tileY = faceIndex / 3;
-
-    float2 tileScale  = float2(1.0f / 3.0f, 1.0f / 2.0f);
-    float2 tileOffset = float2(tileX, tileY) * tileScale;
-
-    return tileOffset + uv * tileScale;
+bool generateEmissiveSample(const PathVertex vertex, const bool upperHemisphere, inout UniformSampleGenerator sg, out LightSample ls)
+{
+    ls = {};
+    if (!kUseEmissiveLights) return false;
+    TriangleLightSample tls;
+    if (!emissiveSampler.sampleLight(vertex.pos, vertex.getOrientedFaceNormal(), upperHemisphere, sg, tls)) return false;
+    ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
+    ls.pdf = tls.pdf;
+    float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+    ls.origin = vertex.getRayOrigin(lightPos - vertex.pos);
+    float3 toLight = lightPos - ls.origin;
+    ls.distance = length(toLight);
+    ls.dir = normalize(toLight);
+    return any(ls.Li > 0.f);
 }
+
+// Helpers for cosine-weighted sampling
+float3 SampleCosineHemisphere(float2 u)
+{
+    float phi = 2.0f * M_PI * u.y;
+    float cosTheta = sqrt(max(0.0001f, u.x));
+    float sinTheta = sqrt(1.0f - u.x);
+    return float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+}
+
+float3 TangentToWorld(float3 localDir, float3 normal)
+{
+    float3 arb = abs(normal.y) < 0.999f ? float3(0, 1, 0) : float3(1, 0, 0);
+    float3 tangent = normalize(cross(arb, normal));
+    float3 bitangent = cross(normal, tangent);
+    return localDir.x * tangent + localDir.y * bitangent + localDir.z * normal;
+}
+
+float3 evalDynamicDirect(ShadingData sd, inout UniformSampleGenerator sg)
+{
+    //if (!kUseEmissiveLights) return float3(0);
+
+    let lod = ExplicitLodTextureSampler(0.f);
+    let mi = gScene.materials.getMaterialInstance(sd, lod);
+
+    PathVertex vertex = PathVertex(0, sd.posW, sd.frame.N, sd.frontFacing);
+
+    int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
+    if (emissiveTriangleCount == 0) return float3(0);
+
+    const int numEmissiveSamplesPerTriangle = 1;
+    const int numEmissiveSamples = max(1, numEmissiveSamplesPerTriangle * emissiveTriangleCount);
+
+    float3 direct = float3(0);
+
+    for (int s = 0; s < numEmissiveSamples; ++s)
+    {
+        LightSample ls;
+        if (generateEmissiveSample(vertex, true, sg, ls) && ls.pdf > 0.f)
+        {
+            SceneRayQuery<false> sceneRayQuery;
+            if (sceneRayQuery.traceVisibilityRay(ls.getVisibilityRay()))
+            {
+                direct += mi.eval(sd, ls.dir, sg)*ls.Li;
+            }
+        }
+    }
+
+    return direct / float(numEmissiveSamples);
+}
+
+struct VisibilityRayData
+{
+    bool visible;
+};
 
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
+    uint iid = vsOut.instanceID.index;
+   if (iid < gFirstDynamicInstanceID) discard;
+
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
     BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
 
-    float4 baseColorSample = (float4)baseColorMat.baseColor;
-    float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
+    UniformSampleGenerator sg = UniformSampleGenerator(uint2(vsOut.posH.xy), 0);
 
-    float2 quadUV = vsOut.texC;
-    quadUV.y = 1.0f - quadUV.y;
+    float3  litColor = evalDynamicDirect(shadingData, sg);
 
-    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
-        baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
-    }
-
-    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture) {
-        emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
-    }
-
-    float3 albedo = baseColorSample.rgb;
-    float3 litColor = albedo;
-
-    const uint instanceID = vsOut.instanceID.index;
-
-    if (instanceID == gFloorInstanceID)
-    {
-        float3 irradiance = gFloorLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gLeftWallInstanceID)
-    {
-        float3 irradiance = gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRightWallInstanceID)
-    {
-        float3 irradiance = gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRoofLeftInstanceID)
-    {
-        float3 irradiance = gRoofLeftLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRoofRightInstanceID)
-    {
-        float3 irradiance = gRoofRightLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar0InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar0CenterW, gPillar0HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar0Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar1InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar1CenterW, gPillar1HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar1Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar2InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar2CenterW, gPillar2HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar2Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar3InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar3CenterW, gPillar3HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar3Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar4InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar4CenterW, gPillar4HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar4Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar5InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar5CenterW, gPillar5HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar5Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar6InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar6CenterW, gPillar6HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar6Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar7InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar7CenterW, gPillar7HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-
-    litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);
 }

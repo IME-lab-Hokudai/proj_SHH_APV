@@ -132,9 +132,27 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
 
         // ------------------------------------------------------------------
-        // PASS 2: DYNAMIC OBJECTS
-        // ------------------------------------------------------------------
+// PASS 2: DYNAMIC OBJECTS
+// ------------------------------------------------------------------
+        mpGraphicsState->setProgram(mpDynamicProgram);
 
+        auto dynVar = mpDynamicVars->getRootVar();
+        dynVar["gLinearSampler"] = mpLinearSampler;
+        dynVar["PerFrameCB"]["gFirstDynamicInstanceID"] = mFirstDynamicInstanceID;
+        dynVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
+        mCurrentSample++;
+
+        if (mpEmissiveSampler)
+        {
+            mpEmissiveSampler->bindShaderData(dynVar["PerFrameCB"]["emissiveSampler"]);
+        }
+
+        // Reuse the same FBO/depth. Do NOT clear again.
+        mpScene->bindShaderDataForRaytracing(pRenderContext, dynVar["gScene"]);
+        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpDynamicVars.get(), mpRasterState, mpRasterState);
+
+        // Restore static program if you want the state to remain consistent.
+        mpGraphicsState->setProgram(mpStaticProgram);
     }
 }
 
@@ -222,7 +240,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         // rasterizer state
         RasterizerState::Desc rasterDesc;
         rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
-        rasterDesc.setCullMode(RasterizerState::CullMode::None);
+        rasterDesc.setCullMode(RasterizerState::CullMode::Back);
         rasterDesc.setDepthBias(100000, 1.0f);
         mpRasterState = RasterizerState::create(rasterDesc);
 
@@ -236,6 +254,56 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpGraphicsState->setFbo(mpFbo);
         mpGraphicsState->setDepthStencilState(pDsState);
 
+        const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
+        if (mpScene->useEmissiveLights())
+        {
+            if (!mpEmissiveSampler)
+            {
+                FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+                FALCOR_ASSERT(!mpEmissiveSampler);
+
+                switch (mEmissiveSamplerType)
+                {
+                case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
+                    mpEmissiveSampler =
+                        std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                    break;
+                case EmissiveLightSamplerType::LightBVH:
+                    mpEmissiveSampler = std::make_unique<LightBVHSampler>(
+                        pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
+                    );
+                    break;
+                case EmissiveLightSamplerType::Power:
+                    mpEmissiveSampler =
+                        std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
+                    break;
+                default:
+                    FALCOR_THROW("Unknown emissive light sampler type");
+                }
+            }
+        }
+
+        ProgramDesc dynamicDesc;
+        dynamicDesc.addShaderModules(mpScene->getShaderModules());
+        dynamicDesc.addShaderLibrary(kDynamicPassFile)
+            .vsEntry("vsMain")
+            .psEntry("psMain");
+        dynamicDesc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList dynamicDefines = mpScene->getSceneDefines();
+        DefineList lightRelatedDefines;
+        lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+        lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+        dynamicDefines.add(lightRelatedDefines);
+
+        if (mpEmissiveSampler)
+        {
+            dynamicDefines.add(mpEmissiveSampler->getDefines());
+        }
+
+        mpDynamicProgram = Program::create(mpDevice, dynamicDesc, dynamicDefines);
+        mpDynamicVars = ProgramVars::create(mpDevice, mpDynamicProgram->getReflector());
+       
         loadLightmaps();
   
         //REMARK :  set all materials to diffuse for SH testing
