@@ -42,9 +42,8 @@
 #include <cmath>
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
-const int numSamplesPerProbe = 4096;
-//const int numSamplesPerProbe = 1024;
-//const int numSamplesPerProbe = 4096*2;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 64;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
@@ -84,8 +83,11 @@ const uint3 unifromGridSize = uint3(16, 16, 16);
 //const std::string loadFromFileName = "AdaptiveErr1NoCull.txt";
 //const std::string loadFromFileName = "AdaptiveErr0point5NoCull.txt";
 
-const std::string saveToFileName = "AdaptiveErr5SubwayCorridor.txt";
-const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
+//const std::string saveToFileName = "AdaptiveErr5SubwayCorridor.txt";
+//const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
+
+const std::string saveToFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
+const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";

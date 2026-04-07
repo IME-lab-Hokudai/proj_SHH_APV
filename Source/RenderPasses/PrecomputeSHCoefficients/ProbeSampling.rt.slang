@@ -182,9 +182,9 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
     // -------------------------------------------------------------------------
     // For bounces (depth > 0), we rely on NEE (sampleLight) to handle lighting smoothly.
-     //float3 directLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
-    float3 indirectLight = float3(0.0f);
-    if (hitData.depth > 0) {
+    float3 accumLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
+    //  float3 accumLight = float3(0.0f);
+   // if (hitData.depth > 0) {
         // ANALYTIC LIGHTS
         if (kUseAnalyticLights) {
             for (int i = 0; i < gScene.getLightCount(); i++) {
@@ -200,7 +200,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
                     if (traceVisibilityRay(shadowRay))
                     {
-                        indirectLight += mi.eval(sd, ls.dir, hitData.sg) * ls.Li;
+                        accumLight += mi.eval(sd, ls.dir, hitData.sg) * ls.Li;
                     }
                 }
             }
@@ -225,11 +225,11 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
                     }
                 }
             }
-            indirectLight += accum / float(numEmissiveSamples);
+            accumLight += accum / float(numEmissiveSamples);
         }
-    }
+    //}
 
-    hitData.Li = indirectLight;
+        hitData.Li = accumLight;
 
     // -------------------------------------------------------------------------
     // 3. Indirect Lighting (Generate Next Ray)

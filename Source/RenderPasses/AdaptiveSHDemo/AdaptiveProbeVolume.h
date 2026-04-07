@@ -58,8 +58,6 @@ public:
         }
     };
 
-    void interpolateRobust_CPU(int probeIdx, float3 pos, std::vector<float3>& outCoeffs);
-
     void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3* finalCoeffs);
 
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
@@ -69,39 +67,9 @@ public:
 
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
-    void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
-
-    // ----------------------------------------------------------------
-    // Batch Processing Interface
-    // ----------------------------------------------------------------
-
-    // Check if there are new corners waiting for SH/Grad calculation
-    bool hasPendingBatch() const { return !mPendingNewCorners.empty(); }
-
-    // Get world positions of strictly the NEW corners that need calculation
-    void getPendingPositions(std::vector<float3>& positions) const;
-
-    // Fill physics data for a SPECIFIC corner in the current batch.
-    // batchIndex: The index in mPendingNewCorners to update.
-    // coeffs: All SH coefficients for this corner.
-    // grads: All gradients for this corner.
-    void setCornerData(
-        uint32_t batchIndex,
-        const std::vector<float3>& coeffs,
-        const std::vector<GradSHCoeff>& grads,
-        const std::vector<float3x3>& hessians
-        //const std::vector<float>& distMeans,
-        //const std::vector<float>& distMeanSqs
-    );
-
-    // Calculate Error per Probe, Subdivide if needed, Generate new Corners
-    void finishBatch();
-
     int traverseOctreeCPU(float3 pos) const;
 
     void computeNeighbors();
-
-    void interpolateLinear_CPU(int coarseProbeIdx, float3 pos, std::vector<float>& outDist, std::vector<float>& outDistSq);
 
     // ----------------------------------------------------------------
     // Resources & Debug
@@ -114,18 +82,11 @@ public:
     const std::vector<Probe>& getProbes() const { return mProbes; }
     // In your header (.h) or class definition:
     std::unordered_map<CornerKey, int, CornerKeyHasher> mCornerLookup;
-    // ----------------------------------------------------------------
-    // IO Interface
-    // ----------------------------------------------------------------
-    void saveToFile(const std::string& filename) const;
+
     void loadFromFile(const std::string& filename);
 
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
-
-    // ----------------------------------------------------------------
-    // Internal Data Structures
-    // ----------------------------------------------------------------
 
     ref<Device> mpDevice;
 

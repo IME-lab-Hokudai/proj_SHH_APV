@@ -1,9 +1,12 @@
 import Scene.Raster;
 #include "AdaptiveGridData.slang"
+#include "Utils/Math/MathConstants.slangh"
+
 // Lightmaps
 SamplerState gLinearSampler;
 #define MAX_SH_BASIS 9
 #define OCTREE_MAX_DEPTH 9
+
 StructuredBuffer<GPUCorner> gCornerBuffer;
 StructuredBuffer<GPUProbe> gProbeBuffer;
 
@@ -340,8 +343,6 @@ float2 projectCubeFaceUV(float3 posW, float3 normalW, float3 centerW, float3 hal
 
 float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
-    uint iid = vsOut.instanceID.index;
-    if (iid >= 27) discard;
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
     BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
@@ -445,6 +446,16 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         pillarUV.y = 1.0f - pillarUV.y;
         float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
         litColor = albedo * irradiance / 3.14159265f;
+    }
+    else {
+        float3 finalSH[MAX_SH_BASIS];
+        // 1. Find the Leaf Voxel
+        int probeIdx = traverseOctree(shadingData.posW);
+        // 2. Compute interpolated SH Coeffs
+        fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+
+        float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
+        litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
     }
     litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);

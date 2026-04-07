@@ -33,7 +33,7 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "AdaptiveProbeVolume.h"
 #include "UniformProbeVolume.h"
-
+#include "ProbeVisualizePass.h"
 using namespace Falcor;
 
 class AdaptiveSHDemo : public RenderPass
@@ -142,4 +142,11 @@ private:
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
     ref<UniformProbeVolume> mUniformProbeVolume;
+
+    //visualize probe grid
+    ref<ProbeVisualizePass> mpProbeVisualizePass;
+    bool mbShowAdaptiveGrid = false;
+    // Add this array to track checkbox states
+    bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
+    bool mbDrawLeafOnly = false;
 };

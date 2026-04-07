@@ -35,6 +35,9 @@
 //#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
 #define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
+//const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
+
+const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
 const char kStaticPassFile[] = "RenderPasses/AdaptiveSHDemo/StaticPass.slang";
 const char kDynamicPassFile[] = "RenderPasses/AdaptiveSHDemo/DynamicPass.slang";
 const char kDynamicFilterFile[] = "RenderPasses/AdaptiveSHDemo/DynamicFilter.cs.slang";
@@ -63,12 +66,12 @@ RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y).format(ResourceFormat::RGBA32Float);
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA32Float);
     //reflector.addOutput("output", "Color").texture2D(mLightmapWidth, mLightmapHeight, 4).format(ResourceFormat::RGBA32Float);
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
         .bindFlags(ResourceBindFlags::DepthStencil)
-        .texture2D(sz.x, sz.y);
+        .texture2D(sz.x, sz.y, 4);
 
     reflector.addInternal("dynamicRaw", "Dynamic raw lighting")
         .format(ResourceFormat::RGBA32Float)
@@ -151,67 +154,55 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
         applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
         applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+        applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+#else
+        mUniformProbeVolume->bindShaderData(applyVar);
+#endif
+
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
 
-        // ------------------------------------------------------------------
-// PASS 2: DYNAMIC OBJECTS
-// ------------------------------------------------------------------
-        mpGraphicsState->setProgram(mpDynamicProgram);
-
-        auto pDynamicRaw = renderData.getTexture("dynamicRaw");
-        auto pDynamicFiltered = renderData.getTexture("dynamicFiltered");
-        auto pDynamicMask = renderData.getTexture("dynamicMask");
-
-        auto dynVar = mpDynamicVars->getRootVar();
-        dynVar["gLinearSampler"] = mpLinearSampler;
-        dynVar["PerFrameCB"]["gFirstDynamicInstanceID"] = mFirstDynamicInstanceID;
-        dynVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
-        mCurrentSample++;
-        // Reuse SAME depth buffer from static pass.
-        //mpFbo->attachColorTarget(pDynamicRaw, 0);
-        //mpFbo->attachColorTarget(pDynamicMask, 1);
-
-        //// Clear only the dynamic RTs, NOT depth.
-        //pRenderContext->clearRtv(pDynamicRaw->getRTV().get(), float4(0, 0, 0, 0));
-        //pRenderContext->clearRtv(pDynamicMask->getRTV().get(), float4(0, 0, 0, 0));
-
-        if (mpEmissiveSampler)
+        if (mbShowAdaptiveGrid)
         {
-            mpEmissiveSampler->bindShaderData(dynVar["PerFrameCB"]["emissiveSampler"]);
+            mpProbeVisualizePass->setCameraData(
+                mpScene->getCamera()->getViewProjMatrix()
+            );
+
+            mpProbeVisualizePass->execute(pRenderContext, mpFbo);
         }
-
-        // Reuse the same FBO/depth. Do NOT clear again.
-        mpScene->bindShaderDataForRaytracing(pRenderContext, dynVar["gScene"]);
-        mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpDynamicVars.get(), mpRasterState, mpRasterState);
-
-        //auto filterVar = mpFilterPass->getRootVar();
-        //filterVar["gInput"] = pDynamicRaw;
-        //filterVar["gMask"] = pDynamicMask;
-        //filterVar["gOutput"] = pDynamicFiltered;
-        //filterVar["CB"]["gFrameDim"] = uint2(pDynamicRaw->getWidth(), pDynamicRaw->getHeight());
-
-        //mpFilterPass->execute(pRenderContext, pDynamicRaw->getWidth(), pDynamicRaw->getHeight());
-
-        // ------------------------------------------------------------------
-// PASS 3: COMPOSITE FILTERED DYNAMIC OVER STATIC OUTPUT
-// ------------------------------------------------------------------
-        //mpFbo->attachColorTarget(pTargetFbo, 0);
-        //mpFbo->attachDepthStencilTarget(nullptr);
-
-        //mpCompositeState->setFbo(mpFbo);
-
-        //auto compVar = mpCompositeVars->getRootVar();
-        //compVar["gDynamicFiltered"] = pDynamicFiltered;
-        //compVar["gDynamicMask"] = pDynamicMask;
-        //compVar["gLinearSampler"] = mpLinearSampler;
-        //// Draw fullscreen quad/triangle strip
-        //pRenderContext->draw(mpCompositeState.get(), mpCompositeVars.get(), 4, 0);
-        // Restore static program if you want the state to remain consistent.
-        mpGraphicsState->setProgram(mpStaticProgram);
     }
 }
 
-void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {}
+void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
+
+    if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
+        requestRecompile();
+    // Level Visibility Controls
+    if (mbShowAdaptiveGrid)
+    {
+        // NEW Checkbox
+        if (widget.checkbox("Draw Leaf Only", mbDrawLeafOnly))
+        {
+            if (mpProbeVisualizePass)
+                mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+        }
+
+        if (auto g = widget.group("Octree Levels", true))
+        {
+            for (int i = 0; i < 8; ++i)
+            {
+                std::string label = "Level " + std::to_string(i);
+                if (g.checkbox(label.c_str(), mVisLevels[i]))
+                {
+                    if (mpProbeVisualizePass)
+                        mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+                }
+            }
+        }
+    }
+}
 
 void AdaptiveSHDemo::loadLightmaps()
 {
@@ -284,25 +275,27 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
         };
 
-//#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-//        mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-//        if (!mNeedRebuildProbeVolume) {
-//            mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
-//            mAdaptiveProbeVolume->uploadToGPU();
-//            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-//        }
-//#else
-//        mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-//        if (!mNeedRebuildProbeVolume) {
-//            mUniformProbeVolume->loadFromFile(loadFromFileName);
-//            mUniformProbeVolume->uploadToGPU();
-//            mpProbeVisualizePass->setUniformVolumeData(
-//                mUniformProbeVolume->getMinPoint(),
-//                mUniformProbeVolume->getCellSize(),
-//                mUniformProbeVolume->getCellResolution()
-//            );
-//        }
-//#endif
+        //init probe visual pass
+        mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+
+            mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+            mAdaptiveProbeVolume->uploadToGPU();
+            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+#else
+        mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+        if (!mNeedRebuildProbeVolume) {
+            mUniformProbeVolume->loadFromFile(loadFromFileName);
+            mUniformProbeVolume->uploadToGPU();
+            mpProbeVisualizePass->setUniformVolumeData(
+                mUniformProbeVolume->getMinPoint(),
+                mUniformProbeVolume->getCellSize(),
+                mUniformProbeVolume->getCellResolution()
+            );
+        }
+#endif
+      
 
         ProgramDesc previewDesc;
         previewDesc.addShaderModules(mpScene->getShaderModules());
