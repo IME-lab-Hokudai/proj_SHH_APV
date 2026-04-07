@@ -38,6 +38,8 @@
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
+#include <cstdint>
+#include <cmath>
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 const int numSamplesPerProbe = 4096;
@@ -440,7 +442,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 std::vector<float3> pendingProbePositions;
                 mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
 
-                uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+                uint32_t numProbes = pendingProbePositions.size();
 
                 // --- B. Prepare Buffers (Re-create for new size) ---
                 // Input: Positions
@@ -476,7 +478,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
 
                 // --- E. Process Each Probe (CPU Math) ---
-                for (int probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+                for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
                 {
                     // Gather samples for this specific probe
                     int offset = probeIdx * numSamplesPerProbe;
@@ -674,7 +676,7 @@ float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData
     xPrimeDirs.reserve(numSamplesPerProbe);
 
     // Solid angle (uniform per patch)
-    float Omega_i = (4.0f * M_PI) / (float)numSamplesPerProbe;
+    float Omega_i = (4.0f * (float)M_PI) / (float)numSamplesPerProbe;
 
     // calculate new directions from x' to all sample points
     for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)

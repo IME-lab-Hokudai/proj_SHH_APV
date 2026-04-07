@@ -197,7 +197,7 @@ void SHGradientAndHessianL2(const float3& normDir, std::array<float, 9>& ylm, st
     float x = normDir.x;
     float y = normDir.y;
     float z = normDir.z;
-    float c0, c1, cm, cs, s0, s1, sm, ss, tmp, tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7, lx, ly, lz;
+    float c0, c1, cm, cs, s0, s1, sm, ss, tmp, tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, lx, ly, lz;
     const float x2 = x * x;
     const float y2 = y * y;
     const float z2 = z * z;

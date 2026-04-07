@@ -29,10 +29,16 @@
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Utils/Logger.h"
+#define PROBE_MODE_ADAPTIVE 0
+#define PROBE_MODE_UNIFORM  1
+ // CHANGE THIS LINE TO SWITCH MODES:
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 const char kStaticPassFile[] = "RenderPasses/AdaptiveSHDemo/StaticPass.slang";
 const char kDynamicPassFile[] = "RenderPasses/AdaptiveSHDemo/DynamicPass.slang";
-
+const char kDynamicFilterFile[] = "RenderPasses/AdaptiveSHDemo/DynamicFilter.cs.slang";
+const char kCompositePassFile[] = "RenderPasses/AdaptiveSHDemo/CompositeDynamic.slang";
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, AdaptiveSHDemo>();
@@ -57,12 +63,28 @@ RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA32Float);
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y).format(ResourceFormat::RGBA32Float);
     //reflector.addOutput("output", "Color").texture2D(mLightmapWidth, mLightmapHeight, 4).format(ResourceFormat::RGBA32Float);
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
         .bindFlags(ResourceBindFlags::DepthStencil)
-        .texture2D(sz.x, sz.y, 4);
+        .texture2D(sz.x, sz.y);
+
+    reflector.addInternal("dynamicRaw", "Dynamic raw lighting")
+        .format(ResourceFormat::RGBA32Float)
+        .bindFlags(ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource)
+        .texture2D(sz.x, sz.y);
+
+    reflector.addOutput("dynamicFiltered", "Dynamic filtered lighting")
+        .format(ResourceFormat::RGBA32Float)
+        .bindFlags(ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource)
+        .texture2D(sz.x, sz.y);
+
+    reflector.addInternal("dynamicMask", "Dynamic mask")
+        .format(ResourceFormat::R8Unorm)
+        .bindFlags(ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess)
+        .texture2D(sz.x, sz.y);
+
     return reflector;
 }
 
@@ -136,11 +158,22 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 // ------------------------------------------------------------------
         mpGraphicsState->setProgram(mpDynamicProgram);
 
+        auto pDynamicRaw = renderData.getTexture("dynamicRaw");
+        auto pDynamicFiltered = renderData.getTexture("dynamicFiltered");
+        auto pDynamicMask = renderData.getTexture("dynamicMask");
+
         auto dynVar = mpDynamicVars->getRootVar();
         dynVar["gLinearSampler"] = mpLinearSampler;
         dynVar["PerFrameCB"]["gFirstDynamicInstanceID"] = mFirstDynamicInstanceID;
         dynVar["PerFrameCB"]["sampleIndex"] = mCurrentSample;
         mCurrentSample++;
+        // Reuse SAME depth buffer from static pass.
+        //mpFbo->attachColorTarget(pDynamicRaw, 0);
+        //mpFbo->attachColorTarget(pDynamicMask, 1);
+
+        //// Clear only the dynamic RTs, NOT depth.
+        //pRenderContext->clearRtv(pDynamicRaw->getRTV().get(), float4(0, 0, 0, 0));
+        //pRenderContext->clearRtv(pDynamicMask->getRTV().get(), float4(0, 0, 0, 0));
 
         if (mpEmissiveSampler)
         {
@@ -151,6 +184,28 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         mpScene->bindShaderDataForRaytracing(pRenderContext, dynVar["gScene"]);
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpDynamicVars.get(), mpRasterState, mpRasterState);
 
+        //auto filterVar = mpFilterPass->getRootVar();
+        //filterVar["gInput"] = pDynamicRaw;
+        //filterVar["gMask"] = pDynamicMask;
+        //filterVar["gOutput"] = pDynamicFiltered;
+        //filterVar["CB"]["gFrameDim"] = uint2(pDynamicRaw->getWidth(), pDynamicRaw->getHeight());
+
+        //mpFilterPass->execute(pRenderContext, pDynamicRaw->getWidth(), pDynamicRaw->getHeight());
+
+        // ------------------------------------------------------------------
+// PASS 3: COMPOSITE FILTERED DYNAMIC OVER STATIC OUTPUT
+// ------------------------------------------------------------------
+        //mpFbo->attachColorTarget(pTargetFbo, 0);
+        //mpFbo->attachDepthStencilTarget(nullptr);
+
+        //mpCompositeState->setFbo(mpFbo);
+
+        //auto compVar = mpCompositeVars->getRootVar();
+        //compVar["gDynamicFiltered"] = pDynamicFiltered;
+        //compVar["gDynamicMask"] = pDynamicMask;
+        //compVar["gLinearSampler"] = mpLinearSampler;
+        //// Draw fullscreen quad/triangle strip
+        //pRenderContext->draw(mpCompositeState.get(), mpCompositeVars.get(), 4, 0);
         // Restore static program if you want the state to remain consistent.
         mpGraphicsState->setProgram(mpStaticProgram);
     }
@@ -228,6 +283,27 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
             { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
         };
+
+//#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+//        mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+//        if (!mNeedRebuildProbeVolume) {
+//            mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+//            mAdaptiveProbeVolume->uploadToGPU();
+//            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+//        }
+//#else
+//        mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+//        if (!mNeedRebuildProbeVolume) {
+//            mUniformProbeVolume->loadFromFile(loadFromFileName);
+//            mUniformProbeVolume->uploadToGPU();
+//            mpProbeVisualizePass->setUniformVolumeData(
+//                mUniformProbeVolume->getMinPoint(),
+//                mUniformProbeVolume->getCellSize(),
+//                mUniformProbeVolume->getCellResolution()
+//            );
+//        }
+//#endif
+
         ProgramDesc previewDesc;
         previewDesc.addShaderModules(mpScene->getShaderModules());
         previewDesc.addShaderLibrary(kStaticPassFile)
@@ -240,7 +316,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         // rasterizer state
         RasterizerState::Desc rasterDesc;
         rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
-        rasterDesc.setCullMode(RasterizerState::CullMode::Back);
+        rasterDesc.setCullMode(RasterizerState::CullMode::None);
         rasterDesc.setDepthBias(100000, 1.0f);
         mpRasterState = RasterizerState::create(rasterDesc);
 
@@ -303,7 +379,39 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 
         mpDynamicProgram = Program::create(mpDevice, dynamicDesc, dynamicDefines);
         mpDynamicVars = ProgramVars::create(mpDevice, mpDynamicProgram->getReflector());
-       
+
+        mpFilterPass = ComputePass::create(mpDevice, kDynamicFilterFile, "main");
+
+        ProgramDesc compositeDesc;
+        compositeDesc.addShaderLibrary(kCompositePassFile)
+            .vsEntry("vsMain")
+            .psEntry("psMain");
+
+        mpCompositeProgram = Program::create(mpDevice, compositeDesc);
+        mpCompositeVars = ProgramVars::create(mpDevice, mpCompositeProgram->getReflector());
+
+        BlendState::Desc blendDesc;
+        blendDesc.setRtBlend(0, true)
+            .setRtParams(0,
+                BlendState::BlendOp::Add,
+                BlendState::BlendOp::Add,
+                BlendState::BlendFunc::SrcAlpha,
+                BlendState::BlendFunc::OneMinusSrcAlpha,
+                BlendState::BlendFunc::One,
+                BlendState::BlendFunc::OneMinusSrcAlpha);
+
+        DepthStencilState::Desc dsComposite;
+        dsComposite.setDepthEnabled(false);
+
+        mpCompositeState = GraphicsState::create(mpDevice);
+        mpCompositeState->setProgram(mpCompositeProgram);
+        mpCompositeState->setBlendState(BlendState::create(blendDesc));
+        mpCompositeState->setDepthStencilState(DepthStencilState::create(dsComposite));
+        mpCompositeState->setRasterizerState(mpRasterState);
+
+        mpEmptyVao = Vao::create(Vao::Topology::TriangleStrip);
+        mpCompositeState->setVao(mpEmptyVao);
+
         loadLightmaps();
   
         //REMARK :  set all materials to diffuse for SH testing

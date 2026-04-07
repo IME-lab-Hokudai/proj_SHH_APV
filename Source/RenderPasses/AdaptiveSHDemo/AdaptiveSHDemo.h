@@ -31,6 +31,8 @@
 #include "RenderGraph/RenderPassHelpers.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
+#include "AdaptiveProbeVolume.h"
+#include "UniformProbeVolume.h"
 
 using namespace Falcor;
 
@@ -131,4 +133,13 @@ private:
     ref<ProgramVars> mpDynamicVars;
     uint32_t mCurrentSample = 0;
     uint32_t mFirstDynamicInstanceID = 27;
+    ref<ComputePass> mpFilterPass;
+
+    ref<Program> mpCompositeProgram;
+    ref<ProgramVars> mpCompositeVars;
+    ref<GraphicsState> mpCompositeState;
+    ref<Vao> mpEmptyVao;
+
+    ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
+    ref<UniformProbeVolume> mUniformProbeVolume;
 };
