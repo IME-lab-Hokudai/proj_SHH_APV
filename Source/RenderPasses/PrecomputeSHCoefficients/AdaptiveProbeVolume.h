@@ -118,7 +118,8 @@ public:
     // ----------------------------------------------------------------
     void saveToFile(const std::string& filename) const;
     void loadFromFile(const std::string& filename);
-
+    double getBuildTimeMs() const { return mBuildTimeMs; }
+    void setBuildTimeMs(double t) { mBuildTimeMs = t; }
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
 
@@ -142,4 +143,7 @@ private:
 
     ref<Buffer> mpProbeBuffer;
     ref<Buffer> mpCornerBuffer;
+
+    //statistic
+    double mBuildTimeMs = 0.0;
 };

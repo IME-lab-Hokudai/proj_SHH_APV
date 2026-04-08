@@ -517,10 +517,10 @@ void AdaptiveProbeVolume::setCornerData(
         // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
         // ||L|| = sqrt( sum( (c_i . luma)^2 ) )
         float sumSqL = 0.0f;
-        for (const auto& c : coeffs)
+        for (const auto& coeff : coeffs)
         {
             // Project this band's RGB coefficient to Luminance
-            float lum = dot(c, kLuma);
+            float lum = dot(coeff, kLuma);
             sumSqL += lum * lum;
         }
         c.coeffVecL2 = std::sqrt(sumSqL);
@@ -907,6 +907,7 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     out << " Threshold: " << mCurrentThreshold << "\n";
     out << " Max Level: " << mMaxLevel << "\n";
     out << " Metric:    " << (mUseRelativeError ? "Relative (E_rel)" : "Absolute (E_abs)") << "\n";
+    out << " Build time in ms: " << mBuildTimeMs << "\n";
     out << "================================================================================\n\n";
 
     // Recursive Lambda for Tree Traversal
@@ -1022,9 +1023,9 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     out << std::fixed << std::setprecision(8);
 
     // 1. Header & Config (UPDATED VERSION TO V3)
-    out << "ADAPTIVE_GRID_V3\n";
+    out << "ADAPTIVE_GRID_V4\n"; //add build time
     out << mCurrentThreshold << " " << mMaxLevel << " " << (mUseRelativeError ? 1 : 0) << "\n";
-
+    out << mBuildTimeMs << "\n";
     // 2. Corners
     out << "NUM_CORNERS " << mCorners.size() << "\n";
     for (const auto& c : mCorners)
@@ -1107,7 +1108,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V3")
+    if (header != "ADAPTIVE_GRID_V4")
     {
         logError("Invalid file format or version mismatch (Expected V3): " + filename);
         return;
@@ -1116,7 +1117,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     int useRelErrInt;
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
-
+    in >> mBuildTimeMs;
     // 2. Load Corners
     size_t numCorners;
     std::string tag;

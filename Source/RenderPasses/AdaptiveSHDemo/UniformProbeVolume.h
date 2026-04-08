@@ -31,6 +31,10 @@ public:
 
     void saveToFile(const std::string& filename) const;
     void loadFromFile(const std::string& filename);
+
+    double getBuildTimeMs() const { return mBuildTimeMs; }
+    void setBuildTimeMs(double t) { mBuildTimeMs = t; }
+
 private:
     UniformProbeVolume(ref<Device> pDevice);
 
@@ -49,5 +53,6 @@ private:
     std::vector<UniformGridCorner> mProbeData;
     ref<Buffer> mpProbeDataBuffer;
 
-
+    //statistic
+    double mBuildTimeMs = 0.0;
 };

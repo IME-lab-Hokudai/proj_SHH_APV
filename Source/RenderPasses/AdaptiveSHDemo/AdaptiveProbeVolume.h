@@ -104,4 +104,7 @@ private:
 
     ref<Buffer> mpProbeBuffer;
     ref<Buffer> mpCornerBuffer;
+
+    //statistic
+    double mBuildTimeMs = 0.0;
 };

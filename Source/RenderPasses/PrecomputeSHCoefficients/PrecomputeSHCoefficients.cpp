@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -38,12 +38,12 @@
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
-#include <cstdint>
 #include <cmath>
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 64;
+#include <chrono>
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
@@ -54,10 +54,10 @@ const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold = 0.5f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
-const uint3 unifromGridSize = uint3(16, 16, 16);
+//const uint3 unifromGridSize = uint3(16, 16, 16);
 //const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-//const uint3 unifromGridSize = uint3(64, 64, 64);
+const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string saveToFileName = "UniformGrid32.txt";
 //const std::string saveToFileName = "UniformGrid32NoCull.txt";
 //const std::string saveToFileName = "UniformGrid16.txt";
@@ -86,8 +86,13 @@ const uint3 unifromGridSize = uint3(16, 16, 16);
 //const std::string saveToFileName = "AdaptiveErr5SubwayCorridor.txt";
 //const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
 
-const std::string saveToFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
-const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
+
+//const std::string saveToFileName = "DirectUniformGrid32.txt";
+//const std::string loadFromFileName = "DirectUniformGrid32.txt";
+const std::string saveToFileName = "DirectUniformGrid64.txt";
+const std::string loadFromFileName = "DirectUniformGrid64.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -100,7 +105,6 @@ const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapSh
 const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSampling.rt.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
 const char kShowSHGrid[] = "Show SH grid";
-
 } // namespace
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -434,6 +438,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         if (mNeedRebuildProbeVolume)
         {
+            using clock = std::chrono::high_resolution_clock;
+            auto tStart = clock::now();
             // 1. Initialize
             mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
@@ -521,6 +527,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mAdaptiveProbeVolume->finishBatch();
             }
 
+            auto tEnd = clock::now();
+            double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
+            mAdaptiveProbeVolume->setBuildTimeMs(ms);
             // 3. TODO: upload to GPU for visualization
             mAdaptiveProbeVolume->uploadToGPU();
             mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
@@ -534,6 +543,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 #if CURRENT_PROBE_MODE == PROBE_MODE_UNIFORM
         if (mNeedRebuildProbeVolume)
         {
+            using clock = std::chrono::high_resolution_clock;
+            auto tStart = clock::now();
             // 1. Initialize Grid Structure (Calculates resolution and total probes)
             mUniformProbeVolume->initGrid(mpScene, unifromGridSize);
             uint3 probeCountDim = mUniformProbeVolume->getProbeCountDim(); // (N+1) corners
@@ -617,7 +628,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 }
                 mpDevice->wait();
             }
-
+            auto tEnd = clock::now();
+            double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
+            mUniformProbeVolume->setBuildTimeMs(ms);
             // --------------------------------------------------------------------------
             // 4. Finalize
             // --------------------------------------------------------------------------

@@ -131,7 +131,7 @@ void UniformProbeVolume::saveToFile(const std::string& filename) const
     out << std::fixed << std::setprecision(8);
 
     // 1. Header & Grid Configuration
-    out << "UNIFORM_GRID_V1\n";
+    out << "UNIFORM_GRID_V2\n";
 
     // Grid Dimensions
     out << mCellResolution.x << " " << mCellResolution.y << " " << mCellResolution.z << "\n";
@@ -139,7 +139,7 @@ void UniformProbeVolume::saveToFile(const std::string& filename) const
     // Bounds
     out << mMinPoint.x << " " << mMinPoint.y << " " << mMinPoint.z << "\n";
     out << mMaxPoint.x << " " << mMaxPoint.y << " " << mMaxPoint.z << "\n";
-
+    out << mBuildTimeMs << "\n";
     // 2. Probe Data
     out << "NUM_PROBES " << mProbeData.size() << "\n";
 
@@ -194,7 +194,7 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
     in >> mCellResolution.x >> mCellResolution.y >> mCellResolution.z;
     in >> mMinPoint.x >> mMinPoint.y >> mMinPoint.z;
     in >> mMaxPoint.x >> mMaxPoint.y >> mMaxPoint.z;
-
+    in >> mBuildTimeMs;
     // 3. Re-initialize Internal State (Logic copied from initGrid, but using loaded bounds)
     mProbeCountDim = mCellResolution + uint3(1, 1, 1);
     mTotalProbes = mProbeCountDim.x * mProbeCountDim.y * mProbeCountDim.z;

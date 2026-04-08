@@ -520,9 +520,9 @@ void AdaptiveProbeVolume::computeNeighbors()
 void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
-    //computeNeighbors();
+    computeNeighbors();
     //constrainHangingNodes();
-    //constrainHangingNodesHermite();
+    constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
@@ -737,7 +737,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V3")
+    if (header != "ADAPTIVE_GRID_V4")
     {
         logError("Invalid file format or version mismatch (Expected V3): " + filename);
         return;
@@ -746,7 +746,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     int useRelErrInt;
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
-
+    in >> mBuildTimeMs;
     // 2. Load Corners
     size_t numCorners;
     std::string tag;
