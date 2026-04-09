@@ -40,10 +40,21 @@
 
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
+
+
+//const std::string loadFromFileName = "DirectAbsErr5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAbsErr10SubwayCorridor.txt";
+
+//const std::string loadFromFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
+const std::string loadFromFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr3SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 #else
-const std::string loadFromFileName = "DirectUniformGrid32.txt";
+//const std::string loadFromFileName = "DirectUniformGrid32.txt";
+const std::string loadFromFileName = "DirectUniformGrid64.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
 

@@ -140,22 +140,14 @@ bunny_mat.roughness = 1.0
 bunny_mesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 # Common bunny scale / height
 bunny_scale = float3(2.0, 2.0, 2.0)
-bunny_y = 1.0
+bunny_y = 3.8
 
 # Benchmark positions:
-# P1: under center light
-# P2: under left light
-# P3: near pillar transition
-# P4: open center
-# P5: near wall / ad panel
-# P6: far end
 bunny_positions = [
-    #float3( 0.0,  bunny_y,  4.5),
-    #float3(-5.0,  bunny_y, 13.5),
-    #float3(-6.0,  bunny_y, 15.0),
-    #float3( 0.0,  bunny_y, 18.0),
-    float3(-10.5, 3.8, 20.0),
-    #float3( 0.0,  bunny_y, 34.0),
+	float3(-10.5, bunny_y, 20.0),
+    float3( -4.0,  bunny_y,  20.0),
+    float3( 2.0,  bunny_y,  20.0),
+    float3( 8.5,  bunny_y, 20.0),
 ]
 
 for i, p in enumerate(bunny_positions):
@@ -173,8 +165,10 @@ for i, p in enumerate(bunny_positions):
 
 # --- CAMERA ---
 camera = Camera()
-camera.position = float3(-11.0503, 7.4739, 27.9441)
-camera.target   = float3(-10.9710, 7.3523, 26.9547)
+camera.position = float3(0.8516, 5.9568, 35.1040)
+camera.target = float3(0.8177, 5.8799, 34.1075)
+#camera.position = float3(-11.0503, 7.4739, 27.9441)
+#camera.target   = float3(-10.9710, 7.3523, 26.9547)
 camera.up = float3(0, 1, 0)
 camera.farPlane = 10000.0
 camera.nearPlane = 1.0

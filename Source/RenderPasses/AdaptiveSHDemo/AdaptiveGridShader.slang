@@ -365,6 +365,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 litColor = albedo;
 
     const uint instanceID = vsOut.instanceID.index;
+    if (instanceID < 27) discard;
 
     if (instanceID == gFloorInstanceID)
     {

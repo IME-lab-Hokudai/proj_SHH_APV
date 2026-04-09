@@ -42,20 +42,20 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 1;
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
-const float ErrorThreshold = 5.0f;
-//const float ErrorThreshold =2.0f;//threshold for Erel
+//const float ErrorThreshold = 5.0f;
+const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold = 1.0f;//threshold for Erel
 //const float ErrorThreshold = 0.5f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
-const uint3 unifromGridSize = uint3(16, 16, 16);
-//const uint3 unifromGridSize = uint3(32, 32, 32);
+//const uint3 unifromGridSize = uint3(16, 16, 16);
+const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
 //const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string saveToFileName = "UniformGrid32.txt";
@@ -89,12 +89,33 @@ const uint3 unifromGridSize = uint3(16, 16, 16);
 //const std::string saveToFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
 //const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
 
+//const std::string saveToFileName = "DirectAbsErr10SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAbsErr10SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAbsErr5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAbsErr5SubwayCorridor.txt";
+
+//const std::string saveToFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
+
+//const std::string saveToFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
+//const std::string loadFromFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectUniformGrid16.txt";
+//const std::string loadFromFileName = "DirectUniformGrid16.txt";
 //const std::string saveToFileName = "DirectUniformGrid32.txt";
 //const std::string loadFromFileName = "DirectUniformGrid32.txt";
 //const std::string saveToFileName = "DirectUniformGrid64.txt";
 //const std::string loadFromFileName = "DirectUniformGrid64.txt";
-const std::string saveToFileName = "test.txt";
-const std::string loadFromFileName = "test.txt";
+//const std::string saveToFileName = "test.txt";
+//const std::string loadFromFileName = "test.txt";
+
+const std::string saveToFileName = "IndirectUniformGrid32.txt";
+const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";

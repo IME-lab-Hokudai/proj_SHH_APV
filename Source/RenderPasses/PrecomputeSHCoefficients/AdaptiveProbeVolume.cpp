@@ -807,7 +807,7 @@ void AdaptiveProbeVolume::computeNeighbors()
 void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
-    computeNeighbors();
+    //computeNeighbors();
     //constrainHangingNodes();
     //constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
