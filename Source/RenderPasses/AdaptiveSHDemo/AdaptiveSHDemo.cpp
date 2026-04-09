@@ -32,13 +32,21 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 //const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
 
+
+
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
-const char kStaticPassFile[] = "RenderPasses/AdaptiveSHDemo/StaticPass.slang";
+const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
+#else
+const std::string loadFromFileName = "DirectUniformGrid32.txt";
+const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
+#endif
+
 const char kDynamicPassFile[] = "RenderPasses/AdaptiveSHDemo/DynamicPass.slang";
 const char kDynamicFilterFile[] = "RenderPasses/AdaptiveSHDemo/DynamicFilter.cs.slang";
 const char kCompositePassFile[] = "RenderPasses/AdaptiveSHDemo/CompositeDynamic.slang";
@@ -285,7 +293,6 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-        if (!mNeedRebuildProbeVolume) {
             mUniformProbeVolume->loadFromFile(loadFromFileName);
             mUniformProbeVolume->uploadToGPU();
             mpProbeVisualizePass->setUniformVolumeData(
@@ -293,13 +300,12 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
                 mUniformProbeVolume->getCellSize(),
                 mUniformProbeVolume->getCellResolution()
             );
-        }
 #endif
       
 
         ProgramDesc previewDesc;
         previewDesc.addShaderModules(mpScene->getShaderModules());
-        previewDesc.addShaderLibrary(kStaticPassFile)
+        previewDesc.addShaderLibrary(kShaderFile)
             .vsEntry("vsMain")
             .psEntry("psMain");
 

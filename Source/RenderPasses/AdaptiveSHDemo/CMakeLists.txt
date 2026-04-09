@@ -3,7 +3,7 @@ add_plugin(AdaptiveSHDemo)
 target_sources(AdaptiveSHDemo PRIVATE
     AdaptiveSHDemo.cpp
     AdaptiveSHDemo.h
-	StaticPass.slang
+	AdaptiveGridShader.slang
 	DynamicPass.slang
 	DynamicFilter.cs.slang
 	CompositeDynamic.slang
@@ -14,6 +14,7 @@ target_sources(AdaptiveSHDemo PRIVATE
     UniformProbeVolume.cpp
 	ProbeVisualizePass.h
 	ProbeVisualizePass.cpp
+	UniformGridShader.slang
 )
 
 target_copy_shaders(AdaptiveSHDemo RenderPasses/AdaptiveSHDemo)

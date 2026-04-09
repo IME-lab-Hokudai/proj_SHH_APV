@@ -35,7 +35,7 @@ const char kUVrasterFile[] = "RenderPasses/BakeLightMapSingle/UVPassSingle.slang
 const char kUVrasterPillarFile[] = "RenderPasses/BakeLightMapSingle/UVPassPillar.slang";
 const char kExtractFile[] = "RenderPasses/BakeLightMapSingle/ExtractTexelsSingle.cs.slang";
 const char kNormalizeFile[] = "RenderPasses/BakeLightMapSingle/NormalizeLightmapSingle.cs.slang";
-const char kStaticPassFile[] = "RenderPasses/BakeLightMapSingle/ApplyLightmapSingle.slang";
+const char kShaderFile[] = "RenderPasses/BakeLightMapSingle/ApplyLightmapSingle.slang";
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
@@ -376,7 +376,7 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
             previewDesc.addShaderModules(mpScene->getShaderModules());
-            previewDesc.addShaderLibrary(kStaticPassFile)
+            previewDesc.addShaderLibrary(kShaderFile)
                 .vsEntry("vsMain")
                 .psEntry("psMain");
 
