@@ -82,6 +82,49 @@ float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
 }
 
 // ------------------------------------------------------------------
+// Standard Trilinear Interpolation (Baseline)
+// Traversal Order: Z -> Y -> X (Matches C++ Bit Packing)
+// ------------------------------------------------------------------
+void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])
+{
+    GPUProbe p = gProbeBuffer[probeIdx];
+    float3 size = p.maxPoint - p.minPoint;
+
+    // Normalized position within voxel (0..1)
+    float3 t = saturate((pos - p.minPoint) / size);
+
+    // Pre-load indices for the 8 corners
+    int cIdx[8];
+    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
+
+    for (int band = 0; band < 9; ++band)
+    {
+        // 1. Fetch Corner Values (No Gradients needed!)
+        float3 v[8];
+        for (int i = 0; i < 8; ++i)
+        {
+            v[i] = gCornerBuffer[cIdx[i]].coeffs[band].rgb;
+        }
+
+        // 2. Interpolate along Z (Stride 1, Bit 0)
+        // Pairs (0,1), (2,3), (4,5), (6,7)
+        float3 z0 = lerp(v[0], v[1], t.z);
+        float3 z1 = lerp(v[2], v[3], t.z);
+        float3 z2 = lerp(v[4], v[5], t.z);
+        float3 z3 = lerp(v[6], v[7], t.z);
+
+        // 3. Interpolate along Y (Stride 2, Bit 1)
+        // Pairs (z0, z1) -> Low Y
+        // Pairs (z2, z3) -> High Y
+        float3 y0 = lerp(z0, z1, t.y);
+        float3 y1 = lerp(z2, z3, t.y);
+
+        // 4. Interpolate along X (Stride 4, Bit 2)
+        finalCoeffs[band] = lerp(y0, y1, t.x);
+    }
+}
+
+// ------------------------------------------------------------------
 // Progressive Tricubic Hermite Interpolation
 // ------------------------------------------------------------------
 void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])

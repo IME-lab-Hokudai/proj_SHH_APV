@@ -1,0 +1,66 @@
+# --- Materials: Standard and Moody ---
+wall_mat = StandardMaterial('WallMaterial')
+wall_mat.baseColor = float4(0.8, 0.8, 0.8, 1.0)
+wall_mat.roughness = 0.4 
+
+pillar_mat = StandardMaterial('PillarMaterial')
+pillar_mat.baseColor = float4(0.8, 0.8, 0.8, 1.0)
+
+end_light_mat = StandardMaterial('EndLightMat')
+end_light_mat.emissiveColor = float3(0.95, 0.97, 1.00)
+end_light_mat.emissiveFactor = 20.0
+
+# Geometries
+quadMesh = TriangleMesh.createQuad()
+
+# --- 1. STRUCTURAL ELEMENTS (Y-Up) ---
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('Floor', Transform(scaling=float3(26, 1, 36), translation=float3(0, 0, 18))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('LeftWall', Transform(scaling=float3(10, 1, 36), translation=float3(-13, 5, 18), rotationEulerDeg=float3(0, 0, -90))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('RightWall', Transform(scaling=float3(10, 1, 36), translation=float3(13, 5, 18), rotationEulerDeg=float3(0, 0, 90))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+# --- 2. SINGLE CEILING ---
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'Roof',
+        Transform(
+            scaling=float3(26, 1, 36),
+            translation=float3(0, 10, 18),
+            rotationEulerDeg=float3(180, 0, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+# --- 3. END WALL LIGHT ---
+# Vertical rectangular light at one end of the corridor.
+# Lies in XY plane and emits along +Z down the corridor.
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'EndRectLight',
+        Transform(
+            scaling=float3(8.0, 1, 6.0),
+            translation=float3(0, 5.0, 0.05),
+            rotationEulerDeg=float3(90, 0, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(quadMesh, end_light_mat)
+)
+
+# --- CAMERA ---
+camera = Camera()
+camera.position = float3(0, 5, 36)
+camera.target = float3(0, 5, 0)
+camera.up = float3(0, 1, 0)
+camera.farPlane = 10000.0
+camera.nearPlane = 1.0
+sceneBuilder.addCamera(camera)

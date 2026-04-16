@@ -49,15 +49,17 @@ const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 5.0f;
-const float ErrorThreshold =3.0f;//threshold for Erel
+//const float ErrorThreshold =3.0f;//threshold for Erel
+//const float ErrorThreshold =1.5f;//threshold for Erel
+const float ErrorThreshold =1.0f;//threshold for Erel
 //const float ErrorThreshold = 1.0f;//threshold for Erel
 //const float ErrorThreshold = 0.5f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-const uint3 unifromGridSize = uint3(32, 32, 32);
+//const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-//const uint3 unifromGridSize = uint3(64, 64, 64);
+const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string saveToFileName = "UniformGrid32.txt";
 //const std::string saveToFileName = "UniformGrid32NoCull.txt";
 //const std::string saveToFileName = "UniformGrid16.txt";
@@ -92,6 +94,9 @@ const uint3 unifromGridSize = uint3(32, 32, 32);
 //const std::string saveToFileName = "DirectAbsErr10SubwayCorridor.txt";
 //const std::string loadFromFileName = "DirectAbsErr10SubwayCorridor.txt";
 //const std::string saveToFileName = "DirectAbsErr5SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAbsErr3SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAbsErr1p5SubwayCorridor.txt";
+//const std::string saveToFileName = "DirectAbsErr1SubwayCorridor.txt";
 //const std::string loadFromFileName = "DirectAbsErr5SubwayCorridor.txt";
 
 //const std::string saveToFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
@@ -114,8 +119,19 @@ const uint3 unifromGridSize = uint3(32, 32, 32);
 //const std::string saveToFileName = "test.txt";
 //const std::string loadFromFileName = "test.txt";
 
-const std::string saveToFileName = "IndirectUniformGrid32.txt";
+//const std::string saveToFileName = "IndirectAdaptiveErr1p5.txt";
+//const std::string saveToFileName = "IndirectAdaptiveErr2.txt";
+//const std::string saveToFileName = "IndirectUniformGrid32.txt";
 const std::string loadFromFileName = "IndirectUniformGrid32.txt";
+
+//const std::string saveToFileName = "DirectRelErr5SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "DirectRelErr3SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "DirectRelErr1p5SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "DirectRelErr1SubwayCorridorNoOpen.txt";
+
+//const std::string saveToFileName = "DirectUniformGrid32SubwayCorridorNoOpen.txt";
+const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
+
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -971,4 +987,260 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     }
 }
 
+void PrecomputeSHCoefficients::runDistanceVoxelLineExperiment(RenderContext* pRenderContext)
+{
+    // ------------------------------------------------------------
+    // Experiment settings
+    // ------------------------------------------------------------
+    const float3 lightPos = float3(0.f, 5.0f, 0.05f);
 
+    // Fixed voxel size for the whole test.
+    const float3 voxelSize = float3(1.0f, 1.0f, 1.0f);
+    const float3 halfSize = voxelSize * 0.5f;
+
+    // Sample voxel centers along corridor centerline.
+    const uint32_t numVoxels = 24;
+    const float3 lineStart = float3(0.f, 0.5f, 1.0f);
+    const float zStep = 1.0f;
+
+    std::vector<VoxelLineVoxel> voxels;
+    voxels.reserve(numVoxels);
+
+    std::vector<float3> uniqueCornerPositions;
+    uniqueCornerPositions.reserve(numVoxels * 8);
+
+    struct CornerKey
+    {
+        int x, y, z;
+        bool operator==(const CornerKey& other) const
+        {
+            return x == other.x && y == other.y && z == other.z;
+        }
+    };
+
+    struct CornerKeyHasher
+    {
+        std::size_t operator()(const CornerKey& k) const
+        {
+            return ((std::hash<int>()(k.x) ^ (std::hash<int>()(k.y) << 1)) >> 1) ^
+                (std::hash<int>()(k.z) << 1);
+        }
+    };
+
+    std::unordered_map<CornerKey, int, CornerKeyHasher> cornerLookup;
+    const float quantizationScale = 10000.0f;
+
+    auto makeCornerKey = [&](const float3& p) -> CornerKey
+        {
+            return {
+                (int)std::floor(p.x * quantizationScale + 0.5f),
+                (int)std::floor(p.y * quantizationScale + 0.5f),
+                (int)std::floor(p.z * quantizationScale + 0.5f)
+            };
+        };
+
+    auto addCorner = [&](const float3& p) -> int
+        {
+            CornerKey key = makeCornerKey(p);
+            auto it = cornerLookup.find(key);
+            if (it != cornerLookup.end()) return it->second;
+
+            int idx = (int)uniqueCornerPositions.size();
+            uniqueCornerPositions.push_back(p);
+            cornerLookup[key] = idx;
+            return idx;
+        };
+
+    // ------------------------------------------------------------
+    // Generate virtual voxels and deduplicated corners
+    // ------------------------------------------------------------
+    for (uint32_t i = 0; i < numVoxels; ++i)
+    {
+        VoxelLineVoxel voxel{};
+        voxel.center = lineStart + float3(0.f, 0.f, zStep * float(i));
+
+        for (int c = 0; c < 8; ++c)
+        {
+            float3 offset(
+                (c & 4) ? halfSize.x : -halfSize.x,
+                (c & 2) ? halfSize.y : -halfSize.y,
+                (c & 1) ? halfSize.z : -halfSize.z
+            );
+
+            float3 cornerPos = voxel.center + offset;
+            voxel.cornerIndices[c] = addCorner(cornerPos);
+        }
+
+        voxels.push_back(voxel);
+    }
+
+    const uint32_t numCorners = (uint32_t)uniqueCornerPositions.size();
+    if (numCorners == 0) return;
+
+    // ------------------------------------------------------------
+    // Ray trace all unique corners in one batch
+    // ------------------------------------------------------------
+    mpProbePosBuffer = mpDevice->createStructuredBuffer(
+        sizeof(float3),
+        numCorners,
+        ResourceBindFlags::ShaderResource,
+        MemoryType::DeviceLocal,
+        uniqueCornerPositions.data()
+    );
+
+    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+        sizeof(ProbeSampleData),
+        numSamplesPerProbe * numCorners,
+        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+        MemoryType::DeviceLocal
+    );
+
+    auto rtVar = mpRtVars->getRootVar();
+    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+    rtVar["gProbePositions"] = mpProbePosBuffer;
+    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+
+    if (mpEmissiveSampler)
+        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+
+    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numCorners, 1));
+
+    std::vector<ProbeSampleData> allSamplingData(numSamplesPerProbe * numCorners);
+    mpProbeSamplingResultBuffer->getBlob(
+        allSamplingData.data(),
+        0,
+        numSamplesPerProbe * numCorners * sizeof(ProbeSampleData)
+    );
+
+    // ------------------------------------------------------------
+    // Compute corner metrics normally
+    // ------------------------------------------------------------
+    std::vector<VoxelLineCornerData> cornerData(numCorners);
+
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    auto computeEigenvalues3x3Local = [](const float3x3& A, float& e1, float& e2, float& e3)
+        {
+            const float ONE_THIRD = 1.0f / 3.0f;
+            float m = (A[0][0] + A[1][1] + A[2][2]) * ONE_THIRD;
+            float k00 = A[0][0] - m, k11 = A[1][1] - m, k22 = A[2][2] - m;
+            float k01 = A[0][1], k02 = A[0][2], k12 = A[1][2];
+            float q = 0.5f * (k00 * (k11 * k22 - k12 * k12) - k01 * (k01 * k22 - k12 * k02) + k02 * (k01 * k12 - k11 * k02));
+            float p = (k00 * k00 + k11 * k11 + k22 * k22 + 2.0f * (k01 * k01 + k02 * k02 + k12 * k12)) / 6.0f;
+
+            if (p < 1e-20f) { e1 = e2 = e3 = m; return; }
+
+            float pSqrt = std::sqrt(p);
+            float detVal = q / (p * pSqrt);
+            detVal = std::max(-1.0f, std::min(1.0f, detVal));
+            float phi = ONE_THIRD * std::acos(detVal);
+            float twoSqrtP = 2.0f * pSqrt;
+            float s = std::sin(phi), c = std::cos(phi);
+
+            e1 = m + twoSqrtP * c;
+            e2 = m - twoSqrtP * (c * 0.5f + s * 0.8660254f);
+            e3 = m - twoSqrtP * (c * 0.5f - s * 0.8660254f);
+        };
+
+    for (uint32_t cornerIdx = 0; cornerIdx < numCorners; ++cornerIdx)
+    {
+        int offset = cornerIdx * numSamplesPerProbe;
+
+        std::vector<ProbeSampleData> probeSamplingResults;
+        probeSamplingResults.reserve(numSamplesPerProbe);
+        for (int s = 0; s < numSamplesPerProbe; ++s)
+            probeSamplingResults.push_back(allSamplingData[offset + s]);
+
+        std::vector<float3> coeffs;
+        std::vector<GradSHCoeff> grads;
+        std::vector<float3x3> lumHessians;
+
+        float3 xPolar;
+        xPolar.x = uniqueCornerPositions[cornerIdx].z;
+        xPolar.y = uniqueCornerPositions[cornerIdx].x;
+        xPolar.z = uniqueCornerPositions[cornerIdx].y;
+
+        calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
+        calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
+
+        VoxelLineCornerData cd{};
+        cd.position = uniqueCornerPositions[cornerIdx];
+
+        float sumSqL = 0.0f;
+        for (const auto& coeff : coeffs)
+        {
+            float lum = dot(coeff, kLuma);
+            sumSqL += lum * lum;
+        }
+        cd.coeffVecL2 = std::sqrt(sumSqL);
+        cd.isValid = (cd.coeffVecL2 >= 0.0001f);
+
+        float sumSquares = 0.0f;
+        for (const auto& h : lumHessians)
+        {
+            float e1, e2, e3;
+            computeEigenvalues3x3Local(h, e1, e2, e3);
+            float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+            sumSquares += maxLambda * maxLambda;
+        }
+        cd.maxLambdaVecL2 = std::sqrt(sumSquares);
+
+        cornerData[cornerIdx] = cd;
+    }
+
+    // ------------------------------------------------------------
+    // Compute voxel error and export CSV
+    // ------------------------------------------------------------
+    std::ofstream csv("distance_voxel_line_experiment.csv");
+    csv << "idx,cx,cy,cz,r,coeffL2_avg,maxLambda_avg,Eabs,Erel\n";
+
+    const float distSq = dot(voxelSize, voxelSize);
+
+    for (uint32_t i = 0; i < (uint32_t)voxels.size(); ++i)
+    {
+        const auto& voxel = voxels[i];
+
+        float totalCoeff = 0.0f;
+        float totalLambda = 0.0f;
+        float totalErrorAbs = 0.0f;
+        float totalErrorRel = 0.0f;
+        uint32_t validCount = 0;
+
+        for (int k = 0; k < 8; ++k)
+        {
+            const auto& c = cornerData[voxel.cornerIndices[k]];
+            if (!c.isValid) continue;
+
+            validCount++;
+            totalCoeff += c.coeffVecL2;
+            totalLambda += c.maxLambdaVecL2;
+
+            float e = 0.5f * c.maxLambdaVecL2 * distSq;
+            totalErrorAbs += e;
+            totalErrorRel += e / std::max(c.coeffVecL2, 1e-5f);
+        }
+
+        float coeffAvg = validCount > 0 ? totalCoeff / float(validCount) : 0.0f;
+        float lambdaAvg = validCount > 0 ? totalLambda / float(validCount) : 0.0f;
+        float eAbs = validCount > 0 ? totalErrorAbs / float(validCount) : 0.0f;
+        float eRel = validCount > 0 ? totalErrorRel / float(validCount) : 0.0f;
+
+        float r = length(voxel.center - lightPos);
+
+        csv << i << ","
+            << voxel.center.x << ","
+            << voxel.center.y << ","
+            << voxel.center.z << ","
+            << r << ","
+            << coeffAvg << ","
+            << lambdaAvg << ","
+            << eAbs << ","
+            << eRel << "\n";
+    }
+
+    csv.close();
+    logInfo("Exported distance_voxel_line_experiment.csv");
+}

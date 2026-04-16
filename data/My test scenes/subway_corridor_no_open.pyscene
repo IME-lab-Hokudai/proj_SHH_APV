@@ -1,0 +1,169 @@
+# --- Materials: Standard and Moody ---
+wall_mat = StandardMaterial('WallMaterial')
+wall_mat.baseColor = float4(0.8, 0.8, 0.8, 1.0)
+wall_mat.roughness = 0.4 
+
+pillar_mat = StandardMaterial('PillarMaterial')
+pillar_mat.baseColor = float4(0.8, 0.8, 0.8, 1.0)
+
+# --- Emissive Area Light Materials (The Roof) ---
+roof_light_mat = StandardMaterial('RoofLightMat')
+roof_light_mat.emissiveColor = float3(0.95, 0.97, 1.00)
+roof_light_mat.emissiveFactor = 6.5
+
+# --- SEPARATE TEXTURED AD PANELS ---
+# Left Wall
+ad_left_mats = []
+left_textures = [
+    'textures/left_ad_1.jpg', 
+    'textures/left_ad_2.jpg', 
+    'textures/left_ad_3.jpg'
+]
+
+for i, tex_path in enumerate(left_textures):
+    mat = StandardMaterial(f'AdLeftMat_{i}')
+    mat.loadTexture(MaterialTextureSlot.Emissive, tex_path)
+    mat.emissiveFactor = 12.0 
+    mat.baseColor = float4(0, 0, 0, 1)
+    ad_left_mats.append(mat)
+
+# Right Wall
+ad_right_mats = []
+right_textures = [
+    'textures/right_ad_1.jpg', 
+    'textures/right_ad_2.jpg', 
+    'textures/right_ad_3.jpg'
+]
+
+for i, tex_path in enumerate(right_textures):
+    mat = StandardMaterial(f'AdRightMat_{i}')
+    mat.loadTexture(MaterialTextureSlot.Emissive, tex_path)
+    mat.emissiveFactor = 12.0 
+    mat.baseColor = float4(0, 0, 0, 1)
+    ad_right_mats.append(mat)
+
+# Geometries
+quadMesh = TriangleMesh.createQuad()
+cubeMesh = TriangleMesh.createCube()
+
+# --- 1. STRUCTURAL ELEMENTS (Y-Up) ---
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('Floor', Transform(scaling=float3(26, 1, 36), translation=float3(0, 0, 18))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('LeftWall', Transform(scaling=float3(10, 1, 36), translation=float3(-13, 5, 18), rotationEulerDeg=float3(0, 0, -90))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('RightWall', Transform(scaling=float3(10, 1, 36), translation=float3(13, 5, 18), rotationEulerDeg=float3(0, 0, 90))),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+# --- 2. PILLARS ---
+pillar_coords = [
+    (7.5, 5.0), (-7.5, 5.0),   # Row 1 (The far end, deep in the tunnel)
+    (7.5, 15.0), (-7.5, 15.0), # Row 2
+    (7.5, 25.0), (-7.5, 25.0), # Row 3
+    (7.5, 35.0), (-7.5, 35.0)  # Row 4 (Right in front of camera)
+]
+for i, (x, z) in enumerate(pillar_coords):
+    sceneBuilder.addMeshInstance(
+        sceneBuilder.addNode(f'Pillar_{i}', Transform(scaling=float3(1.5, 10, 1.5), translation=float3(x, 5, z))),
+        sceneBuilder.addTriangleMesh(cubeMesh, pillar_mat)
+    )
+
+# --- 3. CEILING ---
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'Roof',
+        Transform(
+            scaling=float3(26, 1, 36),   # full width now (was split before)
+            translation=float3(0, 10, 18),
+            rotationEulerDeg=float3(180, 0, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'BackWall',
+        Transform(
+            scaling=float3(26, 1, 10),        # width x height
+            translation=float3(0, 5, 0),      # centered vertically
+            rotationEulerDeg=float3(90, 0, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode(
+        'FrontWall',
+        Transform(
+            scaling=float3(26, 1, 10),
+            translation=float3(0, 5, 36),
+            rotationEulerDeg=float3(-90, 0, 0)
+        )
+    ),
+    sceneBuilder.addTriangleMesh(quadMesh, wall_mat)
+)
+
+# --- 4. CEILING LIGHT TUBES ---
+tube_z_pos = [4.5, 13.5, 22.5, 31.5]
+
+# X-position pushed out to 5.0 (closer to the 7.5 pillars)
+light_x_offset = 5.0 
+
+for i, z in enumerate(tube_z_pos):
+    # Left Ceiling Tubes
+    # Scaling Z to 6.0 means the last one spans 28.5 to 34.5 (safely inside the 36 max)
+    sceneBuilder.addMeshInstance(
+        sceneBuilder.addNode(f'LED_Left_{i}', Transform(
+            scaling=float3(0.5, 1, 6.0), 
+            translation=float3(-light_x_offset, 9.9, z), 
+            rotationEulerDeg=float3(180, 0, 0))),
+        sceneBuilder.addTriangleMesh(quadMesh, roof_light_mat)
+    )
+    
+    # Right Ceiling Tubes
+    sceneBuilder.addMeshInstance(
+        sceneBuilder.addNode(f'LED_Right_{i}', Transform(
+            scaling=float3(0.5, 1, 6.0), 
+            translation=float3(light_x_offset, 9.9, z), 
+            rotationEulerDeg=float3(180, 0, 0))),
+        sceneBuilder.addTriangleMesh(quadMesh, roof_light_mat)
+    )
+
+# --- 5. AD PANELS ---
+ad_z_pos = [10.0, 20.0, 30.0]
+for i, z in enumerate(ad_z_pos):
+    # Left Wall Ads (Using ad_left_mats array)
+    sceneBuilder.addMeshInstance(
+        sceneBuilder.addNode(f'AdL_{i}', Transform(
+            scaling=float3(4.5, 1, 6.5), 
+            translation=float3(-12.9, 5.0, z), 
+            rotationEulerDeg=float3(90, 90, 0))),
+        sceneBuilder.addTriangleMesh(quadMesh, ad_left_mats[i])
+    )
+    
+    # Right Wall Ads (Using ad_right_mats array)
+    sceneBuilder.addMeshInstance(
+        sceneBuilder.addNode(f'AdR_{i}', Transform(
+            scaling=float3(4.5, 1, 6.5), 
+            translation=float3(12.9, 5.0, z), 
+            rotationEulerDeg=float3(90, -90, 0))),
+        sceneBuilder.addTriangleMesh(quadMesh, ad_right_mats[i])
+    )
+
+# --- CAMERA ---
+camera = Camera()
+camera.position = float3(0, 5, 36)
+camera.target = float3(0, 5, 0)
+camera.up = float3(0, 1, 0)
+camera.farPlane = 10000.0
+camera.nearPlane = 1.0
+sceneBuilder.addCamera(camera)

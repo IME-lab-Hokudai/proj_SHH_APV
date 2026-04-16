@@ -116,5 +116,21 @@ private:
 
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
-    bool mbDrawLeafOnly = false; 
+    bool mbDrawLeafOnly = false;
+
+    struct VoxelLineCornerData
+    {
+        float3 position;
+        float coeffVecL2 = 0.0f;
+        float maxLambdaVecL2 = 0.0f;
+        bool isValid = false;
+    };
+
+    struct VoxelLineVoxel
+    {
+        float3 center;
+        int cornerIndices[8];
+    };
+
+    void runDistanceVoxelLineExperiment(RenderContext* pRenderContext);
 };

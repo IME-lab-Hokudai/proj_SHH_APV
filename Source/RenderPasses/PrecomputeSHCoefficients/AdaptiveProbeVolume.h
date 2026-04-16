@@ -138,7 +138,7 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 6;
+    int mMaxLevel = 5;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;
