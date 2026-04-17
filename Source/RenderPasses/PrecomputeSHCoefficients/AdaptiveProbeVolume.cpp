@@ -3,9 +3,6 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
-
-//
-
 // ------------------------------------------------------------------
 // CPU PORT OF SHADER LOGIC
 // ------------------------------------------------------------------
@@ -44,38 +41,6 @@ float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
     return dh00 * v0 + dh10 * s0 + dh01 * v1 + dh11 * s1;
 }
 
-//
-
-// Interpolates between 'a' and 'b' based on weight 't'.
-// If a corner is invalid, it is ignored, and the valid corner takes over 100%.
-float3 robustLerp(float3 a, float3 b, float t, bool validA, bool validB)
-{
-    if (validA && validB)
-    {
-        // Normal case: Both good, use standard lerp
-        return lerp(a, b, t);
-    }
-    else if (validA && !validB)
-    {
-        // B is broken (Leak source).
-        // Force 'a' to extend all the way to 'b'.
-        return a;
-    }
-    else if (!validA && validB)
-    {
-        // A is broken.
-        // Force 'b' to extend all the way to 'a'.
-        return b;
-    }
-    else
-    {
-        // Both broken. Return black (or handle as failure upstream).
-        return float3(0, 0, 0);
-    }
-}
-
-
-//
 
 // CPU Port of the "Smart" Weighted Accumulation Shader
 // Matches the shader's logic: Sum(Weight * Value) / Sum(Weight)
@@ -289,11 +254,6 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
         outGrads[band].b = float3(gradZ.z, gradX.z, gradY.z);
     }
 }
-//
-
-//
-
-//
 
 void AdaptiveProbeVolume::constrainHangingNodes()
 {
@@ -561,35 +521,57 @@ void AdaptiveProbeVolume::finishBatch()
         float3 diag = mProbes[probeIdx].maxPoint - mProbes[probeIdx].minPoint;
         float distSq = dot(diag, diag);
 
-        float totalError = 0.0f;
+        //float totalError = 0.0f;
+        //uint countValidCorner = 0;
+        //for (int k = 0; k < 8; ++k)
+        //{
+        //    int cIdx = mProbes[probeIdx].corners[k];
+        //    const Corner& c = mCorners[cIdx];
+        //    if (!c.isValid) continue;
+        //    countValidCorner++;
+        //    // E_abs = 0.5 * Lambda * dx^2
+        //    float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
+
+        //    if (mUseRelativeError)
+        //    {
+        //        float norm = std::max(c.coeffVecL2, 1e-5f);
+        //        totalError += (e / norm);
+        //    }
+        //    else
+        //    {
+        //        totalError += e;
+        //    }
+        //}
+        //float avgProbeError = 0.0f;
+        ////if (countValidCorner == 0) avgProbeError = mCurrentThreshold + 0.1f;//force subdivision if no 
+        //avgProbeError = totalError / float(countValidCorner);
+        float maxProbeError = 0.0f;
         uint countValidCorner = 0;
+
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
             if (!c.isValid) continue;
+
             countValidCorner++;
+
             // E_abs = 0.5 * Lambda * dx^2
-            float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
+            float e = 0.5f * c.maxLambdaVecL2 * distSq;
 
             if (mUseRelativeError)
             {
                 float norm = std::max(c.coeffVecL2, 1e-5f);
-                totalError += (e / norm);
+                e /= norm;
             }
-            else
-            {
-                totalError += e;
-            }
+
+            maxProbeError = std::max(maxProbeError, e);
         }
-        float avgProbeError = 0.0f;
-        //if (countValidCorner == 0) avgProbeError = mCurrentThreshold + 0.1f;//force subdivision if no 
-        avgProbeError = totalError / float(countValidCorner);
 
         // --------------------------------------------------
         // Step 5: Subdivide
         // --------------------------------------------------
-        if (avgProbeError > mCurrentThreshold)
+        if (maxProbeError > mCurrentThreshold)
         {
             mProbes[probeIdx].isLeaf = false;
 
@@ -702,52 +684,6 @@ void AdaptiveProbeVolume::finishBatch()
     }
     mProbesPendingCheck = nextProbesToCheck;
 }
-
-// ------------------------------------------------------------------
-// CPU Traversal Logic (Matches Shader Logic)
-// ------------------------------------------------------------------
-int AdaptiveProbeVolume::traverseOctreeCPU(float3 pos) const
-{
-    if (mProbes.empty()) return -1;
-
-    // 1. Bounds Check: If position is outside the volume, return -1
-    const Probe& root = mProbes[0];
-    if (pos.x < root.minPoint.x || pos.y < root.minPoint.y || pos.z < root.minPoint.z ||
-        pos.x > root.maxPoint.x || pos.y > root.maxPoint.y || pos.z > root.maxPoint.z)
-    {
-        return -1;
-    }
-
-    int currentIdx = 0; // Start at Root
-
-    // Safety loop to prevent infinite recursion
-    for (int i = 0; i < mMaxLevel + 5; ++i)
-    {
-        const Probe& p = mProbes[currentIdx];
-
-        // Found a Leaf
-        if (p.children[0] == -1)
-        {
-            return currentIdx;
-        }
-
-        // Determine Octant
-        float3 center = (p.minPoint + p.maxPoint) * 0.5f;
-        int octant = 0;
-        if (pos.x >= center.x) octant |= 4; // Bit 2 = X
-        if (pos.y >= center.y) octant |= 2; // Bit 1 = Y
-        if (pos.z >= center.z) octant |= 1; // Bit 0 = Z
-
-        int childIdx = p.children[octant];
-
-        // If tree is incomplete, stop here
-        if (childIdx == -1) return currentIdx;
-
-        currentIdx = childIdx;
-    }
-    return currentIdx;
-}
-
 // ------------------------------------------------------------------
 // Neighbor Computation (Fixes T-Junctions)
 // ------------------------------------------------------------------
@@ -849,8 +785,6 @@ void AdaptiveProbeVolume::uploadToGPU()
     for (const auto& c : mCorners)
     {
         GPUCorner gc;
-        gc.position = c.position;
-        gc.isValid = c.isValid ? 1 : 0;
         // Safety: ensure we don't read out of bounds if corner has fewer bands
         int numBands = std::min((int)c.shCoeffs.size(), 9);
 
@@ -893,118 +827,171 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     std::ofstream out(filename);
     if (!out) return;
 
+    const auto mem = calculateMemoryFootprint();
+
     uint leafCounter = 0;
-    for (int i = 0; i < mProbes.size(); ++i) {
-        if (mProbes[i].isLeaf)
-            leafCounter++;
+    for (const auto& p : mProbes)
+    {
+        if (p.isLeaf) leafCounter++;
     }
 
     out << "================================================================================\n";
-    out << " ADAPTIVE PROBE VOLUME HIERARCHY (Vertex-Sharing)\n";
+    out << " ADAPTIVE PROBE VOLUME HIERARCHY (SEEDED BRANCH)\n";
     out << "================================================================================\n";
-    out << " Probes:    " << leafCounter << "\n";
-    out << " Corners:   " << mCorners.size() << "\n";
-    out << " Threshold: " << mCurrentThreshold << "\n";
-    out << " Max Level: " << mMaxLevel << "\n";
-    out << " Metric:    " << (mUseRelativeError ? "Relative (E_rel)" : "Absolute (E_abs)") << "\n";
-    out << " Build time in ms: " << mBuildTimeMs << "\n";
+    out << " Probes (total):        " << mProbes.size() << "\n";
+    out << " Probes (leaf):         " << leafCounter << "\n";
+    out << " Corners:               " << mCorners.size() << "\n";
+    out << " Threshold:             " << mCurrentThreshold << "\n";
+    out << " Max Level:             " << mMaxLevel << "\n";
+    out << " Metric:                " << (mUseRelativeError ? "Relative (E_rel)" : "Absolute (E_abs)") << "\n";
+    out << " Build time (ms):       " << mBuildTimeMs << "\n";
+    out << "\n";
+
+    out << " Seeded Grid Enabled:   " << (mUseSeedGrid ? "Yes" : "No") << "\n";
+    if (mUseSeedGrid)
+    {
+        out << " Seed Min Point:        "
+            << mSeedMinPoint.x << ", "
+            << mSeedMinPoint.y << ", "
+            << mSeedMinPoint.z << "\n";
+
+        out << " Seed Cell Size:        "
+            << mSeedCellSize.x << ", "
+            << mSeedCellSize.y << ", "
+            << mSeedCellSize.z << "\n";
+
+        out << " Seed Resolution:       "
+            << mSeedResolution.x << " x "
+            << mSeedResolution.y << " x "
+            << mSeedResolution.z << "\n";
+
+        out << " Seed Probe Indices:    " << mSeedProbeIndices.size() << "\n";
+    }
+
+    out << "\n";
+    out << " GPU Corner Bytes:      " << mem.gpuCornersBytes << "\n";
+    out << " GPU Probe Bytes:       " << mem.gpuProbesBytes << "\n";
+    out << " Total Bytes:           " << mem.totalBytes << "\n";
     out << "================================================================================\n\n";
 
-    // Recursive Lambda for Tree Traversal
-    std::function<void(int, std::string, bool)> printProbe = [&](int probeIdx, std::string prefix, bool isLast)
+    auto computeProbeError = [&](const Probe& probe, float& avgError, float& maxLambdaInProbe)
         {
-            const Probe& probe = mProbes[probeIdx];
-
-            // 1. Re-Calculate Geometry
             float3 diag = probe.maxPoint - probe.minPoint;
             float distSq = dot(diag, diag);
-            float size = std::sqrt(distSq);
 
-            // 2. Re-Calculate Error (Must match finishBatch logic exactly)
             float totalError = 0.0f;
-            float maxLambdaInProbe = 0.0f;
+            uint validCount = 0;
+            maxLambdaInProbe = 0.0f;
 
             for (int k = 0; k < 8; ++k)
             {
                 int cIdx = probe.corners[k];
-                const Corner& c = mCorners[cIdx];
+                if (cIdx < 0) continue;
 
-                // Track max curvature in this voxel for display
+                const Corner& c = mCorners[cIdx];
                 maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambdaVecL2);
 
-                // Re-compute error
-                float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
+                if (!c.isValid) continue;
+
+                validCount++;
+                float e = 0.5f * c.maxLambdaVecL2 * distSq;
 
                 if (mUseRelativeError)
                 {
                     float norm = std::max(c.coeffVecL2, 1e-5f);
-                    totalError += (e / norm);
+                    totalError += e / norm;
                 }
                 else
                 {
                     totalError += e;
                 }
             }
-            float avgError = totalError / 8.0f;
 
-            // 3. Format Output
+            avgError = (validCount > 0) ? (totalError / float(validCount)) : 0.0f;
+        };
+
+    std::function<void(int, std::string, bool)> printProbeTree =
+        [&](int probeIdx, std::string prefix, bool isLast)
+        {
+            const Probe& probe = mProbes[probeIdx];
+
+            float avgError = 0.0f;
+            float maxLambdaInProbe = 0.0f;
+            computeProbeError(probe, avgError, maxLambdaInProbe);
+
+            float3 diag = probe.maxPoint - probe.minPoint;
+            float size = std::sqrt(dot(diag, diag));
+
             out << prefix << (isLast ? "L-- " : "|-- ");
+            out << "[Idx " << probeIdx << "] ";
             out << "[Lvl " << probe.level << "] ";
-
-            // Format error: "0.0050"
-            std::stringstream ssErr;
-            ssErr << std::fixed << std::setprecision(4) << avgError;
-            std::string errStr = ssErr.str();
 
             if (!probe.isLeaf)
             {
-                // Case 1: SUBDIVIDED
                 out << "SUBDIVIDED ";
-                out << "(Err: " << errStr << " > " << mCurrentThreshold << ") ";
-                out << "Size: " << std::setprecision(2) << size << " ";
-                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
+                out << "(Err: " << std::fixed << std::setprecision(4) << avgError
+                    << " > " << mCurrentThreshold << ") ";
+                out << "Size: " << std::setprecision(3) << size << " ";
+                out << "MaxLambda: " << std::setprecision(4) << maxLambdaInProbe << "\n";
 
-                // Recurse children
                 std::vector<int> childrenIdx;
                 for (int i = 0; i < 8; ++i)
-                    if (probe.children[i] != -1)
-                        childrenIdx.push_back(probe.children[i]);
+                {
+                    if (probe.children[i] != -1) childrenIdx.push_back(probe.children[i]);
+                }
 
                 for (size_t i = 0; i < childrenIdx.size(); ++i)
                 {
                     std::string newPrefix = prefix + (isLast ? "    " : "|   ");
-                    printProbe(childrenIdx[i], newPrefix, (i == childrenIdx.size() - 1));
+                    printProbeTree(childrenIdx[i], newPrefix, i == childrenIdx.size() - 1);
                 }
             }
             else
             {
-                // Case 2: LEAF
-                out << "LEAF       ";
-
-                if (probe.level == mMaxLevel)
-                {
+                out << "LEAF ";
+                if (probe.level >= mMaxLevel)
                     out << "(Max Depth) ";
-                }
-                else if (avgError > mCurrentThreshold)
-                {
-                    // This happens if finishBatch hasn't processed this leaf yet, or logic bug
-                    out << "PENDING? (Err: " << errStr << " > Thr) ";
-                }
                 else
-                {
-                    out << "(Err: " << errStr << " < " << mCurrentThreshold << ") ";
-                }
-                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
+                    out << "(Err: " << std::fixed << std::setprecision(4) << avgError
+                    << " <= " << mCurrentThreshold << ") ";
+
+                out << "Size: " << std::setprecision(3) << size << " ";
+                out << "MaxLambda: " << std::setprecision(4) << maxLambdaInProbe << "\n";
             }
         };
 
-    if (!mProbes.empty())
+    if (mUseSeedGrid && !mSeedProbeIndices.empty())
     {
-        printProbe(0, "", true);
+        out << "TOP-LEVEL SEEDED PROBES\n";
+        out << "--------------------------------------------------------------------------------\n";
+
+        for (uint z = 0; z < mSeedResolution.z; ++z)
+        {
+            for (uint y = 0; y < mSeedResolution.y; ++y)
+            {
+                for (uint x = 0; x < mSeedResolution.x; ++x)
+                {
+                    uint flat = (z * mSeedResolution.y + y) * mSeedResolution.x + x;
+                    if (flat >= mSeedProbeIndices.size()) continue;
+
+                    int rootProbeIdx = mSeedProbeIndices[flat];
+                    if (rootProbeIdx < 0 || rootProbeIdx >= (int)mProbes.size()) continue;
+
+                    out << "\n";
+                    out << "Seed Cell [" << x << ", " << y << ", " << z << "] -> Probe " << rootProbeIdx << "\n";
+                    printProbeTree(rootProbeIdx, "", true);
+                }
+            }
+        }
     }
     else
     {
-        out << "Tree is empty.\n";
+        out << "TREE\n";
+        out << "--------------------------------------------------------------------------------\n";
+        if (!mProbes.empty())
+            printProbeTree(0, "", true);
+        else
+            out << "Tree is empty.\n";
     }
 
     out.close();
@@ -1020,21 +1007,58 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         logError("Failed to open file for saving: " + filename);
         return;
     }
+
     out << std::fixed << std::setprecision(8);
 
-    // 1. Header & Config (UPDATED VERSION TO V3)
-    out << "ADAPTIVE_GRID_V4\n"; //add build time
+    const auto mem = calculateMemoryFootprint();
+
+    // ------------------------------------------------------------------
+    // Header
+    // ------------------------------------------------------------------
+    out << "ADAPTIVE_GRID_V5_SEEDED\n";
+
+    // ------------------------------------------------------------------
+    // Build settings
+    // ------------------------------------------------------------------
+    out << "SETTINGS\n";
     out << mCurrentThreshold << " " << mMaxLevel << " " << (mUseRelativeError ? 1 : 0) << "\n";
+
+    // ------------------------------------------------------------------
+    // Build stats
+    // ------------------------------------------------------------------
+    out << "STATS\n";
     out << mBuildTimeMs << "\n";
-    // 2. Corners
+
+    // ------------------------------------------------------------------
+    // Seed grid metadata
+    // ------------------------------------------------------------------
+    out << "SEED_GRID\n";
+    out << (mUseSeedGrid ? 1 : 0) << "\n";
+    out << mSeedMinPoint.x << " " << mSeedMinPoint.y << " " << mSeedMinPoint.z << "\n";
+    out << mSeedCellSize.x << " " << mSeedCellSize.y << " " << mSeedCellSize.z << "\n";
+    out << mSeedResolution.x << " " << mSeedResolution.y << " " << mSeedResolution.z << "\n";
+    out << mSeedProbeIndices.size() << "\n";
+    for (size_t i = 0; i < mSeedProbeIndices.size(); ++i)
+    {
+        out << mSeedProbeIndices[i] << " ";
+    }
+    out << "\n";
+
+    // ------------------------------------------------------------------
+    // Memory footprint
+    // ------------------------------------------------------------------
+    out << "MEMORY\n";
+    out  << mem.totalBytes << "\n";
+
+    // ------------------------------------------------------------------
+    // Corners
+    // ------------------------------------------------------------------
     out << "NUM_CORNERS " << mCorners.size() << "\n";
     for (const auto& c : mCorners)
     {
-        // Basic Data
         out << c.position.x << " " << c.position.y << " " << c.position.z << " ";
-        out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << "\n";
+        out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << " " << (c.isValid ? 1 : 0) << "\n";
 
-        // SH Coeffs (Radiance)
         out << c.shCoeffs.size() << "\n";
         for (const auto& val : c.shCoeffs)
         {
@@ -1042,7 +1066,6 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
         }
         out << "\n";
 
-        // SH Gradients
         out << c.shGradients.size() << "\n";
         for (const auto& g : c.shGradients)
         {
@@ -1051,42 +1074,31 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
             out << g.b.x << " " << g.b.y << " " << g.b.z << " ";
         }
         out << "\n";
-
-        // --------------------------------------------------------
-        // NEW: Distance Moments (Chebyshev Data)
-        // --------------------------------------------------------
-
-        // Mean Distance
-        //out << c.distMean.size() << "\n";
-        //for (const auto& val : c.distMean) out << val << " ";
-        //out << "\n";
-
-        //// Mean Squared Distance
-        //out << c.distMeanSq.size() << "\n";
-        //for (const auto& val : c.distMeanSq) out << val << " ";
-        //out << "\n";
     }
 
+    // ------------------------------------------------------------------
+    // Probes
+    // ------------------------------------------------------------------
     out << "NUM_PROBES " << mProbes.size() << "\n";
     for (const auto& p : mProbes)
     {
         out << (p.isLeaf ? 1 : 0) << " " << p.level << "\n";
 
-        // Bounds
         out << p.minPoint.x << " " << p.minPoint.y << " " << p.minPoint.z << " ";
         out << p.maxPoint.x << " " << p.maxPoint.y << " " << p.maxPoint.z << "\n";
 
-        // Corners
         for (int i = 0; i < 8; ++i) out << p.corners[i] << " ";
         out << "\n";
 
-        // Children
         for (int i = 0; i < 8; ++i) out << p.children[i] << " ";
+        out << "\n";
+
+        for (int i = 0; i < 6; ++i) out << p.coarseNeighbors[i] << " ";
         out << "\n";
     }
 
     out.close();
-    logInfo("Successfully saved AdaptiveProbeVolume (V3) to " + filename);
+    logInfo("Successfully saved AdaptiveProbeVolume (V5 seeded) to " + filename);
 }
 
 void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
@@ -1098,42 +1110,116 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
-    // Clear existing
     mProbes.clear();
     mCorners.clear();
     mPendingNewCorners.clear();
     mProbesPendingCheck.clear();
-    mCornerLookup.clear(); // Cleared here... but needs to be filled!
+    mCornerLookup.clear();
+
+    mUseSeedGrid = false;
+    mSeedMinPoint = float3(0.f);
+    mSeedCellSize = float3(0.f);
+    mSeedResolution = uint3(0);
+    mSeedProbeIndices.clear();
 
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V4")
+    if (header != "ADAPTIVE_GRID_V5_SEEDED")
     {
-        logError("Invalid file format or version mismatch (Expected V3): " + filename);
+        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
         return;
     }
 
-    int useRelErrInt;
+    std::string tag;
+
+    // ------------------------------------------------------------------
+    // Settings
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "SETTINGS")
+    {
+        logError("Missing SETTINGS block in: " + filename);
+        return;
+    }
+
+    int useRelErrInt = 0;
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
+
+    // ------------------------------------------------------------------
+    // Stats
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "STATS")
+    {
+        logError("Missing STATS block in: " + filename);
+        return;
+    }
     in >> mBuildTimeMs;
-    // 2. Load Corners
-    size_t numCorners;
-    std::string tag;
+
+    // ------------------------------------------------------------------
+    // Seed grid metadata
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "SEED_GRID")
+    {
+        logError("Missing SEED_GRID block in: " + filename);
+        return;
+    }
+
+    int useSeedInt = 0;
+    in >> useSeedInt;
+    mUseSeedGrid = (useSeedInt != 0);
+
+    in >> mSeedMinPoint.x >> mSeedMinPoint.y >> mSeedMinPoint.z;
+    in >> mSeedCellSize.x >> mSeedCellSize.y >> mSeedCellSize.z;
+    in >> mSeedResolution.x >> mSeedResolution.y >> mSeedResolution.z;
+
+    size_t seedCount = 0;
+    in >> seedCount;
+    mSeedProbeIndices.resize(seedCount);
+    for (size_t i = 0; i < seedCount; ++i)
+    {
+        in >> mSeedProbeIndices[i];
+    }
+
+    // ------------------------------------------------------------------
+    // Memory block (read and ignore except for validation/logging)
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "MEMORY")
+    {
+        logError("Missing MEMORY block in: " + filename);
+        return;
+    }
+
+    uint64_t totalBytes = 0;
+    in >> totalBytes;
+
+    // ------------------------------------------------------------------
+    // Corners
+    // ------------------------------------------------------------------
+    size_t numCorners = 0;
     in >> tag >> numCorners;
+    if (tag != "NUM_CORNERS")
+    {
+        logError("Missing NUM_CORNERS block in: " + filename);
+        return;
+    }
 
     mCorners.resize(numCorners);
 
     for (size_t i = 0; i < numCorners; ++i)
     {
         Corner& c = mCorners[i];
-        in >> c.position.x >> c.position.y >> c.position.z;
-        in >> c.maxLambdaVecL2 >> c.coeffVecL2;
-        c.isValid = c.coeffVecL2 < 0.001 ? false : true;
 
-        // SH Coeffs
-        size_t numCoeffs;
+        int isValidInt = 0;
+        in >> c.position.x >> c.position.y >> c.position.z;
+        in >> c.maxLambdaVecL2 >> c.coeffVecL2 >> isValidInt;
+        c.isValid = (isValidInt != 0);
+
+        size_t numCoeffs = 0;
         in >> numCoeffs;
         c.shCoeffs.resize(numCoeffs);
         for (size_t k = 0; k < numCoeffs; ++k)
@@ -1141,8 +1227,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shCoeffs[k].x >> c.shCoeffs[k].y >> c.shCoeffs[k].z;
         }
 
-        // SH Gradients
-        size_t numGrads;
+        size_t numGrads = 0;
         in >> numGrads;
         c.shGradients.resize(numGrads);
         for (size_t k = 0; k < numGrads; ++k)
@@ -1152,27 +1237,32 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
         }
 
-        // NEW: Distance Moments
-        /*size_t numDist;
-        in >> numDist;
-        c.distMean.resize(numDist);
-        for (size_t k = 0; k < numDist; ++k) in >> c.distMean[k];
-
-        size_t numDistSq;
-        in >> numDistSq;
-        c.distMeanSq.resize(numDistSq);
-        for (size_t k = 0; k < numDistSq; ++k) in >> c.distMeanSq[k];*/
+        // Rebuild lookup table for future corner sharing
+        CornerKey key{
+            (int)std::floor(c.position.x * 10000.0f + 0.5f),
+            (int)std::floor(c.position.y * 10000.0f + 0.5f),
+            (int)std::floor(c.position.z * 10000.0f + 0.5f)
+        };
+        mCornerLookup[key] = (int)i;
     }
 
-    // 3. Load Probes
-    size_t numProbes;
+    // ------------------------------------------------------------------
+    // Probes
+    // ------------------------------------------------------------------
+    size_t numProbes = 0;
     in >> tag >> numProbes;
+    if (tag != "NUM_PROBES")
+    {
+        logError("Missing NUM_PROBES block in: " + filename);
+        return;
+    }
 
     mProbes.resize(numProbes);
     for (size_t i = 0; i < numProbes; ++i)
     {
         Probe& p = mProbes[i];
-        int isLeafInt;
+
+        int isLeafInt = 0;
         in >> isLeafInt >> p.level;
         p.isLeaf = (isLeafInt != 0);
 
@@ -1181,7 +1271,227 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
         for (int k = 0; k < 8; ++k) in >> p.corners[k];
         for (int k = 0; k < 8; ++k) in >> p.children[k];
+        for (int k = 0; k < 6; ++k) in >> p.coarseNeighbors[k];
     }
+
     in.close();
-    logInfo("Successfully loaded AdaptiveProbeVolume (V3) from " + filename);
+    logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
+}
+
+void AdaptiveProbeVolume::startBuildSeeded(
+    const ref<Scene>& pScene,
+    uint3 seedResolution,
+    float errorThreshold,
+    bool useRelativeError
+)
+{
+    mProbes.clear();
+    mCorners.clear();
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+    mCornerLookup.clear();
+
+    mCurrentThreshold = errorThreshold;
+    mUseRelativeError = useRelativeError;
+
+    auto bounds = pScene->getSceneBounds();
+
+    float boundsScale = 0.96f;
+    float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
+    float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
+    halfExtent *= boundsScale;
+
+    float3 scaledMin = center - halfExtent;
+    float3 scaledMax = center + halfExtent;
+
+    float3 totalSize = scaledMax - scaledMin;
+    float3 cellSize = totalSize / float3(seedResolution);
+
+    mUseSeedGrid = true;
+    mSeedMinPoint = scaledMin;
+    mSeedCellSize = cellSize;
+    mSeedResolution = seedResolution;
+    mSeedProbeIndices.clear();
+    mSeedProbeIndices.resize(seedResolution.x * seedResolution.y * seedResolution.z);
+
+    auto getCornerIndex = [&](uint32_t ix, uint32_t iy, uint32_t iz) -> int
+        {
+            float3 p = scaledMin + float3(ix, iy, iz) * cellSize;
+
+            CornerKey key{
+                (int)std::floor(p.x * 10000.0f + 0.5f),
+                (int)std::floor(p.y * 10000.0f + 0.5f),
+                (int)std::floor(p.z * 10000.0f + 0.5f)
+            };
+
+            auto it = mCornerLookup.find(key);
+            if (it != mCornerLookup.end()) return it->second;
+
+            Corner c;
+            c.position = p;
+            mCorners.push_back(c);
+            int idx = (int)mCorners.size() - 1;
+            mCornerLookup[key] = idx;
+            mPendingNewCorners.push_back(idx);
+            return idx;
+        };
+
+    for (uint32_t z = 0; z < seedResolution.z; ++z)
+    {
+        for (uint32_t y = 0; y < seedResolution.y; ++y)
+        {
+            for (uint32_t x = 0; x < seedResolution.x; ++x)
+            {
+                Probe p;
+                p.isLeaf = true;
+                p.level = 0;
+                p.minPoint = scaledMin + float3(x, y, z) * cellSize;
+                p.maxPoint = p.minPoint + cellSize;
+
+                p.corners[0] = getCornerIndex(x, y, z);
+                p.corners[1] = getCornerIndex(x, y, z + 1);
+                p.corners[2] = getCornerIndex(x, y + 1, z);
+                p.corners[3] = getCornerIndex(x, y + 1, z + 1);
+                p.corners[4] = getCornerIndex(x + 1, y, z);
+                p.corners[5] = getCornerIndex(x + 1, y, z + 1);
+                p.corners[6] = getCornerIndex(x + 1, y + 1, z);
+                p.corners[7] = getCornerIndex(x + 1, y + 1, z + 1);
+
+                for (int i = 0; i < 6; ++i) p.coarseNeighbors[i] = -1;
+
+                uint flat = (z * seedResolution.y + y) * seedResolution.x + x;
+                mSeedProbeIndices[flat] = (int)mProbes.size(); // before push_back or after adjust accordingly
+
+                mProbes.push_back(p);
+                mProbesPendingCheck.push_back((int)mProbes.size() - 1);
+            }
+        }
+    }
+}
+
+void AdaptiveProbeVolume::getPendingPositionsRange(
+    uint32_t start,
+    uint32_t count,
+    std::vector<float3>& positions
+) const
+{
+    positions.clear();
+    uint32_t end = std::min(start + count, (uint32_t)mPendingNewCorners.size());
+    positions.reserve(end - start);
+
+    for (uint32_t i = start; i < end; ++i)
+    {
+        positions.push_back(mCorners[mPendingNewCorners[i]].position);
+    }
+}
+
+void AdaptiveProbeVolume::setCornerDataRange(
+    uint32_t start,
+    const std::vector<std::vector<float3>>& coeffsBatch,
+    const std::vector<std::vector<GradSHCoeff>>& gradsBatch,
+    const std::vector<std::vector<float3x3>>& hessiansBatch
+)
+{
+    uint32_t count = (uint32_t)coeffsBatch.size();
+    for (uint32_t i = 0; i < count; ++i)
+    {
+        setCornerData(start + i, coeffsBatch[i], gradsBatch[i], hessiansBatch[i]);
+    }
+}
+
+int AdaptiveProbeVolume::findSeedProbeCPU(float3 pos) const
+{
+    if (!mUseSeedGrid) return 0;
+    if (mSeedProbeIndices.empty()) return -1;
+
+    // Convert world position to seed-grid coordinates
+    float3 rel = (pos - mSeedMinPoint) / mSeedCellSize;
+
+    int ix = (int)std::floor(rel.x);
+    int iy = (int)std::floor(rel.y);
+    int iz = (int)std::floor(rel.z);
+
+    // Bounds check in seed grid
+    if (ix < 0 || iy < 0 || iz < 0 ||
+        ix >= (int)mSeedResolution.x ||
+        iy >= (int)mSeedResolution.y ||
+        iz >= (int)mSeedResolution.z)
+    {
+        return -1;
+    }
+
+    uint idx = (uint(iz) * mSeedResolution.y + uint(iy)) * mSeedResolution.x + uint(ix);
+    if (idx >= mSeedProbeIndices.size()) return -1;
+
+    return mSeedProbeIndices[idx];
+}
+
+int AdaptiveProbeVolume::traverseOctreeCPU(float3 pos) const
+{
+    if (mProbes.empty()) return -1;
+
+    int currentIdx = 0;
+
+    if (mUseSeedGrid)
+    {
+        currentIdx = findSeedProbeCPU(pos);
+        if (currentIdx < 0) return -1;
+    }
+    else
+    {
+        // Old single-root behavior
+        const Probe& root = mProbes[0];
+        if (pos.x < root.minPoint.x || pos.y < root.minPoint.y || pos.z < root.minPoint.z ||
+            pos.x > root.maxPoint.x || pos.y > root.maxPoint.y || pos.z > root.maxPoint.z)
+        {
+            return -1;
+        }
+        currentIdx = 0;
+    }
+
+    // Local octree descent from the seed probe (or root)
+    for (int i = 0; i < mMaxLevel + 8; ++i)
+    {
+        const Probe& p = mProbes[currentIdx];
+
+        // Extra safety: if somehow pos is outside this probe, fail gracefully
+        if (pos.x < p.minPoint.x || pos.y < p.minPoint.y || pos.z < p.minPoint.z ||
+            pos.x > p.maxPoint.x || pos.y > p.maxPoint.y || pos.z > p.maxPoint.z)
+        {
+            return -1;
+        }
+
+        if (p.children[0] == -1)
+        {
+            return currentIdx;
+        }
+
+        float3 center = 0.5f * (p.minPoint + p.maxPoint);
+        int octant = 0;
+        if (pos.x >= center.x) octant |= 4;
+        if (pos.y >= center.y) octant |= 2;
+        if (pos.z >= center.z) octant |= 1;
+
+        int childIdx = p.children[octant];
+        if (childIdx == -1) return currentIdx;
+
+        currentIdx = childIdx;
+    }
+
+    return currentIdx;
+}
+
+AdaptiveProbeVolume::MemoryFootprintInfo AdaptiveProbeVolume::calculateMemoryFootprint() const
+{
+    MemoryFootprintInfo info{};
+
+    // GPU packed layout
+    info.gpuProbesBytes = uint64_t(mProbes.size()) * sizeof(GPUProbe);
+    info.gpuCornersBytes = uint64_t(mCorners.size()) * sizeof(GPUCorner);
+
+    info.totalBytes =
+    info.gpuCornersBytes +
+    info.gpuProbesBytes;
+
+    return info;
 }

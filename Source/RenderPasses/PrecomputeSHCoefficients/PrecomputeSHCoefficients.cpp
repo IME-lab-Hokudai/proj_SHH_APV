@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -43,94 +43,34 @@
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
 const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 1024;
 //const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
+
+//const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 5.0f;
-//const float ErrorThreshold =3.0f;//threshold for Erel
+const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-const float ErrorThreshold =1.0f;//threshold for Erel
-//const float ErrorThreshold = 1.0f;//threshold for Erel
-//const float ErrorThreshold = 0.5f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
 //const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
 const uint3 unifromGridSize = uint3(64, 64, 64);
-//const std::string saveToFileName = "UniformGrid32.txt";
-//const std::string saveToFileName = "UniformGrid32NoCull.txt";
-//const std::string saveToFileName = "UniformGrid16.txt";
-//const std::string saveToFileName = "UniformGrid16NoCull.txt";
-//const std::string saveToFileName = "UniformGrid64.txt";
-//const std::string saveToFileName = "UniformGrid64NoCull.txt";
-//const std::string saveToFileName = "AdaptiveErr5.txt";
-//const std::string saveToFileName = "AdaptiveErr2.txt";
-//const std::string saveToFileName = "AdaptiveErr3NoCull.txt";
-//const std::string saveToFileName = "AdaptiveErr1NoCull.txt";
-//const std::string saveToFileName = "AdaptiveErr0point5NoCull.txt";
-//const std::string saveToFileName = "AdaptiveErr1point5NoCull.txt";
-//const std::string loadFromFileName = "UniformGrid32.txt";
-//const std::string loadFromFileName = "UniformGrid32NoCull.txt";
-//const std::string loadFromFileName = "UniformGrid16.txt";
-//const std::string loadFromFileName = "UniformGrid16NoCull.txt";
-//const std::string loadFromFileName = "UniformGrid64.txt";
-//const std::string loadFromFileName = "UniformGrid64NoCull.txt";
-//const std::string loadFromFileName = "AdaptiveErr5.txt";
-//const std::string loadFromFileName = "AdaptiveErr2.txt";
-//const std::string loadFromFileName = "AdaptiveErr3NoCull.txt";
-//const std::string loadFromFileName = "AdaptiveErr1point5NoCull.txt";
-//const std::string loadFromFileName = "AdaptiveErr1NoCull.txt";
-//const std::string loadFromFileName = "AdaptiveErr0point5NoCull.txt";
-
-//const std::string saveToFileName = "AdaptiveErr5SubwayCorridor.txt";
-//const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
-
-//const std::string saveToFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
-
-//const std::string saveToFileName = "DirectAbsErr10SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAbsErr10SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAbsErr5SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAbsErr3SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAbsErr1p5SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAbsErr1SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAbsErr5SubwayCorridor.txt";
-
-//const std::string saveToFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
-
-//const std::string saveToFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
-//const std::string saveToFileName = "DirectUniformGrid16.txt";
-//const std::string loadFromFileName = "DirectUniformGrid16.txt";
-//const std::string saveToFileName = "DirectUniformGrid32.txt";
-//const std::string loadFromFileName = "DirectUniformGrid32.txt";
-//const std::string saveToFileName = "DirectUniformGrid64.txt";
-//const std::string loadFromFileName = "DirectUniformGrid64.txt";
-//const std::string saveToFileName = "test.txt";
-//const std::string loadFromFileName = "test.txt";
-
-//const std::string saveToFileName = "IndirectAdaptiveErr1p5.txt";
-//const std::string saveToFileName = "IndirectAdaptiveErr2.txt";
-//const std::string saveToFileName = "IndirectUniformGrid32.txt";
 const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
-//const std::string saveToFileName = "DirectRelErr5SubwayCorridorNoOpen.txt";
-//const std::string saveToFileName = "DirectRelErr3SubwayCorridorNoOpen.txt";
-//const std::string saveToFileName = "DirectRelErr1p5SubwayCorridorNoOpen.txt";
-//const std::string saveToFileName = "DirectRelErr1SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded16DirectAbsErr5SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded16DirectAbsErr10SubwayCorridorNoOpen.txt";
+
+
+const std::string saveToFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 
 //const std::string saveToFileName = "DirectUniformGrid32SubwayCorridorNoOpen.txt";
-const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 
 namespace
 {
@@ -480,89 +420,87 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             using clock = std::chrono::high_resolution_clock;
             auto tStart = clock::now();
             // 1. Initialize
-            mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
+            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-            // 2. Loop until the volume stops asking for more work (Breadth-First Build)
+            const uint3 seedResolution = uint3(8,8,8); 
+            //const uint3 seedResolution = uint3(16, 16, 16); 
+            mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
+
+            const uint32_t kMaxCornersPerDispatch = 8192; // tune this
+
             while (mAdaptiveProbeVolume->hasPendingBatch())
             {
-                // --- A. Get positions for THIS batch ---
-                std::vector<float3> pendingProbePositions;
-                mAdaptiveProbeVolume->getPendingPositions(pendingProbePositions);
+                uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
 
-                uint32_t numProbes = pendingProbePositions.size();
-
-                // --- B. Prepare Buffers (Re-create for new size) ---
-                // Input: Positions
-                mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                    sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
-                );
-                mpProbePosBuffer->setName("probes world pos");
-
-                // Output: Ray Tracing Samples
-                mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                    sizeof(ProbeSampleData),
-                    numSamplesPerProbe * numProbes,
-                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                    MemoryType::DeviceLocal
-                );
-                mpProbeSamplingResultBuffer->setName("Probe Sampling Result Buffer");
-
-                // --- C. Run Ray Tracing ---
-                auto rtVar = mpRtVars->getRootVar();
-                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-                rtVar["gProbePositions"] = mpProbePosBuffer;
-                rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-                if (mpEmissiveSampler)
-                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-                rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-
-                mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
-
-                // --- D. Readback Results ---
-                ProbeSampleData* allProbeSamplingData = new ProbeSampleData[numSamplesPerProbe * numProbes];
-                mpProbeSamplingResultBuffer->getBlob(allProbeSamplingData, 0, numSamplesPerProbe * numProbes * sizeof(ProbeSampleData));
-
-                // --- E. Process Each Probe (CPU Math) ---
-                for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+                for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
                 {
-                    // Gather samples for this specific probe
-                    int offset = probeIdx * numSamplesPerProbe;
-                    std::vector<ProbeSampleData> probeSamplingResults;
-                    probeSamplingResults.reserve(numSamplesPerProbe);
-                    for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; sampleIdx++)
+                    uint32_t batchCount = std::min(kMaxCornersPerDispatch, totalPending - batchStart);
+
+                    std::vector<float3> pendingProbePositions;
+                    mAdaptiveProbeVolume->getPendingPositionsRange(batchStart, batchCount, pendingProbePositions);
+
+                    uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+
+                    mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                        sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
+                    );
+
+                    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                        sizeof(ProbeSampleData),
+                        numSamplesPerProbe * numProbes,
+                        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                        MemoryType::DeviceLocal
+                    );
+
+                    auto rtVar = mpRtVars->getRootVar();
+                    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+                    rtVar["gProbePositions"] = mpProbePosBuffer;
+                    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+                    if (mpEmissiveSampler)
+                        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+                    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+                    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+
+                    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+
+                    std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * numProbes);
+                    mpProbeSamplingResultBuffer->getBlob(
+                        allProbeSamplingData.data(),
+                        0,
+                        numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
+                    );
+
+                    std::vector<std::vector<float3>> coeffsBatch(numProbes);
+                    std::vector<std::vector<GradSHCoeff>> gradsBatch(numProbes);
+                    std::vector<std::vector<float3x3>> hessiansBatch(numProbes);
+
+                    for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
                     {
-                        probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+                        int offset = probeIdx * numSamplesPerProbe;
+                        std::vector<ProbeSampleData> probeSamplingResults;
+                        probeSamplingResults.reserve(numSamplesPerProbe);
+                        for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
+                            probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+
+                        float3 xPolar;
+                        xPolar.x = pendingProbePositions[probeIdx].z;
+                        xPolar.y = pendingProbePositions[probeIdx].x;
+                        xPolar.z = pendingProbePositions[probeIdx].y;
+
+                        calculateSHCoeffsGradientsRGBAndHessiansLum(
+                            gradsBatch[probeIdx],
+                            hessiansBatch[probeIdx],
+                            xPolar,
+                            probeSamplingResults,
+                            samplingDirs
+                        );
+                        calculateSHCoeffs(coeffsBatch[probeIdx], probeSamplingResults, numSamplesPerProbe);
                     }
 
-                    // Math Containers
-                    std::vector<GradSHCoeff> grads;
-                    //std::vector<HessianSHCoeff> hessians;
-                    std::vector<float3x3> lumHessians; // Now a vector of 3x3 matrices
-                    std::vector<float3> coeffs;
-
-                    // Coordinate conversion
-                    float3 xPolar;
-                    xPolar.x = pendingProbePositions[probeIdx].z;
-                    xPolar.y = pendingProbePositions[probeIdx].x;
-                    xPolar.z = pendingProbePositions[probeIdx].y;
-
-                    // Compute Physics
-                    //calculateSHCoeffsGradientsAndHessians(grads, hessians, xPolar, probeSamplingResults, samplingDirs);
-                    calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
-                    calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
-
-                    //Feed Data back to Volume
-                    // We pass the batch index (probeIdx) and the calculated data
-                    //mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians, outMean, outMeanSq);
-                    mAdaptiveProbeVolume->setCornerData(probeIdx, coeffs, grads, lumHessians);
+                    mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
                 }
 
-                delete[] allProbeSamplingData;
-
-                // --- F. Finish Batch ---
-                // subdivides nodes if necessary, and fills the queue for the NEXT loop iteration.
                 mAdaptiveProbeVolume->finishBatch();
             }
 

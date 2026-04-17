@@ -58,8 +58,6 @@ struct GPUCorner
     float4 gradR[9];  // .xyz = Gradient of Red Channel
     float4 gradG[9];  // .xyz = Gradient of Green Channel
     float4 gradB[9];  // .xyz = Gradient of Blue Channel
-    float3 position;
-    int isValid;
 };
 
 struct GPUProbe

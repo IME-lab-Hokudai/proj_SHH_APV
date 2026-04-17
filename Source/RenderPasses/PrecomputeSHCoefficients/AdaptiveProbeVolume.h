@@ -40,6 +40,14 @@ public:
         float constraintWeight = 0.0f;
     };
 
+    struct MemoryFootprintInfo
+    {
+        uint64_t gpuCornersBytes = 0;
+        uint64_t gpuProbesBytes = 0;
+        uint64_t totalBytes = 0;
+    };
+
+    MemoryFootprintInfo calculateMemoryFootprint() const;
     //
 // Add this helper to quantize positions (merges points closer than 0.1mm)
     struct CornerKey {
@@ -120,6 +128,43 @@ public:
     void loadFromFile(const std::string& filename);
     double getBuildTimeMs() const { return mBuildTimeMs; }
     void setBuildTimeMs(double t) { mBuildTimeMs = t; }
+
+    void startBuildSeeded(
+        const ref<Scene>& pScene,
+        uint3 seedResolution,
+        float errorThreshold,
+        bool useRelativeError = false
+    );
+
+    void getPendingPositionsRange(
+        uint32_t start,
+        uint32_t count,
+        std::vector<float3>& positions
+    ) const;
+
+    void setCornerDataRange(
+        uint32_t start,
+        const std::vector<std::vector<float3>>& coeffsBatch,
+        const std::vector<std::vector<GradSHCoeff>>& gradsBatch,
+        const std::vector<std::vector<float3x3>>& hessiansBatch
+    );
+
+    uint32_t getPendingCornerCount() const { return (uint32_t)mPendingNewCorners.size(); }
+
+    // New: seed-grid aware traversal helpers
+    int findSeedProbeCPU(float3 pos) const;
+    bool hasSeedGrid() const { return mUseSeedGrid; }
+
+    // Optional helper if you seed externally
+    void setSeedGridMetadata(float3 minPoint, float3 cellSize, uint3 resolution, const std::vector<int>& seedProbeIndices)
+    {
+        mUseSeedGrid = true;
+        mSeedMinPoint = minPoint;
+        mSeedCellSize = cellSize;
+        mSeedResolution = resolution;
+        mSeedProbeIndices = seedProbeIndices;
+    }
+
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
 
@@ -138,7 +183,7 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 5;
+    int mMaxLevel = 2;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;
@@ -146,4 +191,11 @@ private:
 
     //statistic
     double mBuildTimeMs = 0.0;
+
+    // Top-level coarse seed grid metadata
+    bool mUseSeedGrid = false;
+    float3 mSeedMinPoint = float3(0.f);
+    float3 mSeedCellSize = float3(0.f);
+    uint3 mSeedResolution = uint3(0);
+    std::vector<int> mSeedProbeIndices; // size = rx * ry * rz
 };

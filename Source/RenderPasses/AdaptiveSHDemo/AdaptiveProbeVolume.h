@@ -58,8 +58,6 @@ public:
         }
     };
 
-    void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3* finalCoeffs);
-
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
 
     void constrainHangingNodes();
@@ -84,7 +82,12 @@ public:
     std::unordered_map<CornerKey, int, CornerKeyHasher> mCornerLookup;
 
     void loadFromFile(const std::string& filename);
+    ref<Buffer> getSeedProbeIndexBuffer() const { return mpSeedProbeIndexBuffer; }
 
+    bool getUseSeedGrid() const { return mUseSeedGrid; }
+    float3 getSeedMinPoint() const { return mSeedMinPoint; }
+    float3 getSeedCellSize() const { return mSeedCellSize; }
+    uint3 getSeedResolution() const { return mSeedResolution; }
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
 
@@ -107,4 +110,11 @@ private:
 
     //statistic
     double mBuildTimeMs = 0.0;
+
+    bool mUseSeedGrid = false;
+    float3 mSeedMinPoint = float3(0.f);
+    float3 mSeedCellSize = float3(0.f);
+    uint3 mSeedResolution = uint3(0);
+    std::vector<int> mSeedProbeIndices; // size = rx * ry * rz
+    ref<Buffer> mpSeedProbeIndexBuffer;
 };

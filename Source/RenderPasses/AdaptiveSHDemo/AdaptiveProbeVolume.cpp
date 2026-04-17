@@ -43,119 +43,6 @@ float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
     return dh00 * v0 + dh10 * s0 + dh01 * v1 + dh11 * s1;
 }
 
-//
-
-// Interpolates between 'a' and 'b' based on weight 't'.
-// If a corner is invalid, it is ignored, and the valid corner takes over 100%.
-float3 robustLerp(float3 a, float3 b, float t, bool validA, bool validB)
-{
-    if (validA && validB)
-    {
-        // Normal case: Both good, use standard lerp
-        return lerp(a, b, t);
-    }
-    else if (validA && !validB)
-    {
-        // B is broken (Leak source).
-        // Force 'a' to extend all the way to 'b'.
-        return a;
-    }
-    else if (!validA && validB)
-    {
-        // A is broken.
-        // Force 'b' to extend all the way to 'a'.
-        return b;
-    }
-    else
-    {
-        // Both broken. Return black (or handle as failure upstream).
-        return float3(0, 0, 0);
-    }
-}
-
-
-//
-
-// CPU Port of the "Smart" Weighted Accumulation Shader
-// Matches the shader's logic: Sum(Weight * Value) / Sum(Weight)
-void AdaptiveProbeVolume::fetchSmartInterpolatedSH(
-    int probeIdx,
-    float3 pos,
-    float3* outCoeffs
-)
-{
-    const Probe& p = mProbes[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
-    float3 t = (pos - p.minPoint) / size;
-
-    // Clamp
-    t.x = std::max(0.0f, std::min(1.0f, t.x));
-    t.y = std::max(0.0f, std::min(1.0f, t.y));
-    t.z = std::max(0.0f, std::min(1.0f, t.z));
-
-    // Pre-calculate Trilinear Weights
-    float w[8];
-    w[0] = (1 - t.x) * (1 - t.y) * (1 - t.z);
-    w[1] = (1 - t.x) * (1 - t.y) * (t.z);
-    w[2] = (1 - t.x) * (t.y) * (1 - t.z);
-    w[3] = (1 - t.x) * (t.y) * (t.z);
-    w[4] = (t.x) * (1 - t.y) * (1 - t.z);
-    w[5] = (t.x) * (1 - t.y) * (t.z);
-    w[6] = (t.x) * (t.y) * (1 - t.z);
-    w[7] = (t.x) * (t.y) * (t.z);
-
-    // Initialize Accumulators
-    float3 accumSH[9];
-    for (int b = 0; b < 9; ++b) accumSH[b] = float3(0, 0, 0);
-
-    float totalWeight = 0.0f;
-
-    // Loop 8 Corners
-    for (int k = 0; k < 8; ++k)
-    {
-        int cIdx = p.corners[k];
-
-        // 1. DATA CHECK: Skip missing corners
-        if (cIdx < 0) continue;
-
-        const Corner& c = mCorners[cIdx];
-
-        // 2. ROBUSTNESS CHECK: Skip invalid/black corners
-        // Matches Shader: if (dot(c.coeffs[0], c.coeffs[0]) < 1e-6) continue;
-        // We use our helper flag if available, or check the data directly.
-
-        if (!c.isValid ) continue;
-
-        // 3. WEIGHT
-        // We cannot check "Visibility" (Normal Dot) here because a hanging node
-        // is a point in space, not a surface. We assume "Perfect Visibility" (1.0).
-        // This relies on the Spatial Weight (Trilinear) only.
-        float weight = w[k];
-
-        // 4. ACCUMULATE
-        for (int b = 0; b < 9; ++b)
-        {
-            accumSH[b] += c.shCoeffs[b] * weight;
-        }
-        totalWeight += weight;
-    }
-
-    // 5. RENORMALIZE
-    // This "stretches" the valid corners to fill the gap left by invalid ones.
-    if (totalWeight > 1e-6f)
-    {
-        for (int b = 0; b < 9; ++b)
-        {
-            outCoeffs[b] = accumSH[b] / totalWeight;
-        }
-    }
-    else
-    {
-        // Fallback: Total failure. Return Black.
-        for (int b = 0; b < 9; ++b) outCoeffs[b] = float3(0, 0, 0);
-    }
-}
-
 // 2. Full Tricubic Hermite Interpolation on CPU
 // This mirrors 'fetchHermiteInterpolatedSH' from your shader exactly.
 void AdaptiveProbeVolume::interpolateHermite_CPU(
@@ -288,52 +175,7 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
         outGrads[band].b = float3(gradZ.z, gradX.z, gradY.z);
     }
 }
-//
 
-//
-
-//
-
-void AdaptiveProbeVolume::constrainHangingNodes()
-{
-    // Face Indices: 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
-    const int FACE_CORNERS[6][4] = {
-             {0, 1, 2, 3}, {4, 5, 6, 7},
-             {0, 1, 4, 5}, {2, 3, 6, 7},
-             {0, 2, 4, 6}, {1, 3, 5, 7}
-    };
-
-    for (size_t i = 0; i < mProbes.size(); ++i)
-    {
-        Probe& p = mProbes[i];
-        if (!p.isLeaf) continue;
-
-        for (int face = 0; face < 6; ++face)
-        {
-            int neighborIdx = p.coarseNeighbors[face];
-            if (neighborIdx != -1)
-            {
-                for (int k = 0; k < 4; ++k)
-                {
-                    int localCornerIdx = FACE_CORNERS[face][k];
-                    int globalCornerIdx = p.corners[localCornerIdx];
-                    Corner& c = mCorners[globalCornerIdx];
-
-                    // 1. Allocate Array on Stack
-                    float3 smartCoeffs[9];
-
-                    // 2. Fetch Weighted Average (Renormalized)
-                    // This now uses the Accumulation Logic, not the 3-Pass Lerp.
-                    fetchSmartInterpolatedSH(neighborIdx, c.position, smartCoeffs);
-
-                    // 3. Overwrite Hanging Node
-                    if (c.shCoeffs.size() != 9) c.shCoeffs.resize(9);
-                    for (int b = 0; b < 9; ++b) c.shCoeffs[b] = smartCoeffs[b];
-                }
-            }
-        }
-    }
-}
 void AdaptiveProbeVolume::constrainHangingNodesHermite()
 {
     const int FACE_CORNERS[6][4] = {
@@ -404,10 +246,6 @@ static void computeEigenvalues3x3(const float3x3& A, float& e1, float& e2, float
     e2 = m - two_sqrt_p * (c * 0.5f + s * 0.8660254f);
     e3 = m - two_sqrt_p * (c * 0.5f - s * 0.8660254f);
 }
-
-// ------------------------------------------------------------------
-// Lifecycle
-// ------------------------------------------------------------------
 
 ref<AdaptiveProbeVolume> AdaptiveProbeVolume::create(ref<Device> pDevice)
 {
@@ -595,127 +433,16 @@ void AdaptiveProbeVolume::uploadToGPU()
         MemoryType::DeviceLocal,
         gpuCorners.data()
     );
-}
 
-void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
-{
-    std::ofstream out(filename);
-    if (!out) return;
+    mpSeedProbeIndexBuffer = mpDevice->createStructuredBuffer(
+        sizeof(int),
+        (uint32_t)mSeedProbeIndices.size(),
+        ResourceBindFlags::ShaderResource,
+        MemoryType::DeviceLocal,
+        mSeedProbeIndices.data()
+    );
+    mpSeedProbeIndexBuffer->setName("SeedProbeIndexBuffer");
 
-    uint leafCounter = 0;
-    for (int i = 0; i < mProbes.size(); ++i) {
-        if (mProbes[i].isLeaf)
-            leafCounter++;
-    }
-
-    out << "================================================================================\n";
-    out << " ADAPTIVE PROBE VOLUME HIERARCHY (Vertex-Sharing)\n";
-    out << "================================================================================\n";
-    out << " Probes:    " << leafCounter << "\n";
-    out << " Corners:   " << mCorners.size() << "\n";
-    out << " Threshold: " << mCurrentThreshold << "\n";
-    out << " Max Level: " << mMaxLevel << "\n";
-    out << " Metric:    " << (mUseRelativeError ? "Relative (E_rel)" : "Absolute (E_abs)") << "\n";
-    out << "================================================================================\n\n";
-
-    // Recursive Lambda for Tree Traversal
-    std::function<void(int, std::string, bool)> printProbe = [&](int probeIdx, std::string prefix, bool isLast)
-        {
-            const Probe& probe = mProbes[probeIdx];
-
-            // 1. Re-Calculate Geometry
-            float3 diag = probe.maxPoint - probe.minPoint;
-            float distSq = dot(diag, diag);
-            float size = std::sqrt(distSq);
-
-            // 2. Re-Calculate Error (Must match finishBatch logic exactly)
-            float totalError = 0.0f;
-            float maxLambdaInProbe = 0.0f;
-
-            for (int k = 0; k < 8; ++k)
-            {
-                int cIdx = probe.corners[k];
-                const Corner& c = mCorners[cIdx];
-
-                // Track max curvature in this voxel for display
-                maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambdaVecL2);
-
-                // Re-compute error
-                float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
-
-                if (mUseRelativeError)
-                {
-                    float norm = std::max(c.coeffVecL2, 1e-5f);
-                    totalError += (e / norm);
-                }
-                else
-                {
-                    totalError += e;
-                }
-            }
-            float avgError = totalError / 8.0f;
-
-            // 3. Format Output
-            out << prefix << (isLast ? "L-- " : "|-- ");
-            out << "[Lvl " << probe.level << "] ";
-
-            // Format error: "0.0050"
-            std::stringstream ssErr;
-            ssErr << std::fixed << std::setprecision(4) << avgError;
-            std::string errStr = ssErr.str();
-
-            if (!probe.isLeaf)
-            {
-                // Case 1: SUBDIVIDED
-                out << "SUBDIVIDED ";
-                out << "(Err: " << errStr << " > " << mCurrentThreshold << ") ";
-                out << "Size: " << std::setprecision(2) << size << " ";
-                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
-
-                // Recurse children
-                std::vector<int> childrenIdx;
-                for (int i = 0; i < 8; ++i)
-                    if (probe.children[i] != -1)
-                        childrenIdx.push_back(probe.children[i]);
-
-                for (size_t i = 0; i < childrenIdx.size(); ++i)
-                {
-                    std::string newPrefix = prefix + (isLast ? "    " : "|   ");
-                    printProbe(childrenIdx[i], newPrefix, (i == childrenIdx.size() - 1));
-                }
-            }
-            else
-            {
-                // Case 2: LEAF
-                out << "LEAF       ";
-
-                if (probe.level == mMaxLevel)
-                {
-                    out << "(Max Depth) ";
-                }
-                else if (avgError > mCurrentThreshold)
-                {
-                    // This happens if finishBatch hasn't processed this leaf yet, or logic bug
-                    out << "PENDING? (Err: " << errStr << " > Thr) ";
-                }
-                else
-                {
-                    out << "(Err: " << errStr << " < " << mCurrentThreshold << ") ";
-                }
-                out << "MaxLambda: " << std::setprecision(3) << maxLambdaInProbe << "\n";
-            }
-        };
-
-    if (!mProbes.empty())
-    {
-        printProbe(0, "", true);
-    }
-    else
-    {
-        out << "Tree is empty.\n";
-    }
-
-    out.close();
 }
 
 void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
@@ -727,42 +454,116 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
-    // Clear existing
     mProbes.clear();
     mCorners.clear();
     mPendingNewCorners.clear();
     mProbesPendingCheck.clear();
-    mCornerLookup.clear(); // Cleared here... but needs to be filled!
+    mCornerLookup.clear();
+
+    mUseSeedGrid = false;
+    mSeedMinPoint = float3(0.f);
+    mSeedCellSize = float3(0.f);
+    mSeedResolution = uint3(0);
+    mSeedProbeIndices.clear();
 
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V4")
+    if (header != "ADAPTIVE_GRID_V5_SEEDED")
     {
-        logError("Invalid file format or version mismatch (Expected V3): " + filename);
+        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
         return;
     }
 
-    int useRelErrInt;
+    std::string tag;
+
+    // ------------------------------------------------------------------
+    // Settings
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "SETTINGS")
+    {
+        logError("Missing SETTINGS block in: " + filename);
+        return;
+    }
+
+    int useRelErrInt = 0;
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
+
+    // ------------------------------------------------------------------
+    // Stats
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "STATS")
+    {
+        logError("Missing STATS block in: " + filename);
+        return;
+    }
     in >> mBuildTimeMs;
-    // 2. Load Corners
-    size_t numCorners;
-    std::string tag;
+
+    // ------------------------------------------------------------------
+    // Seed grid metadata
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "SEED_GRID")
+    {
+        logError("Missing SEED_GRID block in: " + filename);
+        return;
+    }
+
+    int useSeedInt = 0;
+    in >> useSeedInt;
+    mUseSeedGrid = (useSeedInt != 0);
+
+    in >> mSeedMinPoint.x >> mSeedMinPoint.y >> mSeedMinPoint.z;
+    in >> mSeedCellSize.x >> mSeedCellSize.y >> mSeedCellSize.z;
+    in >> mSeedResolution.x >> mSeedResolution.y >> mSeedResolution.z;
+
+    size_t seedCount = 0;
+    in >> seedCount;
+    mSeedProbeIndices.resize(seedCount);
+    for (size_t i = 0; i < seedCount; ++i)
+    {
+        in >> mSeedProbeIndices[i];
+    }
+
+    // ------------------------------------------------------------------
+    // Memory block (read and ignore except for validation/logging)
+    // ------------------------------------------------------------------
+    in >> tag;
+    if (tag != "MEMORY")
+    {
+        logError("Missing MEMORY block in: " + filename);
+        return;
+    }
+
+    uint64_t totalBytes = 0;
+    in >> totalBytes;
+
+    // ------------------------------------------------------------------
+    // Corners
+    // ------------------------------------------------------------------
+    size_t numCorners = 0;
     in >> tag >> numCorners;
+    if (tag != "NUM_CORNERS")
+    {
+        logError("Missing NUM_CORNERS block in: " + filename);
+        return;
+    }
 
     mCorners.resize(numCorners);
 
     for (size_t i = 0; i < numCorners; ++i)
     {
         Corner& c = mCorners[i];
-        in >> c.position.x >> c.position.y >> c.position.z;
-        in >> c.maxLambdaVecL2 >> c.coeffVecL2;
-        c.isValid = c.coeffVecL2 < 0.001 ? false : true;
 
-        // SH Coeffs
-        size_t numCoeffs;
+        int isValidInt = 0;
+        in >> c.position.x >> c.position.y >> c.position.z;
+        in >> c.maxLambdaVecL2 >> c.coeffVecL2 >> isValidInt;
+        c.isValid = (isValidInt != 0);
+
+        size_t numCoeffs = 0;
         in >> numCoeffs;
         c.shCoeffs.resize(numCoeffs);
         for (size_t k = 0; k < numCoeffs; ++k)
@@ -770,8 +571,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shCoeffs[k].x >> c.shCoeffs[k].y >> c.shCoeffs[k].z;
         }
 
-        // SH Gradients
-        size_t numGrads;
+        size_t numGrads = 0;
         in >> numGrads;
         c.shGradients.resize(numGrads);
         for (size_t k = 0; k < numGrads; ++k)
@@ -781,27 +581,32 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
         }
 
-        // NEW: Distance Moments
-        /*size_t numDist;
-        in >> numDist;
-        c.distMean.resize(numDist);
-        for (size_t k = 0; k < numDist; ++k) in >> c.distMean[k];
-
-        size_t numDistSq;
-        in >> numDistSq;
-        c.distMeanSq.resize(numDistSq);
-        for (size_t k = 0; k < numDistSq; ++k) in >> c.distMeanSq[k];*/
+        // Rebuild lookup table for future corner sharing
+        CornerKey key{
+            (int)std::floor(c.position.x * 10000.0f + 0.5f),
+            (int)std::floor(c.position.y * 10000.0f + 0.5f),
+            (int)std::floor(c.position.z * 10000.0f + 0.5f)
+        };
+        mCornerLookup[key] = (int)i;
     }
 
-    // 3. Load Probes
-    size_t numProbes;
+    // ------------------------------------------------------------------
+    // Probes
+    // ------------------------------------------------------------------
+    size_t numProbes = 0;
     in >> tag >> numProbes;
+    if (tag != "NUM_PROBES")
+    {
+        logError("Missing NUM_PROBES block in: " + filename);
+        return;
+    }
 
     mProbes.resize(numProbes);
     for (size_t i = 0; i < numProbes; ++i)
     {
         Probe& p = mProbes[i];
-        int isLeafInt;
+
+        int isLeafInt = 0;
         in >> isLeafInt >> p.level;
         p.isLeaf = (isLeafInt != 0);
 
@@ -810,7 +615,9 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
         for (int k = 0; k < 8; ++k) in >> p.corners[k];
         for (int k = 0; k < 8; ++k) in >> p.children[k];
+        for (int k = 0; k < 6; ++k) in >> p.coarseNeighbors[k];
     }
+
     in.close();
-    logInfo("Successfully loaded AdaptiveProbeVolume (V3) from " + filename);
+    logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
 }

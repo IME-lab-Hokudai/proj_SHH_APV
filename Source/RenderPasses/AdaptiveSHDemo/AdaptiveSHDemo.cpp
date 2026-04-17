@@ -35,32 +35,10 @@
 //#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
 #define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
-//const std::string loadFromFileName = "AdaptiveErr5SubwayCorridor.txt";
-
-
-
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-//const std::string loadFromFileName = "DirectAdaptiveErr3N6SubwayCorridor.txt";
 
-//const std::string loadFromFileName = "IndirectAdaptiveErr3.txt";
-//const std::string loadFromFileName = "IndirectAdaptiveErr2.txt";
-//const std::string loadFromFileName = "IndirectAdaptiveErr1p5.txt";
-//const std::string loadFromFileName = "DirectAbsErr1p5SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAbsErr3SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAbsErr5SubwayCorridor.txt";
+const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 
-//const std::string loadFromFileName = "DirectAbsErr10SubwayCorridor.txt";
-
-//const std::string loadFromFileName = "DirectAdaptiveErr1SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr1p5SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr2SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr3SubwayCorridor.txt";
-//const std::string loadFromFileName = "DirectAdaptiveErr5SubwayCorridor.txt";
-
-const std::string loadFromFileName = "DirectRelErr1SubwayCorridorNoOpen.txt";
-//const std::string loadFromFileName = "DirectRelErr1p5SubwayCorridorNoOpen.txt";
-//const std::string loadFromFileName = "DirectRelErr3SubwayCorridorNoOpen.txt";
-//const std::string loadFromFileName = "DirectRelErr5SubwayCorridorNoOpen.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 #else
 //const std::string loadFromFileName = "DirectUniformGrid32.txt";
@@ -194,6 +172,14 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
         applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+
+        applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
+
+        applyVar["SeedGridCB"]["gUseSeedGrid"] = mAdaptiveProbeVolume->getUseSeedGrid() ? 1u : 0u;
+        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getSeedMinPoint();
+        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getSeedCellSize();
+        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getSeedResolution();
+
 #else
         mUniformProbeVolume->bindShaderData(applyVar);
 #endif

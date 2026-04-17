@@ -9,6 +9,15 @@ SamplerState gLinearSampler;
 
 StructuredBuffer<GPUCorner> gCornerBuffer;
 StructuredBuffer<GPUProbe> gProbeBuffer;
+StructuredBuffer<int> gSeedProbeIndices;
+
+cbuffer SeedGridCB
+{
+    uint gUseSeedGrid;
+    float3 gSeedMinPoint;
+    float3 gSeedCellSize;
+    uint3 gSeedResolution;
+};
 
 Texture2D gFloorLightmap;
 Texture2D gLeftWallLightmap;
@@ -210,42 +219,68 @@ void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs
     }
 }
 
-// ------------------------------------------------------------------
-// Octree Traversal Logic
-// ------------------------------------------------------------------
-// Returns the index of the LEAF probe containing 'pos'
+int findSeedProbe(float3 pos)
+{
+    if (gUseSeedGrid == 0)
+    {
+        return 0;
+    }
+
+    float3 rel = (pos - gSeedMinPoint) / gSeedCellSize;
+    int3 cell = int3(floor(rel));
+
+    if (cell.x < 0 || cell.y < 0 || cell.z < 0 ||
+        cell.x >= int(gSeedResolution.x) ||
+        cell.y >= int(gSeedResolution.y) ||
+        cell.z >= int(gSeedResolution.z))
+    {
+        return -1;
+    }
+
+    uint idx = (uint(cell.z) * gSeedResolution.y + uint(cell.y)) * gSeedResolution.x + uint(cell.x);
+    return gSeedProbeIndices[idx];
+}
+
 int traverseOctree(float3 pos)
 {
-    int currentIdx = 0; // Start at Root
+    int currentIdx = findSeedProbe(pos);
+    if (currentIdx < 0)
+    {
+        return -1;
+    }
 
-    // Safety loop limit (e.g. max depth 16)
     for (int i = 0; i < OCTREE_MAX_DEPTH; ++i)
     {
         GPUProbe p = gProbeBuffer[currentIdx];
 
-        // Check if Leaf: children[0] is -1 (based on C++ init)
+        // Extra safety: position must be inside this probe
+        if (pos.x < p.minPoint.x || pos.y < p.minPoint.y || pos.z < p.minPoint.z ||
+            pos.x > p.maxPoint.x || pos.y > p.maxPoint.y || pos.z > p.maxPoint.z)
+        {
+            return -1;
+        }
+
         if (p.children[0] == -1)
         {
             return currentIdx;
         }
 
-        // Determine Octant
-        // Matches C++: (k & 4)?X, (k & 2)?Y, (k & 1)?Z
-        float3 center = (p.minPoint + p.maxPoint) * 0.5;
+        float3 center = 0.5 * (p.minPoint + p.maxPoint);
         int octant = 0;
 
-        if (pos.x >= center.x) octant |= 4; // Bit 2 = X
-        if (pos.y >= center.y) octant |= 2; // Bit 1 = Y
-        if (pos.z >= center.z) octant |= 1; // Bit 0 = Z
+        if (pos.x >= center.x) octant |= 4;
+        if (pos.y >= center.y) octant |= 2;
+        if (pos.z >= center.z) octant |= 1;
 
         int childIdx = p.children[octant];
+        if (childIdx == -1)
+        {
+            return currentIdx;
+        }
 
-        // If tree is incomplete or we hit a boundary, stay here
-        if (childIdx == -1) return currentIdx;
-
-        // Descend
         currentIdx = childIdx;
     }
+
     return currentIdx;
 }
 
