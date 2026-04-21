@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -52,8 +52,8 @@ const float verificationExtent = 0.25f;
 
 //const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 5.0f;
-const float ErrorThreshold =3.0f;//threshold for Erel
-//const float ErrorThreshold =1.5f;//threshold for Erel
+//const float ErrorThreshold =3.0f;//threshold for Erel
+const float ErrorThreshold =2.0f;//threshold for Erel
 //const bool useRelativeError = false;
 const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
@@ -67,11 +67,15 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr10SubwayCorridorNoOpen.txt";
 
 
-const std::string saveToFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded8RelErr3SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded8RelErr2SubwayCorridorNoOpen.txt";
 
 //const std::string saveToFileName = "DirectUniformGrid32SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 
+const std::string saveToFileName = "IndirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";

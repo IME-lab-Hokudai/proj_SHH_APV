@@ -485,7 +485,7 @@ void AdaptiveProbeVolume::setCornerData(
         }
         c.coeffVecL2 = std::sqrt(sumSqL);
 
-         c.isValid = (c.coeffVecL2 < 0.0001f)?false : true;
+        c.isValid = (c.coeffVecL2 < 0.0001f)?false : true;
     //}
 
     // 2. Calculate Curvature of LUMINANCE Field (Hessian)
@@ -554,7 +554,7 @@ void AdaptiveProbeVolume::finishBatch()
             const Corner& c = mCorners[cIdx];
             if (!c.isValid) continue;
 
-            countValidCorner++;
+            //countValidCorner++;
 
             // E_abs = 0.5 * Lambda * dx^2
             float e = 0.5f * c.maxLambdaVecL2 * distSq;
@@ -874,40 +874,62 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
     out << " Total Bytes:           " << mem.totalBytes << "\n";
     out << "================================================================================\n\n";
 
-    auto computeProbeError = [&](const Probe& probe, float& avgError, float& maxLambdaInProbe)
+    auto computeProbeError = [&](const Probe& probe, float& avgError, float& maxLambdaInProbe, float& maxCoeffVecL2)
         {
             float3 diag = probe.maxPoint - probe.minPoint;
             float distSq = dot(diag, diag);
 
-            float totalError = 0.0f;
-            uint validCount = 0;
-            maxLambdaInProbe = 0.0f;
+            //float totalError = 0.0f;
+            //uint validCount = 0;
+            //maxLambdaInProbe = 0.0f;
+
+            //for (int k = 0; k < 8; ++k)
+            //{
+            //    int cIdx = probe.corners[k];
+            //    if (cIdx < 0) continue;
+
+            //    const Corner& c = mCorners[cIdx];
+            //    maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambdaVecL2);
+
+            //    if (!c.isValid) continue;
+
+            //    validCount++;
+            //    float e = 0.5f * c.maxLambdaVecL2 * distSq;
+
+            //    if (mUseRelativeError)
+            //    {
+            //        float norm = std::max(c.coeffVecL2, 1e-5f);
+            //        totalError += e / norm;
+            //    }
+            //    else
+            //    {
+            //        totalError += e;
+            //    }
+            //}
+
+            //avgError = (validCount > 0) ? (totalError / float(validCount)) : 0.0f;
 
             for (int k = 0; k < 8; ++k)
             {
                 int cIdx = probe.corners[k];
-                if (cIdx < 0) continue;
-
                 const Corner& c = mCorners[cIdx];
-                maxLambdaInProbe = std::max(maxLambdaInProbe, c.maxLambdaVecL2);
-
                 if (!c.isValid) continue;
 
-                validCount++;
+                // E_abs = 0.5 * Lambda * dx^2
                 float e = 0.5f * c.maxLambdaVecL2 * distSq;
 
                 if (mUseRelativeError)
                 {
                     float norm = std::max(c.coeffVecL2, 1e-5f);
-                    totalError += e / norm;
+                    e /= norm;
                 }
-                else
-                {
-                    totalError += e;
+
+                if (e > avgError) {
+                    avgError = e;
+                    maxLambdaInProbe =c.maxLambdaVecL2;
+                    maxCoeffVecL2 = c.coeffVecL2;
                 }
             }
-
-            avgError = (validCount > 0) ? (totalError / float(validCount)) : 0.0f;
         };
 
     std::function<void(int, std::string, bool)> printProbeTree =
@@ -917,7 +939,8 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
 
             float avgError = 0.0f;
             float maxLambdaInProbe = 0.0f;
-            computeProbeError(probe, avgError, maxLambdaInProbe);
+            float maxCoeffVecL2 = 0.0f;
+            computeProbeError(probe, avgError, maxLambdaInProbe, maxCoeffVecL2);
 
             float3 diag = probe.maxPoint - probe.minPoint;
             float size = std::sqrt(dot(diag, diag));
@@ -932,7 +955,8 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
                 out << "(Err: " << std::fixed << std::setprecision(4) << avgError
                     << " > " << mCurrentThreshold << ") ";
                 out << "Size: " << std::setprecision(3) << size << " ";
-                out << "MaxLambda: " << std::setprecision(4) << maxLambdaInProbe << "\n";
+                out << "MaxLambdaVecL2: " << std::setprecision(4) << maxLambdaInProbe << " ";
+                out << "CoeffVecL2: " << std::setprecision(4) << maxCoeffVecL2 << "\n";
 
                 std::vector<int> childrenIdx;
                 for (int i = 0; i < 8; ++i)
@@ -956,7 +980,8 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
                     << " <= " << mCurrentThreshold << ") ";
 
                 out << "Size: " << std::setprecision(3) << size << " ";
-                out << "MaxLambda: " << std::setprecision(4) << maxLambdaInProbe << "\n";
+                out << "MaxLambdaVecL2:  " << std::setprecision(4) << maxLambdaInProbe << " ";
+                out << "CoeffVecL2: " << std::setprecision(4) << maxCoeffVecL2 << "\n";
             }
         };
 

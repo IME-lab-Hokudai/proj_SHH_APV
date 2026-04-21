@@ -35,8 +35,6 @@ public:
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
         bool isValid;
-        //std::vector<float> distMean;   // New
-        //std::vector<float> distMeanSq; // New
         float constraintWeight = 0.0f;
     };
 
