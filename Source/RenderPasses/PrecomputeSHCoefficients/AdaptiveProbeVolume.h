@@ -43,6 +43,7 @@ public:
         uint64_t gpuCornersBytes = 0;
         uint64_t gpuProbesBytes = 0;
         uint64_t totalBytes = 0;
+        float totalMB = 0.0; 
     };
 
     MemoryFootprintInfo calculateMemoryFootprint() const;
@@ -181,7 +182,8 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 2;
+    int mMaxLevel = 6;
+    //int mMaxLevel = 0;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;

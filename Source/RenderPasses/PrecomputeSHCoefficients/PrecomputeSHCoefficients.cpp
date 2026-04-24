@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -42,24 +42,26 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-const int numSamplesPerProbe = 4096;
-//const int numSamplesPerProbe = 1024;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 1024;
 //const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
 const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 
-//const float ErrorThreshold = 10.0f;
+//const float ErrorThreshold = 100000000.0f;
+const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
-const float ErrorThreshold =2.0f;//threshold for Erel
-//const bool useRelativeError = false;
-const bool useRelativeError = true;
+//const float ErrorThreshold =1.5f;//threshold for Erel
+//const float ErrorThreshold =2.0f;//threshold for Erel
+const bool useRelativeError = false;
+//const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-//const uint3 unifromGridSize = uint3(32, 32, 32);
+const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-const uint3 unifromGridSize = uint3(64, 64, 64);
+//const uint3 unifromGridSize = uint3(64, 64, 64);
 const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
@@ -70,12 +72,18 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded8RelErr3SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded8RelErr2SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "Seeded8NewMetricAbsErr5SubwayCorridorNoOpen.txt";
 
 //const std::string saveToFileName = "DirectUniformGrid32SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 
-const std::string saveToFileName = "IndirectUniformGrid64SubwayCorridorNoOpen.txt";
-//const std::string saveToFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "IndirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string saveToFileName = "IndirectUniformGrid32SubwayCorridorNoOpen.txt";
+
+//const std::string saveToFileName = "DirectTestDC.txt";
+const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
+//const std::string saveToFileName = "DirectU32AsymScene.txt";
+
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -426,11 +434,15 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             // 1. Initialize
             //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-            const uint3 seedResolution = uint3(8,8,8); 
+            const uint3 seedResolution = uint3(1,1,1); 
+            //const uint3 seedResolution = uint3(4,4,4); 
+            //const uint3 seedResolution = uint3(8,8,8); 
             //const uint3 seedResolution = uint3(16, 16, 16); 
             mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
 
-            const uint32_t kMaxCornersPerDispatch = 8192; // tune this
+            //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
+            const uint32_t kMaxCornersPerDispatch = 4096; // tune this
+            //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
 
             while (mAdaptiveProbeVolume->hasPendingBatch())
             {
@@ -513,7 +525,11 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mAdaptiveProbeVolume->setBuildTimeMs(ms);
             // 3. TODO: upload to GPU for visualization
             mAdaptiveProbeVolume->uploadToGPU();
-            mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
+            std::string debugFileName = saveToFileName;
+            size_t pos = debugFileName.find_last_of('.');
+            debugFileName.replace(pos, std::string::npos, "_DebugViz.txt");
+            //mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
+            mAdaptiveProbeVolume->printDebugInfo(debugFileName);
             mAdaptiveProbeVolume->saveToFile(saveToFileName);
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());

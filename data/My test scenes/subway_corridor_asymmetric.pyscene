@@ -1,0 +1,289 @@
+# ------------------------------------------------------------
+# Asymmetric room test scene for adaptive probe grid evaluation
+# Pure diffuse materials only
+# Room bounds: x,z in [-5,5], y in [0,4]
+# Busy side: larger ceiling light + two wall lights mounted on left/right walls
+# ------------------------------------------------------------
+
+# -------------------------
+# Materials
+# -------------------------
+room_mat = StandardMaterial('RoomMaterial')
+room_mat.baseColor = float4(0.78, 0.78, 0.78, 1.0)
+room_mat.roughness = 1.0
+
+# Vibrant diffuse object materials
+red_box_mat = StandardMaterial('RedBoxMaterial')
+red_box_mat.baseColor = float4(0.90, 0.20, 0.18, 1.0)
+red_box_mat.roughness = 1.0
+
+blue_box_mat = StandardMaterial('BlueBoxMaterial')
+blue_box_mat.baseColor = float4(0.18, 0.32, 0.92, 1.0)
+blue_box_mat.roughness = 1.0
+
+green_obj_mat = StandardMaterial('GreenObjectMaterial')
+green_obj_mat.baseColor = float4(0.18, 0.78, 0.30, 1.0)
+green_obj_mat.roughness = 1.0
+
+magenta_slab_mat = StandardMaterial('MagentaSlabMaterial')
+magenta_slab_mat.baseColor = float4(0.86, 0.18, 0.72, 1.0)
+magenta_slab_mat.roughness = 1.0
+
+yellow_obj_mat = StandardMaterial('YellowObjectMaterial')
+yellow_obj_mat.baseColor = float4(0.92, 0.74, 0.14, 1.0)
+yellow_obj_mat.roughness = 1.0
+
+cyan_obj_mat = StandardMaterial('CyanObjectMaterial')
+cyan_obj_mat.baseColor = float4(0.10, 0.78, 0.82, 1.0)
+cyan_obj_mat.roughness = 1.0
+
+orange_obj_mat = StandardMaterial('OrangeObjectMaterial')
+orange_obj_mat.baseColor = float4(0.96, 0.48, 0.10, 1.0)
+orange_obj_mat.roughness = 1.0
+
+purple_obj_mat = StandardMaterial('PurpleObjectMaterial')
+purple_obj_mat.baseColor = float4(0.42, 0.22, 0.82, 1.0)
+purple_obj_mat.roughness = 1.0
+
+plain_box_mat = StandardMaterial('PlainBoxMaterial')
+plain_box_mat.baseColor = float4(0.75, 0.75, 0.75, 1.0)
+plain_box_mat.roughness = 1.0
+
+# Emissive light materials
+ceiling_light_mat = StandardMaterial('CeilingLightMat')
+ceiling_light_mat.baseColor = float4(0, 0, 0, 1)
+ceiling_light_mat.roughness = 1.0
+ceiling_light_mat.emissiveColor = float3(1.0, 0.78, 0.58)
+ceiling_light_mat.emissiveFactor = 8
+
+left_wall_light_mat = StandardMaterial('LeftWallLightMat')
+left_wall_light_mat.baseColor = float4(0, 0, 0, 1)
+left_wall_light_mat.roughness = 1.0
+left_wall_light_mat.emissiveColor = float3(0.4, 0.8, 1.0)
+left_wall_light_mat.emissiveFactor = 7
+
+right_wall_light_mat = StandardMaterial('RightWallLightMat')
+right_wall_light_mat.baseColor = float4(0, 0, 0, 1)
+right_wall_light_mat.roughness = 1.0
+right_wall_light_mat.emissiveColor = float3(0.95, 0.32, 1.0)
+right_wall_light_mat.emissiveFactor = 7
+
+plain_light_mat = StandardMaterial('PlainLightMat')
+plain_light_mat.baseColor = float4(0, 0, 0, 1)
+plain_light_mat.roughness = 1.0
+plain_light_mat.emissiveColor = float3(0.8, 0.8, 0.8)
+plain_light_mat.emissiveFactor = 8
+
+# -------------------------
+# Meshes
+# -------------------------
+quadMesh = TriangleMesh.createQuad()
+cubeMesh = TriangleMesh.createCube()
+sphereMesh = TriangleMesh.createSphere(32)
+
+# -------------------------
+# Room shell
+# -------------------------
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('Floor', Transform(
+        scaling=float3(10.0, 1.0, 10.0),
+        translation=float3(0.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('Ceiling', Transform(
+        scaling=float3(10.0, 1.0, 10.0),
+        translation=float3(0.0, 4.0, 0.0),
+        rotationEulerDeg=float3(180.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('LeftWall', Transform(
+        scaling=float3(4.0, 1.0, 10.0),
+        translation=float3(-5.0, 2.0, 0.0),
+        rotationEulerDeg=float3(0.0, 0.0, -90.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('RightWall', Transform(
+        scaling=float3(4.0, 1.0, 10.0),
+        translation=float3(5.0, 2.0, 0.0),
+        rotationEulerDeg=float3(0.0, 0.0, 90.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('BackWall', Transform(
+        scaling=float3(10.0, 1.0, 4.0),
+        translation=float3(0.0, 2.0, -5.0),
+        rotationEulerDeg=float3(90.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('FrontWall', Transform(
+        scaling=float3(10.0, 1.0, 4.0),
+        translation=float3(0.0, 2.0, 5.0),
+        rotationEulerDeg=float3(-90.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, room_mat)
+)
+
+# -------------------------
+# Busy side geometry (x < 0)
+# -------------------------
+# Tall box
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('TallBox', Transform(
+        scaling=float3(0.9, 2.4, 0.9),
+        translation=float3(-3.8, 1.2, -2.5)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, red_box_mat)
+)
+
+# Wide box
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('WideBox', Transform(
+        scaling=float3(1.6, 1.2, 1.0),
+        translation=float3(-2.0, 0.6, 1.8)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, blue_box_mat)
+)
+
+# Sphere / curved object
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('SphereObject', Transform(
+#        scaling=float3(0.7, 0.7, 0.7),
+#        translation=float3(-3.0, 0.7, 0.4)
+#    )),
+#    sceneBuilder.addTriangleMesh(sphereMesh, green_obj_mat)
+#)
+
+# Thin slab
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('ThinSlabMagenta', Transform(
+        scaling=float3(0.3, 3.0, 1.5),
+        translation=float3(-1.0, 1.5, -1.0)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, magenta_slab_mat)
+)
+
+# Thin slab
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('ThinSlabGreen', Transform(
+        scaling=float3(0.3, 3.0, 1.5),
+        translation=float3(-1.0, 1.5, 1.0)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, green_obj_mat)
+)
+
+# Unorthodox object 1: long tilted beam near front-left
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('TiltedBeamA', Transform(
+        scaling=float3(0.45, 2.5, 0.6),
+        translation=float3(-4, 1.25, 1.2),
+        rotationEulerDeg=float3(0.0, 18.0, -28.0)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, orange_obj_mat)
+)
+
+# Unorthodox object 2: flat skewed bar crossing open area a bit
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('SkewedBarB', Transform(
+        scaling=float3(2.0, 0.35, 0.55),
+        translation=float3(-2.9, 0.5, -0.9),
+        rotationEulerDeg=float3(12.0, -32.0, 18.0)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, cyan_obj_mat)
+)
+
+# Unorthodox object 3: off-balance floating-ish cube tower piece
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('LeaningBlockC', Transform(
+        scaling=float3(0.65, 1.45, 0.65),
+        translation=float3(-2.3, 1.6, -3.2),
+        rotationEulerDeg=float3(8.0, 22.0, 31.0)
+    )),
+    sceneBuilder.addTriangleMesh(cubeMesh, purple_obj_mat)
+)
+
+# -------------------------
+# Plain side geometry (x > 0)
+# -------------------------
+#sceneBuilder.addMeshInstance(
+#    sceneBuilder.addNode('PlainBox', Transform(
+#        scaling=float3(0.8, 0.8, 0.8),
+#        translation=float3(3.2, 0.4, 0.8)
+#    )),
+#    sceneBuilder.addTriangleMesh(cubeMesh, plain_box_mat)
+#)
+
+# -------------------------
+# Busy side lights
+# -------------------------
+# Ceiling light kept entirely on busy side (x < 0)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('BusyCeilingLight', Transform(
+        scaling=float3(1.8, 1.0, 1.8),
+        translation=float3(-3.1, 3.99, 0.0),
+        rotationEulerDeg=float3(180.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, ceiling_light_mat)
+)
+
+# Two side lights mounted on the z > 0 wall (front wall), separated along x.
+# Both face toward -Z into the room.
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('BusyFrontWallLightLeft', Transform(
+        scaling=float3(1.2, 1.0, 1.2),
+        translation=float3(-3.0, 2.1, 4.99),
+        rotationEulerDeg=float3(-90.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, left_wall_light_mat)
+)
+
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('BusyFrontWallLightRight', Transform(
+        scaling=float3(1.2, 1.0, 1.2),
+        translation=float3(-3, 2.1, -4.99),
+        rotationEulerDeg=float3(90.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, right_wall_light_mat)
+)
+
+# Plain side light
+# -------------------------
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('PlainLight', Transform(
+        scaling=float3(1.8, 1.0, 1.8),
+        translation=float3(3.0, 3.99, 0.0),
+        rotationEulerDeg=float3(180.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, plain_light_mat)
+)
+sceneBuilder.addMeshInstance(
+    sceneBuilder.addNode('PlainFrontWallLightRight', Transform(
+        scaling=float3(1.2, 1.0, 1.2),
+        translation=float3(3.0, 2.1, -4.99),
+        rotationEulerDeg=float3(90.0, 0.0, 0.0)
+    )),
+    sceneBuilder.addTriangleMesh(quadMesh, right_wall_light_mat)
+	)
+# -------------------------
+# Camera
+# -------------------------
+camera = Camera()
+camera.position = float3(3.6336,1.7370, -0.2974)
+camera.target = float3(2.6358, 1.5, -0.2476)
+camera.up = float3(0.0, 1.6926, 0.0)
+camera.farPlane = 10000.0
+camera.nearPlane = 0.1
+sceneBuilder.addCamera(camera)

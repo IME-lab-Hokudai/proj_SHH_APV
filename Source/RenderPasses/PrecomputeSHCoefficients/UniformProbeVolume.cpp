@@ -25,7 +25,7 @@ void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution
 
     auto bounds = pScene->getSceneBounds();
 
-    float boundsScale = 0.96f;
+    float boundsScale = 0.98f;
 
     // Scale the scene bounds about its center.
     float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);

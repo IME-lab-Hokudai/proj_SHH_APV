@@ -1073,7 +1073,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     // Memory footprint
     // ------------------------------------------------------------------
     out << "MEMORY\n";
-    out  << mem.totalBytes << "\n";
+    out  << mem.totalMB << "\n";
 
     // ------------------------------------------------------------------
     // Corners
@@ -1321,7 +1321,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
 
     auto bounds = pScene->getSceneBounds();
 
-    float boundsScale = 0.96f;
+    float boundsScale = 0.98f;
     float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
     float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
     halfExtent *= boundsScale;
@@ -1513,10 +1513,10 @@ AdaptiveProbeVolume::MemoryFootprintInfo AdaptiveProbeVolume::calculateMemoryFoo
     // GPU packed layout
     info.gpuProbesBytes = uint64_t(mProbes.size()) * sizeof(GPUProbe);
     info.gpuCornersBytes = uint64_t(mCorners.size()) * sizeof(GPUCorner);
-
+    const double invMB = 1.0 / 1e6;               // decimal
     info.totalBytes =
     info.gpuCornersBytes +
     info.gpuProbesBytes;
-
+    info.totalMB = info.totalBytes * invMB;
     return info;
 }

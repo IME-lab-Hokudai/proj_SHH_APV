@@ -16,14 +16,13 @@ roof_light_mat.emissiveFactor = 6.5
 ad_left_mats = []
 left_textures = [
     'textures/left_ad_1.jpg', 
-    'textures/left_ad_2.jpg', 
-    'textures/left_ad_3.jpg'
+    'textures/left_ad_2.jpg'
 ]
 
 for i, tex_path in enumerate(left_textures):
     mat = StandardMaterial(f'AdLeftMat_{i}')
     mat.loadTexture(MaterialTextureSlot.Emissive, tex_path)
-    mat.emissiveFactor = 8.0 
+    mat.emissiveFactor = 12.0 
     mat.baseColor = float4(0, 0, 0, 1)
     ad_left_mats.append(mat)
 
@@ -31,14 +30,13 @@ for i, tex_path in enumerate(left_textures):
 ad_right_mats = []
 right_textures = [
     'textures/right_ad_1.jpg', 
-    'textures/right_ad_2.jpg', 
-    'textures/right_ad_3.jpg'
+    'textures/right_ad_2.jpg'
 ]
 
 for i, tex_path in enumerate(right_textures):
     mat = StandardMaterial(f'AdRightMat_{i}')
     mat.loadTexture(MaterialTextureSlot.Emissive, tex_path)
-    mat.emissiveFactor = 16.0 
+    mat.emissiveFactor = 12.0 
     mat.baseColor = float4(0, 0, 0, 1)
     ad_right_mats.append(mat)
 
