@@ -37,8 +37,8 @@
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 
-const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
-
+//const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
+const std::string loadFromFileName = "DirectAbsErr10AsymSceneN5.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 #else
 //const std::string loadFromFileName = "DirectUniformGrid32.txt";
@@ -47,8 +47,8 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang
 //const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string loadFromFileName = "IndirectUniformGrid64.txt";
 
-const std::string loadFromFileName = "DirectUniformGrid32SubwayCorridorNoOpen.txt";
-//const std::string loadFromFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string loadFromFileName = "DirectAbsErr10AsymSceneN5.txt";
+const std::string loadFromFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif

@@ -443,90 +443,94 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 litColor = albedo;
 
     const uint instanceID = vsOut.instanceID.index;
-    if (instanceID < 27) discard;
+    //if (instanceID < 20) {
+         //litColor = albedo;
+        //discard;
+    //}
+        
 
-    if (instanceID == gFloorInstanceID)
-    {
-        float3 irradiance = gFloorLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gLeftWallInstanceID)
-    {
-        float3 irradiance = gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRightWallInstanceID)
-    {
-        float3 irradiance = gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRoofLeftInstanceID)
-    {
-        float3 irradiance = gRoofLeftLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gRoofRightInstanceID)
-    {
-        float3 irradiance = gRoofRightLightmap.Sample(gLinearSampler, quadUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar0InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar0CenterW, gPillar0HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar0Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar1InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar1CenterW, gPillar1HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar1Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar2InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar2CenterW, gPillar2HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar2Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar3InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar3CenterW, gPillar3HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar3Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar4InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar4CenterW, gPillar4HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar4Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar5InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar5CenterW, gPillar5HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar5Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar6InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar6CenterW, gPillar6HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar6Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else if (instanceID == gPillar7InstanceID)
-    {
-        float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar7CenterW, gPillar7HalfExtentW);
-        pillarUV.y = 1.0f - pillarUV.y;
-        float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
-        litColor = albedo * irradiance / 3.14159265f;
-    }
-    else {
+    //if (instanceID == gFloorInstanceID)
+    //{
+    //    float3 irradiance = gFloorLightmap.Sample(gLinearSampler, quadUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gLeftWallInstanceID)
+    //{
+    //    float3 irradiance = gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gRightWallInstanceID)
+    //{
+    //    float3 irradiance = gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gRoofLeftInstanceID)
+    //{
+    //    float3 irradiance = gRoofLeftLightmap.Sample(gLinearSampler, quadUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gRoofRightInstanceID)
+    //{
+    //    float3 irradiance = gRoofRightLightmap.Sample(gLinearSampler, quadUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar0InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar0CenterW, gPillar0HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar0Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar1InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar1CenterW, gPillar1HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar1Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar2InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar2CenterW, gPillar2HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar2Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar3InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar3CenterW, gPillar3HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar3Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar4InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar4CenterW, gPillar4HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar4Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar5InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar5CenterW, gPillar5HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar5Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar6InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar6CenterW, gPillar6HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar6Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else if (instanceID == gPillar7InstanceID)
+    //{
+    //    float2 pillarUV = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gPillar7CenterW, gPillar7HalfExtentW);
+    //    pillarUV.y = 1.0f - pillarUV.y;
+    //    float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
+    //    litColor = albedo * irradiance / 3.14159265f;
+    //}
+    //else {
         float3 finalSH[MAX_SH_BASIS];
         // 1. Find the Leaf Voxel
         int probeIdx = traverseOctree(shadingData.posW);
@@ -535,7 +539,8 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
-    }
+   // }
+
     litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);
 }

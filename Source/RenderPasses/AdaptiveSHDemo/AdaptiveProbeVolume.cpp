@@ -454,6 +454,9 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
+    // ------------------------------------------------------------
+    // Reset state
+    // ------------------------------------------------------------
     mProbes.clear();
     mCorners.clear();
     mPendingNewCorners.clear();
@@ -466,20 +469,23 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     mSeedResolution = uint3(0);
     mSeedProbeIndices.clear();
 
+    // ------------------------------------------------------------
+    // Header
+    // ------------------------------------------------------------
     std::string header;
     in >> header;
 
     if (header != "ADAPTIVE_GRID_V5_SEEDED")
     {
-        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
+        logError("Invalid file format or version mismatch: " + filename);
         return;
     }
 
     std::string tag;
 
-    // ------------------------------------------------------------------
-    // Settings
-    // ------------------------------------------------------------------
+    // ------------------------------------------------------------
+    // SETTINGS
+    // ------------------------------------------------------------
     in >> tag;
     if (tag != "SETTINGS")
     {
@@ -491,20 +497,21 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
 
-    // ------------------------------------------------------------------
-    // Stats
-    // ------------------------------------------------------------------
+    // ------------------------------------------------------------
+    // STATS
+    // ------------------------------------------------------------
     in >> tag;
     if (tag != "STATS")
     {
         logError("Missing STATS block in: " + filename);
         return;
     }
+
     in >> mBuildTimeMs;
 
-    // ------------------------------------------------------------------
-    // Seed grid metadata
-    // ------------------------------------------------------------------
+    // ------------------------------------------------------------
+    // SEED GRID
+    // ------------------------------------------------------------
     in >> tag;
     if (tag != "SEED_GRID")
     {
@@ -522,15 +529,16 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
     size_t seedCount = 0;
     in >> seedCount;
+
     mSeedProbeIndices.resize(seedCount);
     for (size_t i = 0; i < seedCount; ++i)
     {
         in >> mSeedProbeIndices[i];
     }
 
-    // ------------------------------------------------------------------
-    // Memory block (read and ignore except for validation/logging)
-    // ------------------------------------------------------------------
+    // ------------------------------------------------------------
+    // MEMORY (MB, decimal)
+    // ------------------------------------------------------------
     in >> tag;
     if (tag != "MEMORY")
     {
@@ -538,14 +546,14 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
-    uint64_t totalBytes = 0;
-    in >> totalBytes;
-
-    // ------------------------------------------------------------------
-    // Corners
-    // ------------------------------------------------------------------
+    double fileTotalMB = 0.0;
+    in >> fileTotalMB;
+    // ------------------------------------------------------------
+    // CORNERS
+    // ------------------------------------------------------------
     size_t numCorners = 0;
     in >> tag >> numCorners;
+
     if (tag != "NUM_CORNERS")
     {
         logError("Missing NUM_CORNERS block in: " + filename);
@@ -559,20 +567,26 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         Corner& c = mCorners[i];
 
         int isValidInt = 0;
+
         in >> c.position.x >> c.position.y >> c.position.z;
         in >> c.maxLambdaVecL2 >> c.coeffVecL2 >> isValidInt;
+
         c.isValid = (isValidInt != 0);
 
+        // --- SH COEFFS ---
         size_t numCoeffs = 0;
         in >> numCoeffs;
+
         c.shCoeffs.resize(numCoeffs);
         for (size_t k = 0; k < numCoeffs; ++k)
         {
             in >> c.shCoeffs[k].x >> c.shCoeffs[k].y >> c.shCoeffs[k].z;
         }
 
+        // --- GRADIENTS ---
         size_t numGrads = 0;
         in >> numGrads;
+
         c.shGradients.resize(numGrads);
         for (size_t k = 0; k < numGrads; ++k)
         {
@@ -581,20 +595,22 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
             in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
         }
 
-        // Rebuild lookup table for future corner sharing
+        // --- Rebuild corner lookup ---
         CornerKey key{
             (int)std::floor(c.position.x * 10000.0f + 0.5f),
             (int)std::floor(c.position.y * 10000.0f + 0.5f),
             (int)std::floor(c.position.z * 10000.0f + 0.5f)
         };
+
         mCornerLookup[key] = (int)i;
     }
 
-    // ------------------------------------------------------------------
-    // Probes
-    // ------------------------------------------------------------------
+    // ------------------------------------------------------------
+    // PROBES
+    // ------------------------------------------------------------
     size_t numProbes = 0;
     in >> tag >> numProbes;
+
     if (tag != "NUM_PROBES")
     {
         logError("Missing NUM_PROBES block in: " + filename);
@@ -602,11 +618,13 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     }
 
     mProbes.resize(numProbes);
+
     for (size_t i = 0; i < numProbes; ++i)
     {
         Probe& p = mProbes[i];
 
         int isLeafInt = 0;
+
         in >> isLeafInt >> p.level;
         p.isLeaf = (isLeafInt != 0);
 
@@ -619,5 +637,6 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     }
 
     in.close();
+
     logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
 }

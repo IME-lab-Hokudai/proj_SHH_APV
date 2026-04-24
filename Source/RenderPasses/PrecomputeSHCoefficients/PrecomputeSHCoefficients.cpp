@@ -81,7 +81,8 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "IndirectUniformGrid32SubwayCorridorNoOpen.txt";
 
 //const std::string saveToFileName = "DirectTestDC.txt";
-const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
+//const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
+const std::string saveToFileName = "DirectAbsErr10AsymSceneN5.txt";
 //const std::string saveToFileName = "DirectU32AsymScene.txt";
 
 namespace
