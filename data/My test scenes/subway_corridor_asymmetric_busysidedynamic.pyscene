@@ -291,7 +291,9 @@ bunny_scales = [
 float3(0.6, 0.6, 0.6),
 float3(0.6, 0.6, 0.6),
 float3(0.4, 0.4, 0.4),
+float3(0.4, 0.4, 0.4),
 ]
+
 # Put on floor
 bunny_y = 0.0
 
@@ -301,7 +303,8 @@ bunny_y = 0.0
 bunny_positions_busy = [
     float3(-2.5, 1.8, 2.5),
     float3(-2.5, 1.8, 0),
-    float3(-3, 2.5,  -2.5)
+    float3(-3, 2.5,  -2.5),
+    float3(-3.5, 0.5,  -4.1)
 ]
 
 # ------------------------------------------------------------
@@ -335,9 +338,8 @@ for i, p in enumerate(bunny_positions):
 # Camera
 # -------------------------
 camera = Camera()
-camera.position = float3(3.6336,1.7370, -0.2974)
-camera.target = float3(2.6358, 1.5, -0.2476)
-camera.up = float3(0.0, 1.6926, 0.0)
+camera.position = float3(1.6881,2.9725, -0.2174)
+camera.target = float3(0.6992, 2.8234, -0.1676)
 camera.farPlane = 10000.0
 camera.nearPlane = 0.1
 sceneBuilder.addCamera(camera)

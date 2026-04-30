@@ -47,8 +47,9 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang
 //const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string loadFromFileName = "IndirectUniformGrid64.txt";
 
-//const std::string loadFromFileName = "DirectAbsErr10AsymSceneN5.txt";
-const std::string loadFromFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
+//const std::string loadFromFileName = "DirectU32AsymScene.txt";
+const std::string loadFromFileName = "DirectU64AsymScene.txt";
+//const std::string loadFromFileName = "DirectUniformGrid64SubwayCorridorNoOpen.txt";
 
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif

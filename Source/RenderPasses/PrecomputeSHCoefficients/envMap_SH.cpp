@@ -454,28 +454,6 @@ void generateUniformSphereDirSamples(int sampleCount, std::vector<ProbeDirSample
     out.clear();
     out.reserve(sampleCount);
 
-    //std::mt19937 rng(12345); // fixed seed for reproducibility
-    //std::mt19937 rng(123); // fixed seed for reproducibility
-    //std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-
-    //float dOmega = 4.0f * float(M_PI) / float(sampleCount); // Uniform solid angle per sample
-
-    //for (int i = 0; i < sampleCount; ++i)
-    //{
-    //     Generate in standard polar coordinates z -up, y -right, x -forward
-    //    float z = 1.0f - 2.0f * dist(rng);          // up 
-    //    float phi = 2.0f * float(M_PI) * dist(rng); // azimuth
-    //    float h = sqrtf(1.0f - z * z);              // radius in xy-plane
-
-    //    
-    //    float x = h * cosf(phi); // forward
-    //    float y = h * sinf(phi); // right
-
-    //    float3 dir = {x, y, z};  // x, y, z
-    //    dir = math::normalize(dir);
-    //    out.push_back({dir, dOmega});
-    //}
-
     float phi = (sqrtf(5.0f) - 1.0f) / 2.0f; // Golden Ratio
     float ga = phi * 2.0f * float(M_PI);     // Golden Angle
 

@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -82,8 +82,8 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
 //const std::string saveToFileName = "DirectTestDC.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
-const std::string saveToFileName = "DirectAbsErr10AsymSceneN5.txt";
-//const std::string saveToFileName = "DirectU32AsymScene.txt";
+//const std::string saveToFileName = "DirectAbsErr10AsymSceneN5.txt";
+const std::string saveToFileName = "DirectU32AsymScene.txt";
 
 namespace
 {
