@@ -1292,11 +1292,32 @@ void AdaptiveProbeVolume::startBuildSeeded(
     bool useRelativeError
 )
 {
-    mProbes.clear();
-    mCorners.clear();
-    mPendingNewCorners.clear();
-    mProbesPendingCheck.clear();
-    mCornerLookup.clear();
+    uint32_t cellsPerAxis = 1u << mMaxLevel;
+    uint64_t maxNodes = 0;
+    uint64_t levelCount = 1;
+
+    for (int  l = 0; l <= mMaxLevel; ++l)
+    {
+        maxNodes += levelCount;
+        levelCount *= 8;
+    }
+
+    uint64_t maxCorners =
+        uint64_t(cellsPerAxis + 1) *
+        uint64_t(cellsPerAxis + 1) *
+        uint64_t(cellsPerAxis + 1);
+
+    mProbes.reserve(size_t(maxNodes));
+    mCorners.reserve(size_t(maxCorners));
+    mPendingNewCorners.reserve(size_t(maxCorners));
+    mProbesPendingCheck.reserve(size_t(maxNodes));
+    mCornerLookup.reserve(size_t(maxCorners * 2));
+
+    //mProbes.clear();
+    //mCorners.clear();
+    //mPendingNewCorners.clear();
+    //mProbesPendingCheck.clear();
+    //mCornerLookup.clear();
 
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
@@ -1598,18 +1619,16 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
 
     for (int probeIdx : mProbesPendingCheck)
     {
-        Probe& probe = mProbes[probeIdx];
+        if (mProbes[probeIdx].level >= mMaxLevel) continue;
 
-        if (probe.level >= mMaxLevel) continue;
-
-        float3 diag = probe.maxPoint - probe.minPoint;
+        float3 diag = mProbes[probeIdx].maxPoint - mProbes[probeIdx].minPoint;
         float distSq = dot(diag, diag);
 
         float maxProbeError = 0.0f;
 
         for (int k = 0; k < 8; ++k)
         {
-            int cIdx = probe.corners[k];
+            int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
 
             float e = 0.5f * c.maxLambdaVecL2 * distSq;
@@ -1626,18 +1645,13 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
         if (maxProbeError <= mCurrentThreshold)
             continue;
 
-        // ------------------------------------------------------------
-        // Coarse-stage rule:
-        // - Below maxEvalLevel: subdivide and continue coarse tracing.
-        // - At maxEvalLevel: subdivide once, but do NOT enqueue children.
-        // ------------------------------------------------------------
-        bool enqueueChildrenForCoarse = (probe.level < maxEvalLevel);
+        bool enqueueChildrenForCoarse = (mProbes[probeIdx].level < maxEvalLevel);
 
-        float3 minP = probe.minPoint;
-        float3 maxP = probe.maxPoint;
+        float3 minP = mProbes[probeIdx].minPoint;
+        float3 maxP = mProbes[probeIdx].maxPoint;
         float3 center = (minP + maxP) * 0.5f;
 
-        probe.isLeaf = false;
+        mProbes[probeIdx].isLeaf = false;
 
         float quantizationScale = 10000.0f;
 
@@ -1663,8 +1677,6 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
             int idx = (int)mCorners.size() - 1;
             mCornerLookup[key] = idx;
 
-            // Important:
-            // At the coarse cap, create topology but do not trace these corners yet.
             if (enqueueChildrenForCoarse)
                 mPendingNewCorners.push_back(idx);
 
@@ -1695,7 +1707,7 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
         int c_eZ_X0Y1 = addNewCorner({ minP.x, maxP.y, center.z });
         int c_eZ_X1Y1 = addNewCorner({ maxP.x, maxP.y, center.z });
 
-        const int* P = probe.corners;
+        const int* P = mProbes[probeIdx].corners;
 
         int grid[3][3][3];
         grid[0][0][0] = P[0]; grid[0][0][2] = P[1]; grid[0][2][0] = P[2]; grid[0][2][2] = P[3];
@@ -1716,10 +1728,12 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
         grid[0][0][1] = c_eZ_X0Y0; grid[2][0][1] = c_eZ_X1Y0;
         grid[0][2][1] = c_eZ_X0Y1; grid[2][2][1] = c_eZ_X1Y1;
 
+        const int parentLevel = mProbes[probeIdx].level;
+
         for (int k = 0; k < 8; ++k)
         {
             Probe child;
-            child.level = probe.level + 1;
+            child.level = parentLevel + 1;
 
             float3 childSize = (maxP - minP) * 0.5f;
             float3 offset = float3(
@@ -1747,11 +1761,12 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
             mProbes.push_back(child);
 
             int childIdx = (int)mProbes.size() - 1;
-            probe.children[k] = childIdx;
+            mProbes[probeIdx].children[k] = childIdx;
 
             if (enqueueChildrenForCoarse)
                 nextProbesToCheck.push_back(childIdx);
         }
     }
+
     mProbesPendingCheck = nextProbesToCheck;
 }

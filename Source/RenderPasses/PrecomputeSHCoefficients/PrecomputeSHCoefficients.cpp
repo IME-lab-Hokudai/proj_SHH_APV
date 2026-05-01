@@ -770,8 +770,8 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
 
     const LocalProgressiveStage stages[] =
     {
-        {128,  8.0f, false, true}, // coarse metric-only topology
-        {1024, 1.0f, true,  true}  // full adaptive: store runtime + refine onward
+        {128,  1.0f, false, true}, // coarse metric-only topology
+        {1024, 1.0f, true,  false}  // full adaptive: store runtime + refine onward
     };
 
     mAdaptiveProbeVolume->resetBuildStats();
@@ -891,27 +891,28 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
                         calculateSHCoeffs(coeffs, samples, stage.spp);
 
                         //at this point grid is decided only retrace for matching spp with uniform grid
-                        //calculateSHCoeffsGradients(grads, xPolar, samples, stage.spp, samplingDirs);
-                        calculateSHCoeffsGradientsRGBAndHessiansLum(
-                            grads,
-                            hessians,
-                            xPolar,
-                            samples,
-                            stage.spp,
-                            samplingDirs
-                        );
-
-                            mAdaptiveProbeVolume->setCornerData(
+                        calculateSHCoeffsGradients(grads, xPolar, samples, stage.spp, samplingDirs);
+                        mAdaptiveProbeVolume->setCornerRuntimeData(
                             batchStart + cornerLocalIdx,
                             coeffs,
-                            grads,
-                            hessians
-                         );
-                        //mAdaptiveProbeVolume->setCornerRuntimeData(
-                        //    batchStart + cornerLocalIdx,
-                        //    coeffs,
-                        //    grads
+                            grads
+                        );
+
+                        //calculateSHCoeffsGradientsRGBAndHessiansLum(
+                        //    grads,
+                        //    hessians,
+                        //    xPolar,
+                        //    samples,
+                        //    stage.spp,
+                        //    samplingDirs
                         //);
+
+                         //   mAdaptiveProbeVolume->setCornerData(
+                         //   batchStart + cornerLocalIdx,
+                         //   coeffs,
+                         //   grads,
+                         //   hessians
+                         //);
                     }
                     else
                     {
@@ -937,24 +938,19 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
                     }
                 }
             }
-            // ------------------------------------------------------------
-            // Important:
-            // Only refinement stages call finishBatch().
-            // Final bake stage must NOT subdivide.
-            // ------------------------------------------------------------
-            //if (stage.refineAfterThisStage)
-            //{
+            if (stage.refineAfterThisStage)
+            {
                 mAdaptiveProbeVolume->finishBatch();
-            //}
-            //else
-            //{
-            //    mAdaptiveProbeVolume->clearPendingBatch();
-            //}
+            }
+            else
+            {
+                mAdaptiveProbeVolume->clearPendingBatch();
+            }
         }
-        if (stageIdx == 0)
-        {
-            mAdaptiveProbeVolume->printCoarseStageDebugInfo("CoarseStageDebug.txt");
-        }
+        //if (stageIdx == 0)
+        //{
+        //    mAdaptiveProbeVolume->printCoarseStageDebugInfo("CoarseStageDebug.txt");
+        //}
     }
 }
 
