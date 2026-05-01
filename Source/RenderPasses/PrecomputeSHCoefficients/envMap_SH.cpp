@@ -10,6 +10,32 @@ int shOrder = -1;
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 
+// ------------------------------------------------------------------
+// Helper: Analytic Eigenvalues for 3x3 Symmetric Matrix
+// ------------------------------------------------------------------
+static void computeEigenvalues3x3(const float3x3& A, float& e1, float& e2, float& e3)
+{
+    const float ONE_THIRD = 1.0f / 3.0f;
+    float m = (A[0][0] + A[1][1] + A[2][2]) * ONE_THIRD;
+    float k00 = A[0][0] - m, k11 = A[1][1] - m, k22 = A[2][2] - m;
+    float k01 = A[0][1], k02 = A[0][2], k12 = A[1][2];
+    float q = 0.5f * (k00 * (k11 * k22 - k12 * k12) - k01 * (k01 * k22 - k12 * k02) + k02 * (k01 * k12 - k11 * k02));
+    float p = (k00 * k00 + k11 * k11 + k22 * k22 + 2.0f * (k01 * k01 + k02 * k02 + k12 * k12)) / 6.0f;
+
+    if (p < 1e-20f) { e1 = e2 = e3 = m; return; }
+
+    float p_sqrt = std::sqrt(p);
+    float det_val = q / (p * p_sqrt);
+    det_val = std::max(-1.0f, std::min(1.0f, det_val));
+    float phi = ONE_THIRD * std::acos(det_val);
+    float two_sqrt_p = 2.0f * p_sqrt;
+    float s = std::sin(phi), c = std::cos(phi);
+
+    e1 = m + two_sqrt_p * c;
+    e2 = m - two_sqrt_p * (c * 0.5f + s * 0.8660254f);
+    e3 = m - two_sqrt_p * (c * 0.5f - s * 0.8660254f);
+}
+
 void initSHBasisGradientAndHessianTables(const std::vector<ProbeDirSample>& dirSamples)
 {
     shOrder = 2; // fixed to L2 for now
@@ -127,7 +153,7 @@ void calculateSHCoeffs(
 void calculateSHCoeffsGradients(
     std::vector<GradSHCoeff>& gradOut,
     const float3& gridPos,
-    const std::vector<ProbeSampleData>& probeSamplingResults,
+    const ProbeSampleData* probeSamplingResults, uint32_t sampleCount,
     const std::vector<ProbeDirSample>& samplingDir
 )
 {
@@ -138,14 +164,14 @@ void calculateSHCoeffsGradients(
     {
         GradSHCoeff grad;
         HessianSHCoeff hessian;
-        calculateGradSHCoeffLM(gridPos, probeSamplingResults, samplingDir, basisIdx, grad);
+        calculateGradSHCoeffLM(gridPos, probeSamplingResults, sampleCount, samplingDir, basisIdx, grad);
         gradOut[basisIdx] = grad;
     }
 }
 
 void calculateGradSHCoeffLM(
     const float3& x,
-    const std::vector<ProbeSampleData>& samplingData,
+    const ProbeSampleData* samplingData, uint32_t sampleCount,
     const std::vector<ProbeDirSample>& samplingDir,
     const int& basisIdx,
     GradSHCoeff& outGrad
@@ -157,7 +183,7 @@ void calculateGradSHCoeffLM(
     // Rec. 709 Luminance weights
     const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
-    int samplingSize = samplingData.size();
+    int samplingSize = sampleCount;
     float Omega_i = (4.0f * M_PI) / (float)samplingSize;
 
     for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
@@ -480,6 +506,159 @@ void generateUniformSphereDirSamples(int sampleCount, std::vector<ProbeDirSample
     }
 }
 
+static float radicalInverseVdC(uint32_t bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10f;
+}
+
+void generateProgressiveSphereDirSamples(int sampleCount, std::vector<ProbeDirSample>& out)
+{
+    out.clear();
+    out.reserve(sampleCount);
+
+    const float golden = 0.6180339887498948f;
+
+    for (uint32_t i = 0; i < uint32_t(sampleCount); ++i)
+    {
+        float u = radicalInverseVdC(i);
+        float v = std::fmod(float(i) * golden, 1.0f);
+
+        float z = 1.0f - 2.0f * u;
+        float r = std::sqrt(std::max(0.0f, 1.0f - z * z));
+        float theta = 2.0f * float(M_PI) * v;
+
+        float3 dir = float3(r * std::cos(theta), r * std::sin(theta), z);
+
+        // dOmega here is max-set placeholder. Use activeSampleCount weight in SH accumulation.
+        out.push_back({ math::normalize(dir), 4.0f * float(M_PI) / float(sampleCount) });
+    }
+}
+
+void calculateSHCoeffs(std::vector<float3>& out, const ProbeSampleData* samples, uint32_t sampleCount)
+{
+    const int numBasis = 9;
+    out.assign(numBasis, float3(0));
+
+    float weight = 4.0f * float(M_PI) / float(sampleCount);
+
+    for (uint32_t i = 0; i < sampleCount; ++i)
+    {
+        const float4& Li = samples[i].Li;
+
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            float sh = SHBasisTable[i * numBasis + basisIdx];
+            out[basisIdx] += float3(Li.x, Li.y, Li.z) * sh * weight;
+        }
+    }
+}
+
+void calculateSHBuildMetricsOnly(float& coeffVecL2, float& maxLambdaVecL2, const float3& xPolar, const ProbeSampleData* samples, uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDirs, bool useRelativeMetric)
+{
+    constexpr int numBasis = 9;
+
+    // ------------------------------------------------------------
+    // 1. Optional coefficient norm, only needed for relative metric.
+    // ------------------------------------------------------------
+    coeffVecL2 = 1.0f;
+
+    if (useRelativeMetric)
+    {
+        std::vector<float3> coeffs;
+        calculateSHCoeffs(coeffs, samples, sampleCount);
+
+        const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+        float sumSqL = 0.0f;
+        for (const auto& coeff : coeffs)
+        {
+            float lum = dot(coeff, kLuma);
+            sumSqL += lum * lum;
+        }
+
+        coeffVecL2 = std::sqrt(sumSqL);
+    }
+
+    // ------------------------------------------------------------
+    // 2. Hessian metric, luminance only.
+    // This mirrors calculateGradRGBAndHessianLumSHCoeffLM(),
+    // but skips gradient accumulation.
+    // ------------------------------------------------------------
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    float sumLambdaSq = 0.0f;
+    const float Omega_i = 4.0f * float(M_PI) / float(sampleCount);
+
+    for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+    {
+        float3x3 H = float3x3::zeros();
+
+        for (uint32_t sampleIdx = 0; sampleIdx < sampleCount; ++sampleIdx)
+        {
+            const ProbeSampleData& sd = samples[sampleIdx];
+
+            if (sd.hitT < 0.0f) continue;
+
+            float3 s = float3(sd.s.x, sd.s.y, sd.s.z);
+            float3 n = float3(sd.n.x, sd.n.y, sd.n.z);
+            float3 L = float3(sd.Li.x, sd.Li.y, sd.Li.z);
+
+            float L_lum = dot(L, kLuma);
+
+            float3 q = s - xPolar;
+
+            float lenQ = length(q);
+            //if (lenQ < 1e-6f) continue;
+
+            float rInv = 1.0f / lenQ;
+            float rInvSq = rInv * rInv;
+            float cosXi = -(dot(n, q)) * rInv;
+
+            float3 gradOmega = gradientOmega(q, n, rInv, cosXi, Omega_i);
+            float3x3 H_Omega = hessianOmega(q, n, rInv, cosXi, Omega_i);
+
+            float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+            float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+            float3x3 hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+
+            for (int j = 0; j < 3; ++j)
+            {
+                for (int k = j; k < 3; ++k)
+                {
+                    float term1 = H_Omega[j][k] * Ylm;
+
+                    float term2 = -rInv * (
+                        gradOmega[j] * gradYlm[k] +
+                        gradOmega[k] * gradYlm[j]
+                        );
+
+                    float term3 = Omega_i * rInvSq * hessYlm[j][k];
+
+                    float hessContrib = term1 + term2 + term3;
+
+                    H[j][k] += L_lum * hessContrib;
+
+                    if (j != k)
+                        H[k][j] += L_lum * hessContrib;
+                }
+            }
+        }
+
+        float e1, e2, e3;
+        computeEigenvalues3x3(H, e1, e2, e3);
+
+        float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+        sumLambdaSq += maxLambda * maxLambda;
+    }
+
+    maxLambdaVecL2 = std::sqrt(sumLambdaSq);
+}
+
 float3 gradientOmega(const float3& q, const float3& n, float rInv, float cosXi, float factor)
 {
     // Numerical guard for cosXi
@@ -707,7 +886,8 @@ void calculateChannelRGradAndHessianSHCoeffLM(const float3& x, const std::vector
 // Calculates RGB Gradient (for color interpolation) and Luminance Hessian (for geometric error)
 void calculateGradRGBAndHessianLumSHCoeffLM(
     const float3& x,
-    const std::vector<ProbeSampleData>& samplingData,
+    const ProbeSampleData* samplingData,
+    uint32_t sampleCount,
     const std::vector<ProbeDirSample>& samplingDir,
     const int& basisIdx,
     GradSHCoeff& outGrad,
@@ -720,7 +900,7 @@ void calculateGradRGBAndHessianLumSHCoeffLM(
     // Rec. 709 Luminance weights
     const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
-    int samplingSize = samplingData.size();
+    int samplingSize = sampleCount;
     float Omega_i = (4.0f * M_PI) / (float)samplingSize;
 
     for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
@@ -793,7 +973,8 @@ void calculateSHCoeffsGradientsRGBAndHessiansLum(
     std::vector<GradSHCoeff>& gradOut,
     std::vector<float3x3>& hessianOut,
     const float3& gridPos,
-    const std::vector<ProbeSampleData>& probeSamplingResults,
+    const ProbeSampleData* probeSamplingResults,
+    uint32_t sampleCount,
     const std::vector<ProbeDirSample>& samplingDir
 )
 {
@@ -805,6 +986,7 @@ void calculateSHCoeffsGradientsRGBAndHessiansLum(
         calculateGradRGBAndHessianLumSHCoeffLM(
             gridPos,
             probeSamplingResults,
+            sampleCount,
             samplingDir,
             basisIdx,
             gradOut[basisIdx],

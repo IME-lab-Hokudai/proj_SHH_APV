@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -44,6 +44,8 @@
 #include <chrono>
 //const int numSamplesPerProbe = 4096;
 const int numSamplesPerProbe = 1024;
+const uint32_t kMaxSamplesPerProbe = 1024;
+
 //const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
 const float verificationH = 0.001f;
@@ -83,7 +85,9 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "DirectTestDC.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymSceneN5.txt";
-const std::string saveToFileName = "DirectU32AsymScene.txt";
+//const std::string saveToFileName = "DirectAbsErr10AsymSceneN6.txt";
+const std::string saveToFileName = "DirectAbsErr10AsymSceneN6Progressive.txt";
+//const std::string saveToFileName = "DirectU32AsymScene.txt";
 
 namespace
 {
@@ -432,95 +436,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
         {
             using clock = std::chrono::high_resolution_clock;
             auto tStart = clock::now();
-            // 1. Initialize
-            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
-
-            const uint3 seedResolution = uint3(1,1,1); 
-            //const uint3 seedResolution = uint3(4,4,4); 
-            //const uint3 seedResolution = uint3(8,8,8); 
-            //const uint3 seedResolution = uint3(16, 16, 16); 
-            mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
-
-            //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
-            const uint32_t kMaxCornersPerDispatch = 4096; // tune this
-            //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
-
-            while (mAdaptiveProbeVolume->hasPendingBatch())
-            {
-                uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
-
-                for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
-                {
-                    uint32_t batchCount = std::min(kMaxCornersPerDispatch, totalPending - batchStart);
-
-                    std::vector<float3> pendingProbePositions;
-                    mAdaptiveProbeVolume->getPendingPositionsRange(batchStart, batchCount, pendingProbePositions);
-
-                    uint32_t numProbes = (uint32_t)pendingProbePositions.size();
-
-                    mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                        sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
-                    );
-
-                    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                        sizeof(ProbeSampleData),
-                        numSamplesPerProbe * numProbes,
-                        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                        MemoryType::DeviceLocal
-                    );
-
-                    auto rtVar = mpRtVars->getRootVar();
-                    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-                    rtVar["gProbePositions"] = mpProbePosBuffer;
-                    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-                    if (mpEmissiveSampler)
-                        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-                    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-                    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-
-                    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
-
-                    std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * numProbes);
-                    mpProbeSamplingResultBuffer->getBlob(
-                        allProbeSamplingData.data(),
-                        0,
-                        numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
-                    );
-
-                    std::vector<std::vector<float3>> coeffsBatch(numProbes);
-                    std::vector<std::vector<GradSHCoeff>> gradsBatch(numProbes);
-                    std::vector<std::vector<float3x3>> hessiansBatch(numProbes);
-
-                    for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
-                    {
-                        int offset = probeIdx * numSamplesPerProbe;
-                        std::vector<ProbeSampleData> probeSamplingResults;
-                        probeSamplingResults.reserve(numSamplesPerProbe);
-                        for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
-                            probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
-
-                        float3 xPolar;
-                        xPolar.x = pendingProbePositions[probeIdx].z;
-                        xPolar.y = pendingProbePositions[probeIdx].x;
-                        xPolar.z = pendingProbePositions[probeIdx].y;
-
-                        calculateSHCoeffsGradientsRGBAndHessiansLum(
-                            gradsBatch[probeIdx],
-                            hessiansBatch[probeIdx],
-                            xPolar,
-                            probeSamplingResults,
-                            samplingDirs
-                        );
-                        calculateSHCoeffs(coeffsBatch[probeIdx], probeSamplingResults, numSamplesPerProbe);
-                    }
-
-                    mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
-                }
-
-                mAdaptiveProbeVolume->finishBatch();
-            }
-
+           
+            ProgressiveRefineBuild(pRenderContext);
+            //SinglePassBuild(pRenderContext);
             auto tEnd = clock::now();
             double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
             mAdaptiveProbeVolume->setBuildTimeMs(ms);
@@ -742,6 +660,304 @@ float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData
     return coeffRPrime;
 }
 
+void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
+{
+    // 1. Initialize
+           //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
+
+    const uint3 seedResolution = uint3(1, 1, 1);
+    //const uint3 seedResolution = uint3(4,4,4); 
+    //const uint3 seedResolution = uint3(8,8,8); 
+    //const uint3 seedResolution = uint3(16, 16, 16); 
+    mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
+
+    //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
+    const uint32_t kMaxCornersPerDispatch = 4096; // tune this
+    //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
+
+    while (mAdaptiveProbeVolume->hasPendingBatch())
+    {
+        uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
+
+        for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
+        {
+            uint32_t batchCount = std::min(kMaxCornersPerDispatch, totalPending - batchStart);
+
+            std::vector<float3> pendingProbePositions;
+            mAdaptiveProbeVolume->getPendingPositionsRange(batchStart, batchCount, pendingProbePositions);
+
+            uint32_t numProbes = (uint32_t)pendingProbePositions.size();
+
+            mpProbePosBuffer = mpDevice->createStructuredBuffer(
+                sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
+            );
+
+            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+                sizeof(ProbeSampleData),
+                numSamplesPerProbe * numProbes,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                MemoryType::DeviceLocal
+            );
+
+            auto rtVar = mpRtVars->getRootVar();
+            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+            rtVar["gProbePositions"] = mpProbePosBuffer;
+            rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+            if (mpEmissiveSampler)
+                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
+
+            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+
+            std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * numProbes);
+            mpProbeSamplingResultBuffer->getBlob(
+                allProbeSamplingData.data(),
+                0,
+                numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
+            );
+
+            std::vector<std::vector<float3>> coeffsBatch(numProbes);
+            std::vector<std::vector<GradSHCoeff>> gradsBatch(numProbes);
+            std::vector<std::vector<float3x3>> hessiansBatch(numProbes);
+
+            for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+            {
+                int offset = probeIdx * numSamplesPerProbe;
+                //std::vector<ProbeSampleData> probeSamplingResults;
+                //probeSamplingResults.reserve(numSamplesPerProbe);
+                //for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
+                //    probeSamplingResults.push_back(allProbeSamplingData[offset + sampleIdx]);
+
+                const ProbeSampleData* samples =
+                    allProbeSamplingData.data() + offset;
+                float3 xPolar;
+                xPolar.x = pendingProbePositions[probeIdx].z;
+                xPolar.y = pendingProbePositions[probeIdx].x;
+                xPolar.z = pendingProbePositions[probeIdx].y;
+
+                calculateSHCoeffsGradientsRGBAndHessiansLum(
+                    gradsBatch[probeIdx],
+                    hessiansBatch[probeIdx],
+                    xPolar,
+                    samples,
+                    numSamplesPerProbe,
+                    samplingDirs
+                );
+                calculateSHCoeffs(coeffsBatch[probeIdx], samples, numSamplesPerProbe);
+            }
+
+            mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
+        }
+        mAdaptiveProbeVolume->finishBatch();
+    }
+}
+
+void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderContext)
+{
+    //const uint32_t kMaxCornersPerDispatch = 1024;
+    //const uint32_t kMaxCornersPerDispatch = 4096;
+    const uint32_t kMaxCornersPerDispatch = 8192;
+
+    struct LocalProgressiveStage
+    {
+        uint32_t spp;
+        float thresholdScale;
+        bool storeFullRuntimeData;
+        bool refineAfterThisStage;
+    };
+
+    const LocalProgressiveStage stages[] =
+    {
+        {128,  8.0f, false, true}, // coarse metric-only topology
+        {1024, 1.0f, true,  true}  // full adaptive: store runtime + refine onward
+    };
+
+    mAdaptiveProbeVolume->resetBuildStats();
+
+    const uint3 seedResolution = uint3(1, 1, 1);
+    mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
+
+    // Reusable buffers.
+    mpProbePosBuffer = mpDevice->createStructuredBuffer(
+        sizeof(float3),
+        kMaxCornersPerDispatch,
+        ResourceBindFlags::ShaderResource,
+        MemoryType::DeviceLocal
+    );
+
+    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+        sizeof(ProbeSampleData),
+        kMaxSamplesPerProbe * kMaxCornersPerDispatch,
+        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+        MemoryType::DeviceLocal
+    );
+
+    std::vector<ProbeSampleData> allProbeSamplingData;
+    allProbeSamplingData.resize(uint64_t(kMaxSamplesPerProbe) * kMaxCornersPerDispatch);
+
+    for (int stageIdx = 0; stageIdx < 2; ++stageIdx)
+    {
+        const auto& stage = stages[stageIdx];
+
+        // ------------------------------------------------------------
+        // Leaf-only rule:
+        // Stage 0 starts from root pending corners.
+        // Later stages recheck current leaves only.
+        // ------------------------------------------------------------
+        //if (stageIdx > 0)
+        //{
+        //    if (stage.storeFullRuntimeData)
+        //        mAdaptiveProbeVolume->scheduleLeafCornersForRefinementRecheck();
+        //    else
+        //        mAdaptiveProbeVolume->scheduleLeafCornersForRefinementRecheck();
+        //}
+
+        if (stageIdx == 1)
+        {
+            mAdaptiveProbeVolume->scheduleAllLeafCornersForRuntimeBake();
+        }
+
+        mAdaptiveProbeVolume->setCurrentThreshold(ErrorThreshold * stage.thresholdScale);
+
+        while (mAdaptiveProbeVolume->hasPendingBatch())
+        {
+            uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
+
+            for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
+            {
+                uint32_t batchCount = std::min(kMaxCornersPerDispatch, totalPending - batchStart);
+
+                std::vector<float3> pendingPositions;
+                mAdaptiveProbeVolume->getPendingPositionsRange(batchStart, batchCount, pendingPositions);
+
+                uint32_t numCorners = (uint32_t)pendingPositions.size();
+                if (numCorners == 0) continue;
+
+                mpProbePosBuffer->setBlob(
+                    pendingPositions.data(),
+                    0,
+                    numCorners * sizeof(float3)
+                );
+
+                auto rtVar = mpRtVars->getRootVar();
+                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+                rtVar["gProbePositions"] = mpProbePosBuffer;
+                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+
+                rtVar["PerFrameCB"]["numSamplePerProbe"] = stage.spp;
+                rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
+
+                if (mpEmissiveSampler)
+                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
+
+                mpScene->raytrace(
+                    pRenderContext,
+                    mpRtProgram.get(),
+                    mpRtVars,
+                    uint3(stage.spp, numCorners, 1)
+                );
+
+                mAdaptiveProbeVolume->recordTraceBatch(numCorners, stage.spp);
+
+                mpProbeSamplingResultBuffer->getBlob(
+                    allProbeSamplingData.data(),
+                    0,
+                    uint64_t(stage.spp) * numCorners * sizeof(ProbeSampleData)
+                );
+
+                // ------------------------------------------------------------
+                // CPU postprocess.
+                // Keep vector version for now so it matches your existing SH funcs.
+                // ------------------------------------------------------------
+                for (uint32_t cornerLocalIdx = 0; cornerLocalIdx < numCorners; ++cornerLocalIdx)
+                {
+                    uint32_t offset = cornerLocalIdx * stage.spp;
+
+                    const ProbeSampleData* samples =
+                        allProbeSamplingData.data() + offset;
+
+                    float3 xPolar;
+                    xPolar.x = pendingPositions[cornerLocalIdx].z;
+                    xPolar.y = pendingPositions[cornerLocalIdx].x;
+                    xPolar.z = pendingPositions[cornerLocalIdx].y;
+
+                    if (stage.storeFullRuntimeData)
+                    {
+                        std::vector<float3> coeffs;
+                        std::vector<GradSHCoeff> grads;
+                        std::vector<float3x3> hessians;
+                        calculateSHCoeffs(coeffs, samples, stage.spp);
+
+                        //at this point grid is decided only retrace for matching spp with uniform grid
+                        //calculateSHCoeffsGradients(grads, xPolar, samples, stage.spp, samplingDirs);
+                        calculateSHCoeffsGradientsRGBAndHessiansLum(
+                            grads,
+                            hessians,
+                            xPolar,
+                            samples,
+                            stage.spp,
+                            samplingDirs
+                        );
+
+                            mAdaptiveProbeVolume->setCornerData(
+                            batchStart + cornerLocalIdx,
+                            coeffs,
+                            grads,
+                            hessians
+                         );
+                        //mAdaptiveProbeVolume->setCornerRuntimeData(
+                        //    batchStart + cornerLocalIdx,
+                        //    coeffs,
+                        //    grads
+                        //);
+                    }
+                    else
+                    {
+                        float coeffVecL2 = 0.0f;
+                        float maxLambdaVecL2 = 0.0f;
+                        bool isValid = true;
+
+                        calculateSHBuildMetricsOnly(
+                            coeffVecL2,
+                            maxLambdaVecL2,
+                            xPolar,
+                            samples,
+                            stage.spp,
+                            samplingDirs,
+                            useRelativeError
+                        );
+
+                        mAdaptiveProbeVolume->setCornerMetricData(
+                            batchStart + cornerLocalIdx,
+                            coeffVecL2,
+                            maxLambdaVecL2
+                        );
+                    }
+                }
+            }
+            // ------------------------------------------------------------
+            // Important:
+            // Only refinement stages call finishBatch().
+            // Final bake stage must NOT subdivide.
+            // ------------------------------------------------------------
+            //if (stage.refineAfterThisStage)
+            //{
+                mAdaptiveProbeVolume->finishBatch();
+            //}
+            //else
+            //{
+            //    mAdaptiveProbeVolume->clearPendingBatch();
+            //}
+        }
+        if (stageIdx == 0)
+        {
+            mAdaptiveProbeVolume->printCoarseStageDebugInfo("CoarseStageDebug.txt");
+        }
+    }
+}
+
 void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
 {
     if (widget.checkbox("Show Reconstructed Env Map", mbShowReconstructedEnvMap))
@@ -779,7 +995,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-            generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
+            //generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
+            generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
+
             mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeDirSample), numSamplesPerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, samplingDirs.data()
             );
@@ -946,260 +1164,3 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     }
 }
 
-void PrecomputeSHCoefficients::runDistanceVoxelLineExperiment(RenderContext* pRenderContext)
-{
-    // ------------------------------------------------------------
-    // Experiment settings
-    // ------------------------------------------------------------
-    const float3 lightPos = float3(0.f, 5.0f, 0.05f);
-
-    // Fixed voxel size for the whole test.
-    const float3 voxelSize = float3(1.0f, 1.0f, 1.0f);
-    const float3 halfSize = voxelSize * 0.5f;
-
-    // Sample voxel centers along corridor centerline.
-    const uint32_t numVoxels = 24;
-    const float3 lineStart = float3(0.f, 0.5f, 1.0f);
-    const float zStep = 1.0f;
-
-    std::vector<VoxelLineVoxel> voxels;
-    voxels.reserve(numVoxels);
-
-    std::vector<float3> uniqueCornerPositions;
-    uniqueCornerPositions.reserve(numVoxels * 8);
-
-    struct CornerKey
-    {
-        int x, y, z;
-        bool operator==(const CornerKey& other) const
-        {
-            return x == other.x && y == other.y && z == other.z;
-        }
-    };
-
-    struct CornerKeyHasher
-    {
-        std::size_t operator()(const CornerKey& k) const
-        {
-            return ((std::hash<int>()(k.x) ^ (std::hash<int>()(k.y) << 1)) >> 1) ^
-                (std::hash<int>()(k.z) << 1);
-        }
-    };
-
-    std::unordered_map<CornerKey, int, CornerKeyHasher> cornerLookup;
-    const float quantizationScale = 10000.0f;
-
-    auto makeCornerKey = [&](const float3& p) -> CornerKey
-        {
-            return {
-                (int)std::floor(p.x * quantizationScale + 0.5f),
-                (int)std::floor(p.y * quantizationScale + 0.5f),
-                (int)std::floor(p.z * quantizationScale + 0.5f)
-            };
-        };
-
-    auto addCorner = [&](const float3& p) -> int
-        {
-            CornerKey key = makeCornerKey(p);
-            auto it = cornerLookup.find(key);
-            if (it != cornerLookup.end()) return it->second;
-
-            int idx = (int)uniqueCornerPositions.size();
-            uniqueCornerPositions.push_back(p);
-            cornerLookup[key] = idx;
-            return idx;
-        };
-
-    // ------------------------------------------------------------
-    // Generate virtual voxels and deduplicated corners
-    // ------------------------------------------------------------
-    for (uint32_t i = 0; i < numVoxels; ++i)
-    {
-        VoxelLineVoxel voxel{};
-        voxel.center = lineStart + float3(0.f, 0.f, zStep * float(i));
-
-        for (int c = 0; c < 8; ++c)
-        {
-            float3 offset(
-                (c & 4) ? halfSize.x : -halfSize.x,
-                (c & 2) ? halfSize.y : -halfSize.y,
-                (c & 1) ? halfSize.z : -halfSize.z
-            );
-
-            float3 cornerPos = voxel.center + offset;
-            voxel.cornerIndices[c] = addCorner(cornerPos);
-        }
-
-        voxels.push_back(voxel);
-    }
-
-    const uint32_t numCorners = (uint32_t)uniqueCornerPositions.size();
-    if (numCorners == 0) return;
-
-    // ------------------------------------------------------------
-    // Ray trace all unique corners in one batch
-    // ------------------------------------------------------------
-    mpProbePosBuffer = mpDevice->createStructuredBuffer(
-        sizeof(float3),
-        numCorners,
-        ResourceBindFlags::ShaderResource,
-        MemoryType::DeviceLocal,
-        uniqueCornerPositions.data()
-    );
-
-    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-        sizeof(ProbeSampleData),
-        numSamplesPerProbe * numCorners,
-        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-        MemoryType::DeviceLocal
-    );
-
-    auto rtVar = mpRtVars->getRootVar();
-    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-    rtVar["gProbePositions"] = mpProbePosBuffer;
-    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-
-    if (mpEmissiveSampler)
-        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-
-    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numCorners, 1));
-
-    std::vector<ProbeSampleData> allSamplingData(numSamplesPerProbe * numCorners);
-    mpProbeSamplingResultBuffer->getBlob(
-        allSamplingData.data(),
-        0,
-        numSamplesPerProbe * numCorners * sizeof(ProbeSampleData)
-    );
-
-    // ------------------------------------------------------------
-    // Compute corner metrics normally
-    // ------------------------------------------------------------
-    std::vector<VoxelLineCornerData> cornerData(numCorners);
-
-    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
-
-    auto computeEigenvalues3x3Local = [](const float3x3& A, float& e1, float& e2, float& e3)
-        {
-            const float ONE_THIRD = 1.0f / 3.0f;
-            float m = (A[0][0] + A[1][1] + A[2][2]) * ONE_THIRD;
-            float k00 = A[0][0] - m, k11 = A[1][1] - m, k22 = A[2][2] - m;
-            float k01 = A[0][1], k02 = A[0][2], k12 = A[1][2];
-            float q = 0.5f * (k00 * (k11 * k22 - k12 * k12) - k01 * (k01 * k22 - k12 * k02) + k02 * (k01 * k12 - k11 * k02));
-            float p = (k00 * k00 + k11 * k11 + k22 * k22 + 2.0f * (k01 * k01 + k02 * k02 + k12 * k12)) / 6.0f;
-
-            if (p < 1e-20f) { e1 = e2 = e3 = m; return; }
-
-            float pSqrt = std::sqrt(p);
-            float detVal = q / (p * pSqrt);
-            detVal = std::max(-1.0f, std::min(1.0f, detVal));
-            float phi = ONE_THIRD * std::acos(detVal);
-            float twoSqrtP = 2.0f * pSqrt;
-            float s = std::sin(phi), c = std::cos(phi);
-
-            e1 = m + twoSqrtP * c;
-            e2 = m - twoSqrtP * (c * 0.5f + s * 0.8660254f);
-            e3 = m - twoSqrtP * (c * 0.5f - s * 0.8660254f);
-        };
-
-    for (uint32_t cornerIdx = 0; cornerIdx < numCorners; ++cornerIdx)
-    {
-        int offset = cornerIdx * numSamplesPerProbe;
-
-        std::vector<ProbeSampleData> probeSamplingResults;
-        probeSamplingResults.reserve(numSamplesPerProbe);
-        for (int s = 0; s < numSamplesPerProbe; ++s)
-            probeSamplingResults.push_back(allSamplingData[offset + s]);
-
-        std::vector<float3> coeffs;
-        std::vector<GradSHCoeff> grads;
-        std::vector<float3x3> lumHessians;
-
-        float3 xPolar;
-        xPolar.x = uniqueCornerPositions[cornerIdx].z;
-        xPolar.y = uniqueCornerPositions[cornerIdx].x;
-        xPolar.z = uniqueCornerPositions[cornerIdx].y;
-
-        calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
-        calculateSHCoeffsGradientsRGBAndHessiansLum(grads, lumHessians, xPolar, probeSamplingResults, samplingDirs);
-
-        VoxelLineCornerData cd{};
-        cd.position = uniqueCornerPositions[cornerIdx];
-
-        float sumSqL = 0.0f;
-        for (const auto& coeff : coeffs)
-        {
-            float lum = dot(coeff, kLuma);
-            sumSqL += lum * lum;
-        }
-        cd.coeffVecL2 = std::sqrt(sumSqL);
-        cd.isValid = (cd.coeffVecL2 >= 0.0001f);
-
-        float sumSquares = 0.0f;
-        for (const auto& h : lumHessians)
-        {
-            float e1, e2, e3;
-            computeEigenvalues3x3Local(h, e1, e2, e3);
-            float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
-            sumSquares += maxLambda * maxLambda;
-        }
-        cd.maxLambdaVecL2 = std::sqrt(sumSquares);
-
-        cornerData[cornerIdx] = cd;
-    }
-
-    // ------------------------------------------------------------
-    // Compute voxel error and export CSV
-    // ------------------------------------------------------------
-    std::ofstream csv("distance_voxel_line_experiment.csv");
-    csv << "idx,cx,cy,cz,r,coeffL2_avg,maxLambda_avg,Eabs,Erel\n";
-
-    const float distSq = dot(voxelSize, voxelSize);
-
-    for (uint32_t i = 0; i < (uint32_t)voxels.size(); ++i)
-    {
-        const auto& voxel = voxels[i];
-
-        float totalCoeff = 0.0f;
-        float totalLambda = 0.0f;
-        float totalErrorAbs = 0.0f;
-        float totalErrorRel = 0.0f;
-        uint32_t validCount = 0;
-
-        for (int k = 0; k < 8; ++k)
-        {
-            const auto& c = cornerData[voxel.cornerIndices[k]];
-            if (!c.isValid) continue;
-
-            validCount++;
-            totalCoeff += c.coeffVecL2;
-            totalLambda += c.maxLambdaVecL2;
-
-            float e = 0.5f * c.maxLambdaVecL2 * distSq;
-            totalErrorAbs += e;
-            totalErrorRel += e / std::max(c.coeffVecL2, 1e-5f);
-        }
-
-        float coeffAvg = validCount > 0 ? totalCoeff / float(validCount) : 0.0f;
-        float lambdaAvg = validCount > 0 ? totalLambda / float(validCount) : 0.0f;
-        float eAbs = validCount > 0 ? totalErrorAbs / float(validCount) : 0.0f;
-        float eRel = validCount > 0 ? totalErrorRel / float(validCount) : 0.0f;
-
-        float r = length(voxel.center - lightPos);
-
-        csv << i << ","
-            << voxel.center.x << ","
-            << voxel.center.y << ","
-            << voxel.center.z << ","
-            << r << ","
-            << coeffAvg << ","
-            << lambdaAvg << ","
-            << eAbs << ","
-            << eRel << "\n";
-    }
-
-    csv.close();
-    logInfo("Exported distance_voxel_line_experiment.csv");
-}

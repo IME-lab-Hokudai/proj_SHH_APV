@@ -64,6 +64,8 @@ void initSHBasisGradientAndHessianTables(
 
 void generateUniformSphereDirSamples(int sampleCount, std::vector<ProbeDirSample> &out);
 
+
+
 float3 gradientOmega(const float3& q, const float3& n, float rInv, float cosXi, float factor);
 
 float3x3 hessianOmega(const float3& q, const float3& n, float rInv, float cosXi, float factor);
@@ -85,8 +87,28 @@ void calculateChannelRGradAndHessianSHCoeffLM(
     float3x3& outHessian
 );
 
-void calculateGradRGBAndHessianLumSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad, float3x3& outHessian);
-void calculateSHCoeffsGradientsRGBAndHessiansLum(std::vector<GradSHCoeff>& gradOut, std::vector<float3x3>& hessianOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
+void calculateGradRGBAndHessianLumSHCoeffLM(const float3& x, const ProbeSampleData* probeSamplingResults, uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad, float3x3& outHessian);
+void calculateSHCoeffsGradientsRGBAndHessiansLum(std::vector<GradSHCoeff>& gradOut, std::vector<float3x3>& hessianOut, const float3& gridPos, const ProbeSampleData* probeSamplingResults,
+    uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDir);
 //for uniform grid
-void calculateGradSHCoeffLM(const float3& x, const std::vector<ProbeSampleData>& samplingData, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad);
-void calculateSHCoeffsGradients(std::vector<GradSHCoeff>& gradOut, const float3& gridPos, const std::vector<ProbeSampleData>& probeSamplingResults, const std::vector<ProbeDirSample>& samplingDir);
+void calculateGradSHCoeffLM(const float3& x, const ProbeSampleData* probeSamplingResults, uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDir, const int& basisIdx, GradSHCoeff& outGrad);
+void calculateSHCoeffsGradients(std::vector<GradSHCoeff>& gradOut, const float3& gridPos, const ProbeSampleData* probeSamplingResults, uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDir);
+
+//progressive build related
+void generateProgressiveSphereDirSamples(int sampleCount, std::vector<ProbeDirSample>& out);
+
+void calculateSHCoeffs(
+    std::vector<float3>& out,
+    const ProbeSampleData* samples,
+    uint32_t sampleCount
+);
+
+void calculateSHBuildMetricsOnly(
+    float& coeffVecL2,
+    float& maxLambdaVecL2,
+    const float3& xPolar,
+    const ProbeSampleData* samples,
+    uint32_t sampleCount,
+    const std::vector<ProbeDirSample>& samplingDirs,
+    bool useRelativeMetric
+);

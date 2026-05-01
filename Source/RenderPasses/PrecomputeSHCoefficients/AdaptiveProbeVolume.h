@@ -23,6 +23,9 @@ public:
         int children[8] = { -1 };
 
         int coarseNeighbors[6];
+
+        float lastError = 0.0f;
+        bool needsRecheck = false;
     };
     struct Corner
     {
@@ -34,8 +37,6 @@ public:
 
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
-        bool isValid;
-        float constraintWeight = 0.0f;
     };
 
     struct MemoryFootprintInfo
@@ -44,6 +45,35 @@ public:
         uint64_t gpuProbesBytes = 0;
         uint64_t totalBytes = 0;
         float totalMB = 0.0; 
+    };
+
+    struct BuildStats
+    {
+        uint64_t totalEvaluatedCorners = 0;
+        uint64_t totalRayCount = 0;
+        uint64_t dispatchCount = 0;
+        uint64_t readbackCount = 0;
+
+        uint64_t buildGpuBytes = 0;
+        double buildGpuMB = 0.0;
+
+        uint64_t runtimeGpuBytes = 0;
+        double runtimeGpuMB = 0.0;
+    };
+
+    struct ProgressiveStage
+    {
+        uint32_t spp;
+        float thresholdScale;
+        bool storeFullRuntimeData;
+        bool refineAfterThisStage;
+    };
+
+    std::vector<ProgressiveStage> stages =
+    {
+        {128,  0.50f, false, true},
+        {512,  0.80f, false, true},
+        {1024, 1.00f, true,  false}
     };
 
     MemoryFootprintInfo calculateMemoryFootprint() const;
@@ -64,13 +94,8 @@ public:
         }
     };
 
-    void interpolateRobust_CPU(int probeIdx, float3 pos, std::vector<float3>& outCoeffs);
-
-    void fetchSmartInterpolatedSH(int probeIdx, float3 pos, float3* finalCoeffs);
-
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
 
-    void constrainHangingNodes();
     void constrainHangingNodesHermite();
 
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
@@ -106,8 +131,6 @@ public:
     int traverseOctreeCPU(float3 pos) const;
 
     void computeNeighbors();
-
-    void interpolateLinear_CPU(int coarseProbeIdx, float3 pos, std::vector<float>& outDist, std::vector<float>& outDistSq);
 
     // ----------------------------------------------------------------
     // Resources & Debug
@@ -164,9 +187,43 @@ public:
         mSeedProbeIndices = seedProbeIndices;
     }
 
+    //==== progressive build ====//
+
+    const BuildStats& getBuildStats() const { return mBuildStats; }
+    void resetBuildStats()
+    {
+        mBuildStats = BuildStats{};
+    }
+
+    void recordTraceBatch(uint32_t cornerCount, uint32_t spp)
+    {
+        mBuildStats.totalEvaluatedCorners += cornerCount;
+        mBuildStats.totalRayCount += uint64_t(cornerCount) * uint64_t(spp);
+        mBuildStats.dispatchCount++;
+        mBuildStats.readbackCount++;
+    }
+
+    void setCornerMetricData(
+        uint32_t batchIndex,
+        float coeffVecL2,
+        float maxLambdaVecL2
+    );
+
+    void scheduleLeafCornersForRefinementRecheck();
+    void setCurrentThreshold(float threshold) { mCurrentThreshold = threshold; };
+    void setCornerRuntimeData(
+        uint32_t batchIndex,
+        const std::vector<float3>& coeffs,
+        const std::vector<GradSHCoeff>& grads
+    );
+
+    void clearPendingBatch();
+    void scheduleAllLeafCornersForRuntimeBake();
+    void printCoarseStageDebugInfo(const std::string& filename) const;
+    void finishBatchCoarseLimited(int maxEvalLevel);
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
-
+    BuildStats mBuildStats;
     // ----------------------------------------------------------------
     // Internal Data Structures
     // ----------------------------------------------------------------
@@ -182,8 +239,8 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    //int mMaxLevel = 6;
-    int mMaxLevel = 5;
+    int mMaxLevel = 6;
+    //int mMaxLevel = 5;
     //int mMaxLevel = 0;
     bool mUseRelativeError = false;
 

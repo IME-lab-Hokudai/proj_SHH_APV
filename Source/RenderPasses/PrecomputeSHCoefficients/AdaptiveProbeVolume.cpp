@@ -41,87 +41,6 @@ float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
     return dh00 * v0 + dh10 * s0 + dh01 * v1 + dh11 * s1;
 }
 
-
-// CPU Port of the "Smart" Weighted Accumulation Shader
-// Matches the shader's logic: Sum(Weight * Value) / Sum(Weight)
-void AdaptiveProbeVolume::fetchSmartInterpolatedSH(
-    int probeIdx,
-    float3 pos,
-    float3* outCoeffs
-)
-{
-    const Probe& p = mProbes[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
-    float3 t = (pos - p.minPoint) / size;
-
-    // Clamp
-    t.x = std::max(0.0f, std::min(1.0f, t.x));
-    t.y = std::max(0.0f, std::min(1.0f, t.y));
-    t.z = std::max(0.0f, std::min(1.0f, t.z));
-
-    // Pre-calculate Trilinear Weights
-    float w[8];
-    w[0] = (1 - t.x) * (1 - t.y) * (1 - t.z);
-    w[1] = (1 - t.x) * (1 - t.y) * (t.z);
-    w[2] = (1 - t.x) * (t.y) * (1 - t.z);
-    w[3] = (1 - t.x) * (t.y) * (t.z);
-    w[4] = (t.x) * (1 - t.y) * (1 - t.z);
-    w[5] = (t.x) * (1 - t.y) * (t.z);
-    w[6] = (t.x) * (t.y) * (1 - t.z);
-    w[7] = (t.x) * (t.y) * (t.z);
-
-    // Initialize Accumulators
-    float3 accumSH[9];
-    for (int b = 0; b < 9; ++b) accumSH[b] = float3(0, 0, 0);
-
-    float totalWeight = 0.0f;
-
-    // Loop 8 Corners
-    for (int k = 0; k < 8; ++k)
-    {
-        int cIdx = p.corners[k];
-
-        // 1. DATA CHECK: Skip missing corners
-        if (cIdx < 0) continue;
-
-        const Corner& c = mCorners[cIdx];
-
-        // 2. ROBUSTNESS CHECK: Skip invalid/black corners
-        // Matches Shader: if (dot(c.coeffs[0], c.coeffs[0]) < 1e-6) continue;
-        // We use our helper flag if available, or check the data directly.
-
-        if (!c.isValid ) continue;
-
-        // 3. WEIGHT
-        // We cannot check "Visibility" (Normal Dot) here because a hanging node
-        // is a point in space, not a surface. We assume "Perfect Visibility" (1.0).
-        // This relies on the Spatial Weight (Trilinear) only.
-        float weight = w[k];
-
-        // 4. ACCUMULATE
-        for (int b = 0; b < 9; ++b)
-        {
-            accumSH[b] += c.shCoeffs[b] * weight;
-        }
-        totalWeight += weight;
-    }
-
-    // 5. RENORMALIZE
-    // This "stretches" the valid corners to fill the gap left by invalid ones.
-    if (totalWeight > 1e-6f)
-    {
-        for (int b = 0; b < 9; ++b)
-        {
-            outCoeffs[b] = accumSH[b] / totalWeight;
-        }
-    }
-    else
-    {
-        // Fallback: Total failure. Return Black.
-        for (int b = 0; b < 9; ++b) outCoeffs[b] = float3(0, 0, 0);
-    }
-}
-
 // 2. Full Tricubic Hermite Interpolation on CPU
 // This mirrors 'fetchHermiteInterpolatedSH' from your shader exactly.
 void AdaptiveProbeVolume::interpolateHermite_CPU(
@@ -255,46 +174,6 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
     }
 }
 
-void AdaptiveProbeVolume::constrainHangingNodes()
-{
-    // Face Indices: 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
-    const int FACE_CORNERS[6][4] = {
-             {0, 1, 2, 3}, {4, 5, 6, 7},
-             {0, 1, 4, 5}, {2, 3, 6, 7},
-             {0, 2, 4, 6}, {1, 3, 5, 7}
-    };
-
-    for (size_t i = 0; i < mProbes.size(); ++i)
-    {
-        Probe& p = mProbes[i];
-        if (!p.isLeaf) continue;
-
-        for (int face = 0; face < 6; ++face)
-        {
-            int neighborIdx = p.coarseNeighbors[face];
-            if (neighborIdx != -1)
-            {
-                for (int k = 0; k < 4; ++k)
-                {
-                    int localCornerIdx = FACE_CORNERS[face][k];
-                    int globalCornerIdx = p.corners[localCornerIdx];
-                    Corner& c = mCorners[globalCornerIdx];
-
-                    // 1. Allocate Array on Stack
-                    float3 smartCoeffs[9];
-
-                    // 2. Fetch Weighted Average (Renormalized)
-                    // This now uses the Accumulation Logic, not the 3-Pass Lerp.
-                    fetchSmartInterpolatedSH(neighborIdx, c.position, smartCoeffs);
-
-                    // 3. Overwrite Hanging Node
-                    if (c.shCoeffs.size() != 9) c.shCoeffs.resize(9);
-                    for (int b = 0; b < 9; ++b) c.shCoeffs[b] = smartCoeffs[b];
-                }
-            }
-        }
-    }
-}
 void AdaptiveProbeVolume::constrainHangingNodesHermite()
 {
     const int FACE_CORNERS[6][4] = {
@@ -374,6 +253,8 @@ ref<AdaptiveProbeVolume> AdaptiveProbeVolume::create(ref<Device> pDevice)
 {
     return ref<AdaptiveProbeVolume>(new AdaptiveProbeVolume(pDevice));
 }
+
+
 
 AdaptiveProbeVolume::AdaptiveProbeVolume(ref<Device> pDevice) : mpDevice(pDevice) {}
 
@@ -471,7 +352,7 @@ void AdaptiveProbeVolume::setCornerData(
     // -----------------------------------------------------------
     // PART B: CONSTRUCTION METRICS (Use Luminance)
     // -----------------------------------------------------------
-   // if (mUseRelativeError) {
+    if (mUseRelativeError) {
         const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
         // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
@@ -484,10 +365,7 @@ void AdaptiveProbeVolume::setCornerData(
             sumSqL += lum * lum;
         }
         c.coeffVecL2 = std::sqrt(sumSqL);
-
-        c.isValid = (c.coeffVecL2 < 0.0001f)?false : true;
-    //}
-
+    }
     // 2. Calculate Curvature of LUMINANCE Field (Hessian)
     float sumSquares = 0.0f;
     for (const auto& h : hessians)
@@ -503,6 +381,116 @@ void AdaptiveProbeVolume::setCornerData(
 
     c.maxLambdaVecL2 = std::sqrt(sumSquares);
 }
+
+void AdaptiveProbeVolume::setCornerMetricData(uint32_t batchIndex, float coeffVecL2, float maxLambdaVecL2)
+{
+    if (batchIndex >= mPendingNewCorners.size()) return;
+
+    int cornerIdx = mPendingNewCorners[batchIndex];
+    Corner& c = mCorners[cornerIdx];
+
+    c.coeffVecL2 = coeffVecL2;
+    c.maxLambdaVecL2 = maxLambdaVecL2;
+
+    // Do not fill runtime data here.
+    c.shCoeffs.clear();
+    c.shGradients.clear();
+}
+
+void AdaptiveProbeVolume::scheduleLeafCornersForRefinementRecheck()
+{
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+
+    std::vector<uint8_t> used(mCorners.size(), 0);
+
+    for (int pIdx = 0; pIdx < (int)mProbes.size(); ++pIdx)
+    {
+        const Probe& p = mProbes[pIdx];
+        if (!p.isLeaf) continue;
+        if (p.level >= mMaxLevel) continue;
+
+        mProbesPendingCheck.push_back(pIdx);
+
+        for (int k = 0; k < 8; ++k)
+        {
+            int cIdx = p.corners[k];
+            if (cIdx < 0) continue;
+
+            if (!used[cIdx])
+            {
+                used[cIdx] = 1;
+                mPendingNewCorners.push_back(cIdx);
+            }
+        }
+    }
+}
+
+void AdaptiveProbeVolume::clearPendingBatch()
+{
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+}
+
+void AdaptiveProbeVolume::scheduleAllLeafCornersForRuntimeBake()
+{
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+
+    std::vector<uint8_t> used(mCorners.size(), 0);
+
+    for (int pIdx = 0; pIdx < (int)mProbes.size(); ++pIdx)
+    {
+        const Probe& p = mProbes[pIdx];
+        if (!p.isLeaf) continue;
+
+        // Include all leaves so runtime data is recomputed,
+        // including max-level leaves.
+        mProbesPendingCheck.push_back(pIdx);
+
+        for (int k = 0; k < 8; ++k)
+        {
+            int cIdx = p.corners[k];
+            if (cIdx < 0) continue;
+
+            if (!used[cIdx])
+            {
+                used[cIdx] = 1;
+                mPendingNewCorners.push_back(cIdx);
+            }
+        }
+    }
+}
+
+void AdaptiveProbeVolume::setCornerRuntimeData(uint32_t batchIndex, const std::vector<float3>& coeffs, const std::vector<GradSHCoeff>& grads)
+{
+    if (batchIndex >= mPendingNewCorners.size()) return;
+
+    int cornerIdx = mPendingNewCorners[batchIndex];
+    Corner& c = mCorners[cornerIdx];
+
+    // Runtime data for Hermite interpolation.
+    c.shCoeffs = coeffs;
+    c.shGradients = grads;
+
+    // Validity / brightness only.
+    // Do NOT recompute Hessian here. Final bake does not refine topology.
+    //const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    //float sumSqL = 0.0f;
+    //for (const auto& coeff : coeffs)
+    //{
+    //    float lum = dot(coeff, kLuma);
+    //    sumSqL += lum * lum;
+    //}
+
+    //c.coeffVecL2 = std::sqrt(sumSqL);
+    //c.isValid = (c.coeffVecL2 >= 0.0001f);
+
+    // Preserve c.maxLambdaVecL2 from previous metric pass.
+}
+
+
 
 void AdaptiveProbeVolume::finishBatch()
 {
@@ -546,15 +534,11 @@ void AdaptiveProbeVolume::finishBatch()
         ////if (countValidCorner == 0) avgProbeError = mCurrentThreshold + 0.1f;//force subdivision if no 
         //avgProbeError = totalError / float(countValidCorner);
         float maxProbeError = 0.0f;
-        uint countValidCorner = 0;
 
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
-            if (!c.isValid) continue;
-
-            //countValidCorner++;
 
             // E_abs = 0.5 * Lambda * dx^2
             float e = 0.5f * c.maxLambdaVecL2 * distSq;
@@ -913,7 +897,6 @@ void AdaptiveProbeVolume::printDebugInfo(const std::string& filename)
             {
                 int cIdx = probe.corners[k];
                 const Corner& c = mCorners[cIdx];
-                if (!c.isValid) continue;
 
                 // E_abs = 0.5 * Lambda * dx^2
                 float e = 0.5f * c.maxLambdaVecL2 * distSq;
@@ -1082,7 +1065,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     for (const auto& c : mCorners)
     {
         out << c.position.x << " " << c.position.y << " " << c.position.z << " ";
-        out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << " " << (c.isValid ? 1 : 0) << "\n";
+        out << c.maxLambdaVecL2 << " " << c.coeffVecL2 << " " << 1 << "\n";
 
         out << c.shCoeffs.size() << "\n";
         for (const auto& val : c.shCoeffs)
@@ -1242,7 +1225,6 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         int isValidInt = 0;
         in >> c.position.x >> c.position.y >> c.position.z;
         in >> c.maxLambdaVecL2 >> c.coeffVecL2 >> isValidInt;
-        c.isValid = (isValidInt != 0);
 
         size_t numCoeffs = 0;
         in >> numCoeffs;
@@ -1519,4 +1501,257 @@ AdaptiveProbeVolume::MemoryFootprintInfo AdaptiveProbeVolume::calculateMemoryFoo
     info.gpuProbesBytes;
     info.totalMB = info.totalBytes * invMB;
     return info;
+}
+
+void AdaptiveProbeVolume::printCoarseStageDebugInfo(const std::string& filename) const
+{
+    std::ofstream out(filename);
+    if (!out.is_open()) return;
+
+    uint32_t leafCount = 0;
+    uint32_t maxLevelLeafCount = 0;
+
+    // --------------------------------------------------
+    // Header summary
+    // --------------------------------------------------
+    out << "=== Coarse Stage Debug Info ===\n";
+    out << "Total Probes: " << mProbes.size() << "\n";
+    out << "Total Corners: " << mCorners.size() << "\n";
+
+    for (const auto& p : mProbes)
+    {
+        if (!p.isLeaf) continue;
+        leafCount++;
+        if (p.level >= mMaxLevel)
+            maxLevelLeafCount++;
+    }
+
+    out << "Leaf Probes: " << leafCount << "\n";
+    out << "Max-Level Leaves: " << maxLevelLeafCount << "\n";
+    out << "Pending Probes: " << mProbesPendingCheck.size() << "\n";
+    out << "Pending Corners: " << mPendingNewCorners.size() << "\n";
+    out << "Threshold: " << mCurrentThreshold << "\n";
+    out << "====================================\n\n";
+
+    // --------------------------------------------------
+    // Per-probe dump (THIS is what you need)
+    // --------------------------------------------------
+    for (size_t i = 0; i < mProbes.size(); ++i)
+    {
+        const Probe& p = mProbes[i];
+
+        out << "Probe " << i << "\n";
+        out << "  Level: " << p.level << "\n";
+        out << "  IsLeaf: " << p.isLeaf << "\n";
+
+        float3 size = p.maxPoint - p.minPoint;
+        out << "  Size: (" << size.x << ", " << size.y << ", " << size.z << ")\n";
+
+        // ---- Critical: error metric ----
+        float maxError = 0.0f;
+
+        for (int k = 0; k < 8; ++k)
+        {
+            int cIdx = p.corners[k];
+            if (cIdx < 0) continue;
+
+            const Corner& c = mCorners[cIdx];
+
+            float e = (c.maxLambdaVecL2 * dot(size, size)) * 0.5f;
+
+            if (mUseRelativeError)
+            {
+                float norm = std::max(c.coeffVecL2, 1e-5f);
+                e /= norm;
+            }
+
+            maxError = std::max(maxError, e);
+        }
+
+        out << "  MaxError: " << maxError << "\n";
+
+        // ---- Corners ----
+        out << "  Corners:\n";
+        for (int k = 0; k < 8; ++k)
+        {
+            int cIdx = p.corners[k];
+            if (cIdx < 0) continue;
+
+            const Corner& c = mCorners[cIdx];
+
+            out << "    Corner " << k << " idx " << cIdx
+                << " LambdaL2: " << c.maxLambdaVecL2
+                << " CoeffL2: " << c.coeffVecL2 << "\n";
+        }
+
+        out << "\n";
+    }
+
+    out.close();
+}
+
+void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
+{
+    mPendingNewCorners.clear();
+
+    std::vector<int> nextProbesToCheck;
+
+    for (int probeIdx : mProbesPendingCheck)
+    {
+        Probe& probe = mProbes[probeIdx];
+
+        if (probe.level >= mMaxLevel) continue;
+
+        float3 diag = probe.maxPoint - probe.minPoint;
+        float distSq = dot(diag, diag);
+
+        float maxProbeError = 0.0f;
+
+        for (int k = 0; k < 8; ++k)
+        {
+            int cIdx = probe.corners[k];
+            const Corner& c = mCorners[cIdx];
+
+            float e = 0.5f * c.maxLambdaVecL2 * distSq;
+
+            if (mUseRelativeError)
+            {
+                float norm = std::max(c.coeffVecL2, 1e-5f);
+                e /= norm;
+            }
+
+            maxProbeError = std::max(maxProbeError, e);
+        }
+
+        if (maxProbeError <= mCurrentThreshold)
+            continue;
+
+        // ------------------------------------------------------------
+        // Coarse-stage rule:
+        // - Below maxEvalLevel: subdivide and continue coarse tracing.
+        // - At maxEvalLevel: subdivide once, but do NOT enqueue children.
+        // ------------------------------------------------------------
+        bool enqueueChildrenForCoarse = (probe.level < maxEvalLevel);
+
+        float3 minP = probe.minPoint;
+        float3 maxP = probe.maxPoint;
+        float3 center = (minP + maxP) * 0.5f;
+
+        probe.isLeaf = false;
+
+        float quantizationScale = 10000.0f;
+
+        auto getCornerKey = [&](float3 p) -> CornerKey {
+            return {
+                (int)(floor(p.x * quantizationScale + 0.5f)),
+                (int)(floor(p.y * quantizationScale + 0.5f)),
+                (int)(floor(p.z * quantizationScale + 0.5f))
+            };
+            };
+
+        auto addNewCorner = [&](float3 pos) -> int {
+            CornerKey key = getCornerKey(pos);
+
+            auto it = mCornerLookup.find(key);
+            if (it != mCornerLookup.end())
+                return it->second;
+
+            Corner c;
+            c.position = pos;
+            mCorners.push_back(c);
+
+            int idx = (int)mCorners.size() - 1;
+            mCornerLookup[key] = idx;
+
+            // Important:
+            // At the coarse cap, create topology but do not trace these corners yet.
+            if (enqueueChildrenForCoarse)
+                mPendingNewCorners.push_back(idx);
+
+            return idx;
+            };
+
+        int c_center = addNewCorner(center);
+
+        int c_fX0 = addNewCorner({ minP.x, center.y, center.z });
+        int c_fX1 = addNewCorner({ maxP.x, center.y, center.z });
+        int c_fY0 = addNewCorner({ center.x, minP.y, center.z });
+        int c_fY1 = addNewCorner({ center.x, maxP.y, center.z });
+        int c_fZ0 = addNewCorner({ center.x, center.y, minP.z });
+        int c_fZ1 = addNewCorner({ center.x, center.y, maxP.z });
+
+        int c_eX_Y0Z0 = addNewCorner({ center.x, minP.y, minP.z });
+        int c_eX_Y1Z0 = addNewCorner({ center.x, maxP.y, minP.z });
+        int c_eX_Y0Z1 = addNewCorner({ center.x, minP.y, maxP.z });
+        int c_eX_Y1Z1 = addNewCorner({ center.x, maxP.y, maxP.z });
+
+        int c_eY_X0Z0 = addNewCorner({ minP.x, center.y, minP.z });
+        int c_eY_X1Z0 = addNewCorner({ maxP.x, center.y, minP.z });
+        int c_eY_X0Z1 = addNewCorner({ minP.x, center.y, maxP.z });
+        int c_eY_X1Z1 = addNewCorner({ maxP.x, center.y, maxP.z });
+
+        int c_eZ_X0Y0 = addNewCorner({ minP.x, minP.y, center.z });
+        int c_eZ_X1Y0 = addNewCorner({ maxP.x, minP.y, center.z });
+        int c_eZ_X0Y1 = addNewCorner({ minP.x, maxP.y, center.z });
+        int c_eZ_X1Y1 = addNewCorner({ maxP.x, maxP.y, center.z });
+
+        const int* P = probe.corners;
+
+        int grid[3][3][3];
+        grid[0][0][0] = P[0]; grid[0][0][2] = P[1]; grid[0][2][0] = P[2]; grid[0][2][2] = P[3];
+        grid[2][0][0] = P[4]; grid[2][0][2] = P[5]; grid[2][2][0] = P[6]; grid[2][2][2] = P[7];
+
+        grid[1][1][1] = c_center;
+
+        grid[0][1][1] = c_fX0; grid[2][1][1] = c_fX1;
+        grid[1][0][1] = c_fY0; grid[1][2][1] = c_fY1;
+        grid[1][1][0] = c_fZ0; grid[1][1][2] = c_fZ1;
+
+        grid[1][0][0] = c_eX_Y0Z0; grid[1][2][0] = c_eX_Y1Z0;
+        grid[1][0][2] = c_eX_Y0Z1; grid[1][2][2] = c_eX_Y1Z1;
+
+        grid[0][1][0] = c_eY_X0Z0; grid[2][1][0] = c_eY_X1Z0;
+        grid[0][1][2] = c_eY_X0Z1; grid[2][1][2] = c_eY_X1Z1;
+
+        grid[0][0][1] = c_eZ_X0Y0; grid[2][0][1] = c_eZ_X1Y0;
+        grid[0][2][1] = c_eZ_X0Y1; grid[2][2][1] = c_eZ_X1Y1;
+
+        for (int k = 0; k < 8; ++k)
+        {
+            Probe child;
+            child.level = probe.level + 1;
+
+            float3 childSize = (maxP - minP) * 0.5f;
+            float3 offset = float3(
+                (k & 4) ? childSize.x : 0,
+                (k & 2) ? childSize.y : 0,
+                (k & 1) ? childSize.z : 0
+            );
+
+            child.minPoint = minP + offset;
+            child.maxPoint = child.minPoint + childSize;
+
+            int startX = (k & 4) ? 1 : 0;
+            int startY = (k & 2) ? 1 : 0;
+            int startZ = (k & 1) ? 1 : 0;
+
+            for (int c = 0; c < 8; ++c)
+            {
+                int dx = (c & 4) ? 1 : 0;
+                int dy = (c & 2) ? 1 : 0;
+                int dz = (c & 1) ? 1 : 0;
+
+                child.corners[c] = grid[startX + dx][startY + dy][startZ + dz];
+            }
+
+            mProbes.push_back(child);
+
+            int childIdx = (int)mProbes.size() - 1;
+            probe.children[k] = childIdx;
+
+            if (enqueueChildrenForCoarse)
+                nextProbesToCheck.push_back(childIdx);
+        }
+    }
+    mProbesPendingCheck = nextProbesToCheck;
 }
