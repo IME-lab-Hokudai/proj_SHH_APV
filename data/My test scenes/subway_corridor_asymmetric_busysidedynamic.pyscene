@@ -279,14 +279,12 @@ sceneBuilder.addMeshInstance(
 	)
 
 # --- DYNAMIC BUNNY ---
-# --- DYNAMIC BUNNY ---
 bunny_mat = StandardMaterial('BunnyMaterial')
 bunny_mat.baseColor = float4(0.7, 0.7, 0.7, 1.0)
 bunny_mat.roughness = 1.0
 	
 bunny_mesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 
-# Better scale (2.0 is quite big for your room)
 bunny_scales = [
 float3(0.6, 0.6, 0.6),
 float3(0.6, 0.6, 0.6),

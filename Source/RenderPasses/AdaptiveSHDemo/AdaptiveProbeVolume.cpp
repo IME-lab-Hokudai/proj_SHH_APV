@@ -358,9 +358,9 @@ void AdaptiveProbeVolume::computeNeighbors()
 void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
-    computeNeighbors();
+    //computeNeighbors();
     //constrainHangingNodes();
-    constrainHangingNodesHermite();
+    //constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());
@@ -454,9 +454,6 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
-    // ------------------------------------------------------------
-    // Reset state
-    // ------------------------------------------------------------
     mProbes.clear();
     mCorners.clear();
     mPendingNewCorners.clear();
@@ -469,23 +466,20 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     mSeedResolution = uint3(0);
     mSeedProbeIndices.clear();
 
-    // ------------------------------------------------------------
-    // Header
-    // ------------------------------------------------------------
     std::string header;
     in >> header;
 
     if (header != "ADAPTIVE_GRID_V5_SEEDED")
     {
-        logError("Invalid file format or version mismatch: " + filename);
+        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
         return;
     }
 
     std::string tag;
 
-    // ------------------------------------------------------------
-    // SETTINGS
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Settings
+    // ------------------------------------------------------------------
     in >> tag;
     if (tag != "SETTINGS")
     {
@@ -497,9 +491,9 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     in >> mCurrentThreshold >> mMaxLevel >> useRelErrInt;
     mUseRelativeError = (useRelErrInt != 0);
 
-    // ------------------------------------------------------------
-    // STATS
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Stats
+    // ------------------------------------------------------------------
     in >> tag;
     if (tag != "STATS")
     {
@@ -509,10 +503,40 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
     in >> mBuildTimeMs;
 
-    // ------------------------------------------------------------
-    // SEED GRID
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Next block can be either:
+    //   LEAF_LEVEL_STATS  -> new files
+    //   SEED_GRID         -> old files
+    // ------------------------------------------------------------------
     in >> tag;
+
+    if (tag == "LEAF_LEVEL_STATS")
+    {
+        uint32_t totalLeafCountFromFile = 0;
+        uint32_t maxLevelLeafCountFromFile = 0;
+        double avgLeafLevelFromFile = 0.0;
+
+        in >> totalLeafCountFromFile
+            >> maxLevelLeafCountFromFile
+            >> avgLeafLevelFromFile;
+
+        size_t leafLevelStatCount = 0;
+        in >> leafLevelStatCount;
+
+        for (size_t i = 0; i < leafLevelStatCount; ++i)
+        {
+            uint32_t level = 0;
+            uint32_t count = 0;
+            in >> level >> count;
+        }
+
+        // Read next expected block.
+        in >> tag;
+    }
+
+    // ------------------------------------------------------------------
+    // Seed grid metadata
+    // ------------------------------------------------------------------
     if (tag != "SEED_GRID")
     {
         logError("Missing SEED_GRID block in: " + filename);
@@ -523,9 +547,17 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     in >> useSeedInt;
     mUseSeedGrid = (useSeedInt != 0);
 
-    in >> mSeedMinPoint.x >> mSeedMinPoint.y >> mSeedMinPoint.z;
-    in >> mSeedCellSize.x >> mSeedCellSize.y >> mSeedCellSize.z;
-    in >> mSeedResolution.x >> mSeedResolution.y >> mSeedResolution.z;
+    in >> mSeedMinPoint.x
+        >> mSeedMinPoint.y
+        >> mSeedMinPoint.z;
+
+    in >> mSeedCellSize.x
+        >> mSeedCellSize.y
+        >> mSeedCellSize.z;
+
+    in >> mSeedResolution.x
+        >> mSeedResolution.y
+        >> mSeedResolution.z;
 
     size_t seedCount = 0;
     in >> seedCount;
@@ -536,9 +568,9 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         in >> mSeedProbeIndices[i];
     }
 
-    // ------------------------------------------------------------
-    // MEMORY (MB, decimal)
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Memory block
+    // ------------------------------------------------------------------
     in >> tag;
     if (tag != "MEMORY")
     {
@@ -546,11 +578,13 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         return;
     }
 
-    double fileTotalMB = 0.0;
-    in >> fileTotalMB;
-    // ------------------------------------------------------------
-    // CORNERS
-    // ------------------------------------------------------------
+    // Current save writes totalMB, so read as double.
+    double totalMBFromFile = 0.0;
+    in >> totalMBFromFile;
+
+    // ------------------------------------------------------------------
+    // Corners
+    // ------------------------------------------------------------------
     size_t numCorners = 0;
     in >> tag >> numCorners;
 
@@ -568,34 +602,47 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
         int isValidInt = 0;
 
-        in >> c.position.x >> c.position.y >> c.position.z;
-        in >> c.maxLambdaVecL2 >> c.coeffVecL2 >> isValidInt;
+        in >> c.position.x
+            >> c.position.y
+            >> c.position.z;
 
-        c.isValid = (isValidInt != 0);
+        in >> c.maxLambdaVecL2
+            >> c.coeffVecL2
+            >> isValidInt;
 
-        // --- SH COEFFS ---
+        //c.isValid = (isValidInt != 0);
+
         size_t numCoeffs = 0;
         in >> numCoeffs;
 
         c.shCoeffs.resize(numCoeffs);
         for (size_t k = 0; k < numCoeffs; ++k)
         {
-            in >> c.shCoeffs[k].x >> c.shCoeffs[k].y >> c.shCoeffs[k].z;
+            in >> c.shCoeffs[k].x
+                >> c.shCoeffs[k].y
+                >> c.shCoeffs[k].z;
         }
 
-        // --- GRADIENTS ---
         size_t numGrads = 0;
         in >> numGrads;
 
         c.shGradients.resize(numGrads);
         for (size_t k = 0; k < numGrads; ++k)
         {
-            in >> c.shGradients[k].r.x >> c.shGradients[k].r.y >> c.shGradients[k].r.z;
-            in >> c.shGradients[k].g.x >> c.shGradients[k].g.y >> c.shGradients[k].g.z;
-            in >> c.shGradients[k].b.x >> c.shGradients[k].b.y >> c.shGradients[k].b.z;
+            in >> c.shGradients[k].r.x
+                >> c.shGradients[k].r.y
+                >> c.shGradients[k].r.z;
+
+            in >> c.shGradients[k].g.x
+                >> c.shGradients[k].g.y
+                >> c.shGradients[k].g.z;
+
+            in >> c.shGradients[k].b.x
+                >> c.shGradients[k].b.y
+                >> c.shGradients[k].b.z;
         }
 
-        // --- Rebuild corner lookup ---
+        // Rebuild lookup table for future corner sharing.
         CornerKey key{
             (int)std::floor(c.position.x * 10000.0f + 0.5f),
             (int)std::floor(c.position.y * 10000.0f + 0.5f),
@@ -605,9 +652,9 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         mCornerLookup[key] = (int)i;
     }
 
-    // ------------------------------------------------------------
-    // PROBES
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Probes
+    // ------------------------------------------------------------------
     size_t numProbes = 0;
     in >> tag >> numProbes;
 
@@ -624,16 +671,31 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         Probe& p = mProbes[i];
 
         int isLeafInt = 0;
-
         in >> isLeafInt >> p.level;
         p.isLeaf = (isLeafInt != 0);
 
-        in >> p.minPoint.x >> p.minPoint.y >> p.minPoint.z;
-        in >> p.maxPoint.x >> p.maxPoint.y >> p.maxPoint.z;
+        in >> p.minPoint.x
+            >> p.minPoint.y
+            >> p.minPoint.z;
 
-        for (int k = 0; k < 8; ++k) in >> p.corners[k];
-        for (int k = 0; k < 8; ++k) in >> p.children[k];
-        for (int k = 0; k < 6; ++k) in >> p.coarseNeighbors[k];
+        in >> p.maxPoint.x
+            >> p.maxPoint.y
+            >> p.maxPoint.z;
+
+        for (int k = 0; k < 8; ++k)
+        {
+            in >> p.corners[k];
+        }
+
+        for (int k = 0; k < 8; ++k)
+        {
+            in >> p.children[k];
+        }
+
+        for (int k = 0; k < 6; ++k)
+        {
+            in >> p.coarseNeighbors[k];
+        }
     }
 
     in.close();

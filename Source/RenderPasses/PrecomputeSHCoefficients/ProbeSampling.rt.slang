@@ -17,7 +17,7 @@ RWStructuredBuffer<ProbeSampleData> gProbeSamplingOutput;
 
 static const bool kUseEmissiveLights = USE_EMISSIVE_LIGHTS;
 static const bool kUseAnalyticLights = USE_ANALYTIC_LIGHTS;
-static const uint kMaxBounces = 5; 
+static const uint kMaxBounces = 3; 
 
 cbuffer PerFrameCB
 {

@@ -19,55 +19,55 @@ cbuffer SeedGridCB
     uint3 gSeedResolution;
 };
 
-Texture2D gFloorLightmap;
-Texture2D gLeftWallLightmap;
-Texture2D gRightWallLightmap;
-Texture2D gRoofLeftLightmap;
-Texture2D gRoofRightLightmap;
+//Texture2D gFloorLightmap;
+//Texture2D gLeftWallLightmap;
+//Texture2D gRightWallLightmap;
+//Texture2D gRoofLeftLightmap;
+//Texture2D gRoofRightLightmap;
 
-Texture2D gPillar0Lightmap;
-Texture2D gPillar1Lightmap;
-Texture2D gPillar2Lightmap;
-Texture2D gPillar3Lightmap;
-Texture2D gPillar4Lightmap;
-Texture2D gPillar5Lightmap;
-Texture2D gPillar6Lightmap;
-Texture2D gPillar7Lightmap;
+//Texture2D gPillar0Lightmap;
+//Texture2D gPillar1Lightmap;
+//Texture2D gPillar2Lightmap;
+//Texture2D gPillar3Lightmap;
+//Texture2D gPillar4Lightmap;
+//Texture2D gPillar5Lightmap;
+//Texture2D gPillar6Lightmap;
+//Texture2D gPillar7Lightmap;
 
 cbuffer PerFrameCB
 {
-    uint gFloorInstanceID;
-    uint gLeftWallInstanceID;
-    uint gRightWallInstanceID;
-    uint gRoofLeftInstanceID;
-    uint gRoofRightInstanceID;
+    //uint gFloorInstanceID;
+    //uint gLeftWallInstanceID;
+    //uint gRightWallInstanceID;
+    //uint gRoofLeftInstanceID;
+    //uint gRoofRightInstanceID;
 
-    uint gPillar0InstanceID;
-    uint gPillar1InstanceID;
-    uint gPillar2InstanceID;
-    uint gPillar3InstanceID;
-    uint gPillar4InstanceID;
-    uint gPillar5InstanceID;
-    uint gPillar6InstanceID;
-    uint gPillar7InstanceID;
+    //uint gPillar0InstanceID;
+    //uint gPillar1InstanceID;
+    //uint gPillar2InstanceID;
+    //uint gPillar3InstanceID;
+    //uint gPillar4InstanceID;
+    //uint gPillar5InstanceID;
+    //uint gPillar6InstanceID;
+    //uint gPillar7InstanceID;
 
-    float3 gPillar0CenterW;
-    float3 gPillar1CenterW;
-    float3 gPillar2CenterW;
-    float3 gPillar3CenterW;
-    float3 gPillar4CenterW;
-    float3 gPillar5CenterW;
-    float3 gPillar6CenterW;
-    float3 gPillar7CenterW;
+    //float3 gPillar0CenterW;
+    //float3 gPillar1CenterW;
+    //float3 gPillar2CenterW;
+    //float3 gPillar3CenterW;
+    //float3 gPillar4CenterW;
+    //float3 gPillar5CenterW;
+    //float3 gPillar6CenterW;
+    //float3 gPillar7CenterW;
 
-    float3 gPillar0HalfExtentW;
-    float3 gPillar1HalfExtentW;
-    float3 gPillar2HalfExtentW;
-    float3 gPillar3HalfExtentW;
-    float3 gPillar4HalfExtentW;
-    float3 gPillar5HalfExtentW;
-    float3 gPillar6HalfExtentW;
-    float3 gPillar7HalfExtentW;
+    //float3 gPillar0HalfExtentW;
+    //float3 gPillar1HalfExtentW;
+    //float3 gPillar2HalfExtentW;
+    //float3 gPillar3HalfExtentW;
+    //float3 gPillar4HalfExtentW;
+    //float3 gPillar5HalfExtentW;
+    //float3 gPillar6HalfExtentW;
+    //float3 gPillar7HalfExtentW;
 };
 
 // ------------------------------------------------------------------
@@ -443,9 +443,9 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 litColor = albedo;
 
     const uint instanceID = vsOut.instanceID.index;
-    if (instanceID < 18) {
+    if (instanceID < 19) {
          //litColor = albedo;
-        discard;
+        //discard;
     }
         
 

@@ -38,7 +38,7 @@
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
-const std::string loadFromFileName = "DirectAbsErr10AsymSceneN5.txt";
+const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 #else
 //const std::string loadFromFileName = "DirectUniformGrid32.txt";
@@ -123,52 +123,52 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-        applyVar["gFloorLightmap"] = mpFloorLightmap;
-        applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
-        applyVar["gRightWallLightmap"] = mpRightWallLightmap;
-        applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
-        applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
-        applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
-        applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
-        applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
-        applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
-        applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
-        applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
-        applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
-        applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
+        //applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
+        //applyVar["gFloorLightmap"] = mpFloorLightmap;
+        //applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
+        //applyVar["gRightWallLightmap"] = mpRightWallLightmap;
+        //applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
+        //applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
+        //applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
+        //applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
+        //applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
+        //applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
+        //applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
+        //applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
+        //applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
+        //applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
 
-        applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
-        applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
-        applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
-        applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
-        applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
-        applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
-        applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
-        applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
-        applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
-        applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
-        applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
-        applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
-        applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
+        //applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
+        //applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
+        //applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
+        //applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
+        //applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
+        //applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
+        //applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
+        //applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
+        //applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
+        //applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
+        //applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
+        //applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
+        //applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
 
-        applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
-        applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
-        applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
-        applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
-        applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
-        applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
-        applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
-        applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
+        //applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
+        //applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
+        //applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
+        //applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
+        //applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
+        //applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
+        //applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
+        //applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
 
-        applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        //applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
@@ -426,7 +426,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpEmptyVao = Vao::create(Vao::Topology::TriangleStrip);
         mpCompositeState->setVao(mpEmptyVao);
 
-        loadLightmaps();
+        //loadLightmaps();
   
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();

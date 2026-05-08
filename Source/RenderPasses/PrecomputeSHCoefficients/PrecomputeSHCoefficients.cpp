@@ -53,8 +53,10 @@ const float verificationY = 0.2f;
 const float verificationExtent = 0.25f;
 
 //const float ErrorThreshold = 100000000.0f;
+//const float ErrorThreshold = 20.0f;
 const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 5.0f;
+//const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
 //const float ErrorThreshold =2.0f;//threshold for Erel
@@ -86,8 +88,15 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymSceneN5.txt";
 //const std::string saveToFileName = "DirectAbsErr10AsymSceneN6.txt";
-const std::string saveToFileName = "DirectAbsErr10AsymSceneN6Progressive.txt";
+//const std::string saveToFileName = "DirectAbsErr10AsymSceneN6Progressive.txt";
 //const std::string saveToFileName = "DirectU32AsymScene.txt";
+
+//const std::string saveToFileName = "DirectAbsErr20DataScene.txt";
+const std::string saveToFileName = "DirectAbsErr10DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
+
+//const std::string saveToFileName = "U32DataScene.txt";
 
 namespace
 {
@@ -437,8 +446,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             using clock = std::chrono::high_resolution_clock;
             auto tStart = clock::now();
            
-            ProgressiveRefineBuild(pRenderContext);
-            //SinglePassBuild(pRenderContext);
+            //ProgressiveRefineBuild(pRenderContext);
+            SinglePassBuild(pRenderContext);
             auto tEnd = clock::now();
             double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
             mAdaptiveProbeVolume->setBuildTimeMs(ms);
@@ -525,8 +534,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                         uint32_t probeIdx = (z * probeCountDim.y * probeCountDim.x) + (y * probeCountDim.x) + x;
 
                         int offset = x * numSamplesPerProbe;
-                        std::vector<ProbeSampleData> probeSamplingResults;
-                        probeSamplingResults.assign(rowSamplingData.begin() + offset, rowSamplingData.begin() + offset + numSamplesPerProbe);
+                        //std::vector<ProbeSampleData> probeSamplingResults;
+                        //probeSamplingResults.assign(rowSamplingData.begin() + offset, rowSamplingData.begin() + offset + numSamplesPerProbe);
 
                         // Convert to Polar for SH Math (Z, X, Y mapping)
                         float3 xPolar = float3(rowPositions[x].z, rowPositions[x].x, rowPositions[x].y);
@@ -535,8 +544,8 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                         std::vector<GradSHCoeff> grads;
 
                         // Perform Physics Calculations
-                        calculateSHCoeffsGradients(grads, xPolar, probeSamplingResults, samplingDirs);
-                        calculateSHCoeffs(coeffs, probeSamplingResults, numSamplesPerProbe);
+                        calculateSHCoeffsGradients(grads, xPolar, rowSamplingData.data(), numSamplesPerProbe, samplingDirs);
+                        calculateSHCoeffs(coeffs, rowSamplingData.data(), numSamplesPerProbe);
 
                         // Store in the Volume object
                         mUniformProbeVolume->setProbeData(probeIdx, coeffs, grads);
@@ -991,8 +1000,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
-            //generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
-            generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
+            generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
+            //generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
 
             mpProbeDirSamplesBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeDirSample), numSamplesPerProbe, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, samplingDirs.data()
