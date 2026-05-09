@@ -24,8 +24,8 @@ public:
     void bindShaderData(ShaderVar& var);
 
     // Getters
-    uint3 getCellResolution() const { return mCellResolution; } // 16,16,16
-    uint3 getProbeCountDim() const { return mProbeCountDim; }   // 17,17,17
+    uint3 getCellResolution() const { return mProbeResolution; } // 16,16,16
+    uint3 getProbeCountDim() const { return mCornerResolution; }   // 17,17,17
     float3 getMinPoint() const { return mMinPoint; }
     float3 getMaxPoint() const { return mMaxPoint; }
     float3 getCellSize() const { return mCellSize; }
@@ -42,8 +42,8 @@ private:
     ref<Device> mpDevice;
 
     // Dimensions
-    uint3 mCellResolution = { 0, 0, 0 }; // Number of Boxes
-    uint3 mProbeCountDim = { 0, 0, 0 };  // Number of Corners (Res + 1)
+    uint3 mProbeResolution = { 0, 0, 0 }; // Number of Boxes
+    uint3 mCornerResolution = { 0, 0, 0 };  // Number of Corners (Res + 1)
     uint32_t mTotalProbes = 0;           // Flattened count
 
     float3 mMinPoint = { 0, 0, 0 };

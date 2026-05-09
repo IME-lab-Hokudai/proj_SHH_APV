@@ -104,8 +104,10 @@ void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoef
 
     // Pre-load indices for the 8 corners
     int cIdx[8];
+    [unroll]
     for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
 
+    [unroll]
     for (int band = 0; band < 9; ++band)
     {
         // 1. Fetch Corner Values (No Gradients needed!)
@@ -445,7 +447,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     const uint instanceID = vsOut.instanceID.index;
     if (instanceID < 19) {
          //litColor = albedo;
-        //discard;
+       discard;
     }
         
 
@@ -536,6 +538,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         int probeIdx = traverseOctree(shadingData.posW);
         // 2. Compute interpolated SH Coeffs
         fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+        //fetchTrilinearInterpolatedSH(probeIdx, shadingData.posW, finalSH);
 
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;

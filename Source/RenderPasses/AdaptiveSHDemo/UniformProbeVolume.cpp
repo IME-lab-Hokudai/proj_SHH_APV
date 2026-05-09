@@ -15,11 +15,11 @@ UniformProbeVolume::UniformProbeVolume(ref<Device> pDevice)
 
 void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution)
 {
-    mCellResolution = cellResolution;
+    mProbeResolution = cellResolution;
 
     // CORRECTION: Probes are at corners, so we need (N + 1)
-    mProbeCountDim = mCellResolution + uint3(1, 1, 1);
-    mTotalProbes = mProbeCountDim.x * mProbeCountDim.y * mProbeCountDim.z;
+    mCornerResolution = mProbeResolution + uint3(1, 1, 1);
+    mTotalProbes = mCornerResolution.x * mCornerResolution.y * mCornerResolution.z;
 
 
 
@@ -41,7 +41,7 @@ void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution
     mMaxPoint = scaledMax;
 
     // Cell size is based on the volume bounds divided by CELL count
-    float3 dims = float3(std::max(1u, mCellResolution.x), std::max(1u, mCellResolution.y), std::max(1u, mCellResolution.z));
+    float3 dims = float3(std::max(1u, mProbeResolution.x), std::max(1u, mProbeResolution.y), std::max(1u, mProbeResolution.z));
     mCellSize = (mMaxPoint - mMinPoint) / dims;
 
     // Resize Storage
@@ -57,11 +57,11 @@ void UniformProbeVolume::getProbePositions(std::vector<float3>& outPositions) co
 
     // Generate positions for every CORNER
     // Z -> Y -> X iteration order
-    for (uint z = 0; z < mProbeCountDim.z; ++z)
+    for (uint z = 0; z < mCornerResolution.z; ++z)
     {
-        for (uint y = 0; y < mProbeCountDim.y; ++y)
+        for (uint y = 0; y < mCornerResolution.y; ++y)
         {
-            for (uint x = 0; x < mProbeCountDim.x; ++x)
+            for (uint x = 0; x < mCornerResolution.x; ++x)
             {
                 // Position = Origin + Index * CellSize
                 float3 pos = mMinPoint + float3(x, y, z) * mCellSize;
@@ -115,7 +115,7 @@ void UniformProbeVolume::bindShaderData(ShaderVar& var)
     var["PerFrameCB"]["gGridMin"] = mMinPoint;
     //var["PerFrameCB"]["gGridMax"] = mMaxPoint;
     // Pass the PROBE DIMENSION (Nodes), not the Cell Dimension, for stride calculations
-    var["PerFrameCB"]["gProbeCountDim"] = mProbeCountDim;
+    var["PerFrameCB"]["gProbeCountDim"] = mCornerResolution;
     var["PerFrameCB"]["gCellSize"] = mCellSize;
 }
 
@@ -134,7 +134,7 @@ void UniformProbeVolume::saveToFile(const std::string& filename) const
     out << "UNIFORM_GRID_V2\n";
 
     // Grid Dimensions
-    out << mCellResolution.x << " " << mCellResolution.y << " " << mCellResolution.z << "\n";
+    out << mProbeResolution.x << " " << mProbeResolution.y << " " << mProbeResolution.z << "\n";
 
     // Bounds
     out << mMinPoint.x << " " << mMinPoint.y << " " << mMinPoint.z << "\n";
@@ -191,15 +191,15 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
     }
 
     // 2. Load Configuration
-    in >> mCellResolution.x >> mCellResolution.y >> mCellResolution.z;
+    in >> mProbeResolution.x >> mProbeResolution.y >> mProbeResolution.z;
     in >> mMinPoint.x >> mMinPoint.y >> mMinPoint.z;
     in >> mMaxPoint.x >> mMaxPoint.y >> mMaxPoint.z;
     in >> mBuildTimeMs;
     // 3. Re-initialize Internal State (Logic copied from initGrid, but using loaded bounds)
-    mProbeCountDim = mCellResolution + uint3(1, 1, 1);
-    mTotalProbes = mProbeCountDim.x * mProbeCountDim.y * mProbeCountDim.z;
+    mCornerResolution = mProbeResolution + uint3(1, 1, 1);
+    mTotalProbes = mCornerResolution.x * mCornerResolution.y * mCornerResolution.z;
 
-    float3 dims = float3(std::max(1u, mCellResolution.x), std::max(1u, mCellResolution.y), std::max(1u, mCellResolution.z));
+    float3 dims = float3(std::max(1u, mProbeResolution.x), std::max(1u, mProbeResolution.y), std::max(1u, mProbeResolution.z));
     mCellSize = (mMaxPoint - mMinPoint) / dims;
 
     // Resize Storage

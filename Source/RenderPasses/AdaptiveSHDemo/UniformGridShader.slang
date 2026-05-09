@@ -8,55 +8,55 @@ SamplerState gLinearSampler;
 
 StructuredBuffer<UniformGridCorner> gUniformProbes;
 
-Texture2D gFloorLightmap;
-Texture2D gLeftWallLightmap;
-Texture2D gRightWallLightmap;
-Texture2D gRoofLeftLightmap;
-Texture2D gRoofRightLightmap;
+//Texture2D gFloorLightmap;
+//Texture2D gLeftWallLightmap;
+//Texture2D gRightWallLightmap;
+//Texture2D gRoofLeftLightmap;
+//Texture2D gRoofRightLightmap;
 
-Texture2D gPillar0Lightmap;
-Texture2D gPillar1Lightmap;
-Texture2D gPillar2Lightmap;
-Texture2D gPillar3Lightmap;
-Texture2D gPillar4Lightmap;
-Texture2D gPillar5Lightmap;
-Texture2D gPillar6Lightmap;
-Texture2D gPillar7Lightmap;
+//Texture2D gPillar0Lightmap;
+//Texture2D gPillar1Lightmap;
+//Texture2D gPillar2Lightmap;
+//Texture2D gPillar3Lightmap;
+//Texture2D gPillar4Lightmap;
+//Texture2D gPillar5Lightmap;
+//Texture2D gPillar6Lightmap;
+//Texture2D gPillar7Lightmap;
 
 cbuffer PerFrameCB
 {
-    uint gFloorInstanceID;
-    uint gLeftWallInstanceID;
-    uint gRightWallInstanceID;
-    uint gRoofLeftInstanceID;
-    uint gRoofRightInstanceID;
+    //uint gFloorInstanceID;
+    //uint gLeftWallInstanceID;
+    //uint gRightWallInstanceID;
+    //uint gRoofLeftInstanceID;
+    //uint gRoofRightInstanceID;
 
-    uint gPillar0InstanceID;
-    uint gPillar1InstanceID;
-    uint gPillar2InstanceID;
-    uint gPillar3InstanceID;
-    uint gPillar4InstanceID;
-    uint gPillar5InstanceID;
-    uint gPillar6InstanceID;
-    uint gPillar7InstanceID;
+    //uint gPillar0InstanceID;
+    //uint gPillar1InstanceID;
+    //uint gPillar2InstanceID;
+    //uint gPillar3InstanceID;
+    //uint gPillar4InstanceID;
+    //uint gPillar5InstanceID;
+    //uint gPillar6InstanceID;
+    //uint gPillar7InstanceID;
 
-    float3 gPillar0CenterW;
-    float3 gPillar1CenterW;
-    float3 gPillar2CenterW;
-    float3 gPillar3CenterW;
-    float3 gPillar4CenterW;
-    float3 gPillar5CenterW;
-    float3 gPillar6CenterW;
-    float3 gPillar7CenterW;
+    //float3 gPillar0CenterW;
+    //float3 gPillar1CenterW;
+    //float3 gPillar2CenterW;
+    //float3 gPillar3CenterW;
+    //float3 gPillar4CenterW;
+    //float3 gPillar5CenterW;
+    //float3 gPillar6CenterW;
+    //float3 gPillar7CenterW;
 
-    float3 gPillar0HalfExtentW;
-    float3 gPillar1HalfExtentW;
-    float3 gPillar2HalfExtentW;
-    float3 gPillar3HalfExtentW;
-    float3 gPillar4HalfExtentW;
-    float3 gPillar5HalfExtentW;
-    float3 gPillar6HalfExtentW;
-    float3 gPillar7HalfExtentW;
+    //float3 gPillar0HalfExtentW;
+    //float3 gPillar1HalfExtentW;
+    //float3 gPillar2HalfExtentW;
+    //float3 gPillar3HalfExtentW;
+    //float3 gPillar4HalfExtentW;
+    //float3 gPillar5HalfExtentW;
+    //float3 gPillar6HalfExtentW;
+    //float3 gPillar7HalfExtentW;
 
     float3 gGridMin;
     float3 gCellSize;
@@ -94,6 +94,80 @@ float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
     float h11 = t3 - t2;
 
     return h00 * v0 + h10 * s0 + h01 * v1 + h11 * s1;
+}
+
+// ------------------------------------------------------------------
+// Standard Trilinear Interpolation for Uniform Grid
+// Grid layout:
+//   gProbeCountDim = number of corner/grid vertices, e.g. U32 -> 33x33x33
+//   cell count     = gProbeCountDim - 1
+//
+// Corner bit convention:
+//   bit 0 -> Z
+//   bit 1 -> Y
+//   bit 2 -> X
+// ------------------------------------------------------------------
+void fetchTrilinearInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
+{
+    // 1. Calculate Grid Coordinates (Cell Logic)
+    // ----------------------------------------------------------
+    float3 relPos = pos - gGridMin;
+
+    // Determine which "Box" (Cell) we are in
+    int3 cellCoords = int3(floor(relPos / gCellSize));
+
+    // Clamp to valid range (0 to N-2) so we can always look up neighbor +1
+    int3 maxCellIndex = int3(gProbeCountDim) - int3(1, 1, 1);
+    cellCoords = max(int3(0), min(cellCoords, maxCellIndex - int3(1)));
+
+    // 2. Calculate Local 't' (0..1)
+    // ----------------------------------------------------------
+    float3 cellOrigin = gGridMin + float3(cellCoords) * gCellSize;
+    // float3 t = (pos - cellOrigin) / gCellSize;
+    float3 t = saturate((pos - cellOrigin) / gCellSize);
+    // 3. Fetch Indices (Using Helper)
+    // ----------------------------------------------------------
+    // We order these to match the loop bit-logic: Bit 0=Z, Bit 1=Y, Bit 2=X
+    int cIdx[8];
+    cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
+    cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
+    cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
+    cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
+    cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
+    cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
+    cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
+    cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
+
+    // ----------------------------------------------------------
+    // 4. Trilinear interpolate each SH band
+    // ----------------------------------------------------------
+    [unroll]
+    for (int band = 0; band < 9; ++band)
+    {
+        float3 v[8];
+        // Gradients mapped to Falcor Axes
+        float3 g_FalcorX[8];
+        float3 g_FalcorY[8];
+        float3 g_FalcorZ[8];
+        [unroll]
+        for (int i = 0; i < 8; ++i)
+        {
+            v[i] = gUniformProbes[cIdx[i]].coeffs[band].rgb;
+        }
+
+        // Z interpolation: bit 0
+        float3 z00 = lerp(v[0], v[1], t.z);
+        float3 z01 = lerp(v[2], v[3], t.z);
+        float3 z10 = lerp(v[4], v[5], t.z);
+        float3 z11 = lerp(v[6], v[7], t.z);
+
+        // Y interpolation: bit 1
+        float3 y0 = lerp(z00, z01, t.y);
+        float3 y1 = lerp(z10, z11, t.y);
+
+        // X interpolation: bit 2
+        finalCoeffs[band] = lerp(y0, y1, t.x);
+    }
 }
 
 // ------------------------------------------------------------------
@@ -362,7 +436,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 litColor = albedo;
 
     const uint instanceID = vsOut.instanceID.index;
-    if (instanceID < 18) {
+    if (instanceID < 19) {
         // litColor = albedo;
         discard;
     }
@@ -451,8 +525,8 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         float3 finalSH[MAX_SH_BASIS];
 
             // 2. Compute interpolated SH Coeffs
-      fetchHermiteInterpolatedSH(vsOut.posW, finalSH);
-
+       fetchHermiteInterpolatedSH(vsOut.posW, finalSH);
+       // fetchTrilinearInterpolatedSH(vsOut.posW, finalSH);
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
     }

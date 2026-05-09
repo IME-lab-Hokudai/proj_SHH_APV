@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -54,18 +54,18 @@ const float verificationExtent = 0.25f;
 
 //const float ErrorThreshold = 100000000.0f;
 //const float ErrorThreshold = 20.0f;
-const float ErrorThreshold = 10.0f;
+//const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 5.0f;
-//const float ErrorThreshold = 1.0f;
+const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
 //const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-const uint3 unifromGridSize = uint3(32, 32, 32);
+//const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-//const uint3 unifromGridSize = uint3(64, 64, 64);
+const uint3 unifromGridSize = uint3(64, 64, 64);
 const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
@@ -92,10 +92,11 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 //const std::string saveToFileName = "DirectU32AsymScene.txt";
 
 //const std::string saveToFileName = "DirectAbsErr20DataScene.txt";
-const std::string saveToFileName = "DirectAbsErr10DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr10DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
+const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
 
 namespace
@@ -533,7 +534,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     {
                         uint32_t probeIdx = (z * probeCountDim.y * probeCountDim.x) + (y * probeCountDim.x) + x;
 
-                        int offset = x * numSamplesPerProbe;
+                        //int offset = x * numSamplesPerProbe;
                         //std::vector<ProbeSampleData> probeSamplingResults;
                         //probeSamplingResults.assign(rowSamplingData.begin() + offset, rowSamplingData.begin() + offset + numSamplesPerProbe);
 
@@ -542,10 +543,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                         std::vector<float3> coeffs;
                         std::vector<GradSHCoeff> grads;
+                        size_t offset = size_t(x) * size_t(numSamplesPerProbe);
+                        const ProbeSampleData* samples =
+                            rowSamplingData.data() + offset;
 
                         // Perform Physics Calculations
-                        calculateSHCoeffsGradients(grads, xPolar, rowSamplingData.data(), numSamplesPerProbe, samplingDirs);
-                        calculateSHCoeffs(coeffs, rowSamplingData.data(), numSamplesPerProbe);
+                        calculateSHCoeffsGradients(grads, xPolar, samples, numSamplesPerProbe, samplingDirs);
+                        calculateSHCoeffs(coeffs, samples, numSamplesPerProbe);
 
                         // Store in the Volume object
                         mUniformProbeVolume->setProbeData(probeIdx, coeffs, grads);
