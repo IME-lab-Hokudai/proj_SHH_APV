@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -55,8 +55,8 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 100000000.0f;
 //const float ErrorThreshold = 20.0f;
 //const float ErrorThreshold = 10.0f;
-//const float ErrorThreshold = 5.0f;
-const float ErrorThreshold = 1.0f;
+const float ErrorThreshold = 5.0f;
+//const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
 //const float ErrorThreshold =2.0f;//threshold for Erel
@@ -93,10 +93,10 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
 //const std::string saveToFileName = "DirectAbsErr20DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10DataScene.txt";
-//const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
+const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
-const std::string saveToFileName = "U64DataScene.txt";
+//const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
 
 namespace

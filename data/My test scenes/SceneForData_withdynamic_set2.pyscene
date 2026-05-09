@@ -309,17 +309,17 @@ bunny_mat.roughness = 1.0
 bunny_mesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
 
 bunny_scales = [
-    float3(0.6, 0.6, 0.6),
+    float3(0.5, 0.5, 0.5),
     float3(0.5, 0.5, 0.5),
 #    float3(0.5, 0.5, 0.5),
     float3(0.6, 0.6, 0.6),
 ]
 
 bunny_positions = [
-    float3(-3.2, 1.0,  0.2),
-    float3(-1.1, 2.0,  2.0),
+    float3(-2.2, 1.2,  -3.0),
+    float3(-0.5, 1.7,  -3.2),
 #    float3( 1.0, 2.0,  3.6),
-    float3( 1.0, 1.0,  0.7),  #left
+    float3( 1.0, 1.0,  -2.8),  #left
 ]
 
 for i, p in enumerate(bunny_positions):
@@ -329,7 +329,7 @@ for i, p in enumerate(bunny_positions):
             Transform(
                 scaling=bunny_scales[i],
                 translation=p,
-                rotationEulerDeg=float3(0.0, 180.0, 0.0)
+                rotationEulerDeg=float3(0.0, -180.0, 0.0)
             )
         ),
         sceneBuilder.addTriangleMesh(bunny_mesh, bunny_mat)
@@ -340,8 +340,8 @@ for i, p in enumerate(bunny_positions):
 # Camera
 # -------------------------
 camera = Camera()
-camera.position = float3(-1.2558, 2.0674,-2.9329)
-camera.target = float3(-1.2115, 2.0212, -1.9349)
+camera.position = float3(0.2628, 1.5105,-0.3575)
+camera.target = float3(0.1853, 1.6316, -1.3471)
 camera.farPlane = 10000.0
 camera.nearPlane = 0.1
 sceneBuilder.addCamera(camera)
