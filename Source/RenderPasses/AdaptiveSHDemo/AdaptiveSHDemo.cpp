@@ -39,8 +39,9 @@
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string loadFromFileName = "DirectAbsErr20DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
+//const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else

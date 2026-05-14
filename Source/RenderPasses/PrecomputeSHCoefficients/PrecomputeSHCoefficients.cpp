@@ -55,7 +55,9 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 100000000.0f;
 //const float ErrorThreshold = 20.0f;
 //const float ErrorThreshold = 10.0f;
-const float ErrorThreshold = 5.0f;
+const float ErrorThreshold = 8.5f;
+//const float ErrorThreshold = 8.0f;
+//const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
@@ -66,7 +68,8 @@ const bool useRelativeError = false;
 //const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
 const uint3 unifromGridSize = uint3(64, 64, 64);
-const std::string loadFromFileName = "IndirectUniformGrid32.txt";
+//const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -93,12 +96,20 @@ const std::string loadFromFileName = "IndirectUniformGrid32.txt";
 
 //const std::string saveToFileName = "DirectAbsErr20DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10DataScene.txt";
-const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
 //const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
 
+//const std::string saveToFileName = "DirectAbsErr20N6DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr10N6DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr8p5N6DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr8N6DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
+//const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
+
+const std::string saveToFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -112,6 +123,246 @@ const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSa
 const char kShowReconstructedEnvMap[] = "Show environment map";
 const char kShowSHGrid[] = "Show SH grid";
 } // namespace
+
+namespace
+{
+    static float luminance709(float3 c)
+    {
+        return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+    }
+    static double percentileVector(std::vector<float> values, double percentile)
+    {
+        if (values.empty())
+            return 0.0;
+
+        std::sort(values.begin(), values.end());
+
+        double pos = percentile * 0.01 * double(values.size() - 1);
+        size_t i0 = size_t(std::floor(pos));
+        size_t i1 = std::min(i0 + 1, values.size() - 1);
+
+        double t = pos - double(i0);
+
+        return double(values[i0]) * (1.0 - t) + double(values[i1]) * t;
+    }
+
+    struct DeltaErrorStats
+    {
+        std::vector<float> deltaAPEValues;
+
+        double sumDeltaAPE = 0.0;
+        double sumDeltaAbsErr = 0.0;
+
+        uint64_t sampleCount = 0;
+        uint64_t adaptiveBetterCount = 0;
+    };
+
+    static void addDeltaErrorSample(
+        DeltaErrorStats& stats,
+        float3 u32Irr,
+        float3 adaptiveIrr,
+        float3 refIrr,
+        float relEpsilon
+    )
+    {
+        float yRef = luminance709(refIrr);
+        float yU32 = luminance709(u32Irr);
+        float yAdaptive = luminance709(adaptiveIrr);
+
+        float absErrU32 = std::abs(yU32 - yRef);
+        float absErrAdaptive = std::abs(yAdaptive - yRef);
+
+        float denom = std::max(std::abs(yRef), relEpsilon);
+
+        float apeU32 = absErrU32 / denom * 100.0f;
+        float apeAdaptive = absErrAdaptive / denom * 100.0f;
+
+        float deltaAPE = apeU32 - apeAdaptive;
+        float deltaAbsErr = absErrU32 - absErrAdaptive;
+
+        if (!std::isfinite(deltaAPE))
+            return;
+
+        stats.deltaAPEValues.push_back(deltaAPE);
+        stats.sumDeltaAPE += double(deltaAPE);
+        stats.sumDeltaAbsErr += double(deltaAbsErr);
+        stats.sampleCount++;
+
+        if (absErrAdaptive < absErrU32)
+            stats.adaptiveBetterCount++;
+    }
+
+    static void writeDeltaErrorRow(
+        std::ofstream& csv,
+        const std::string& region,
+        const DeltaErrorStats& stats,
+        uint64_t totalSampleCount
+    )
+    {
+        double sampleSharePercent = totalSampleCount > 0
+            ? 100.0 * double(stats.sampleCount) / double(totalSampleCount)
+            : 0.0;
+
+        double meanDeltaMAPE = stats.sampleCount > 0
+            ? stats.sumDeltaAPE / double(stats.sampleCount)
+            : 0.0;
+
+        double meanDeltaAbsErr = stats.sampleCount > 0
+            ? stats.sumDeltaAbsErr / double(stats.sampleCount)
+            : 0.0;
+
+        double medianDeltaMAPE = percentileVector(stats.deltaAPEValues, 50.0);
+        double p05DeltaMAPE = percentileVector(stats.deltaAPEValues, 5.0);
+        double p95DeltaMAPE = percentileVector(stats.deltaAPEValues, 95.0);
+
+        double adaptiveBetterRate = stats.sampleCount > 0
+            ? 100.0 * double(stats.adaptiveBetterCount) / double(stats.sampleCount)
+            : 0.0;
+
+        csv
+            << region << ","
+            << stats.sampleCount << ","
+            << sampleSharePercent << ","
+            << meanDeltaMAPE << ","
+            << medianDeltaMAPE << ","
+            << p05DeltaMAPE << ","
+            << p95DeltaMAPE << ","
+            << meanDeltaAbsErr << ","
+            << adaptiveBetterRate
+            << "\n";
+    }
+
+    struct IrradianceFieldErrorStats
+    {
+        std::vector<float> apeValues;
+
+        double sumAbsErr = 0.0;
+        double sumSqErr = 0.0;
+        double sumRefLum = 0.0;
+        double sumTestLum = 0.0;
+
+        uint64_t sampleCount = 0;
+    };
+
+    static void addIrradianceErrorSample(
+        IrradianceFieldErrorStats& stats,
+        float3 testIrr,
+        float3 refIrr,
+        float relEpsilon
+    )
+    {
+        float yTest = luminance709(testIrr);
+        float yRef = luminance709(refIrr);
+
+        float absErr = std::abs(yTest - yRef);
+
+        // Use abs(yRef) because SH irradiance can become slightly negative.
+        float denom = std::max(std::abs(yRef), relEpsilon);
+        float ape = absErr / denom * 100.0f;
+
+        if (!std::isfinite(ape))
+            return;
+
+        stats.apeValues.push_back(ape);
+        stats.sumAbsErr += double(absErr);
+        stats.sumSqErr += double(absErr) * double(absErr);
+        stats.sumRefLum += double(yRef);
+        stats.sumTestLum += double(yTest);
+        stats.sampleCount++;
+    }
+
+    static double meanVector(const std::vector<float>& values)
+    {
+        if (values.empty())
+            return 0.0;
+
+        double sum = 0.0;
+        for (float v : values)
+            sum += double(v);
+
+        return sum / double(values.size());
+    }
+
+
+
+    static std::vector<float3> makeSixAxisNormalsWorld()
+    {
+        // IMPORTANT:
+        // These are Falcor/world-space normals.
+        // Do NOT pre-swizzle them. The CPU irradiance evaluator should mirror
+        // the shader and do x=n.z, y=n.x, z=n.y internally.
+        return {
+            float3(1.0f,  0.0f,  0.0f),
+            float3(-1.0f,  0.0f,  0.0f),
+            float3(0.0f,  1.0f,  0.0f),
+            float3(0.0f, -1.0f,  0.0f),
+            float3(0.0f,  0.0f,  1.0f),
+            float3(0.0f,  0.0f, -1.0f),
+        };
+    }
+
+    static void writeFieldErrorSummaryRow(
+        std::ofstream& csv,
+        const std::string& method,
+        const std::string& fileName,
+        int maxDepth,
+        const std::string& threshold,
+        const IrradianceFieldErrorStats& stats
+    )
+    {
+        double mape = meanVector(stats.apeValues);
+        double p50 = percentileVector(stats.apeValues, 50.0);
+        double p95 = percentileVector(stats.apeValues, 95.0);
+        double p99 = percentileVector(stats.apeValues, 99.0);
+
+        double mae = stats.sampleCount > 0
+            ? stats.sumAbsErr / double(stats.sampleCount)
+            : 0.0;
+
+        double rmse = stats.sampleCount > 0
+            ? std::sqrt(stats.sumSqErr / double(stats.sampleCount))
+            : 0.0;
+
+        double meanRef = stats.sampleCount > 0
+            ? stats.sumRefLum / double(stats.sampleCount)
+            : 0.0;
+
+        double meanTest = stats.sampleCount > 0
+            ? stats.sumTestLum / double(stats.sampleCount)
+            : 0.0;
+
+        csv
+            << method << ","
+            << fileName << ","
+            << maxDepth << ","
+            << threshold << ","
+            << stats.sampleCount << ","
+            << mape << ","
+            << p50 << ","
+            << p95 << ","
+            << p99 << ","
+            << mae << ","
+            << rmse << ","
+            << meanRef << ","
+            << meanTest
+            << "\n";
+    }
+
+    static void writeFieldErrorSamples(
+        std::ofstream& csv,
+        const std::string& method,
+        const IrradianceFieldErrorStats& stats,
+        uint32_t stride
+    )
+    {
+        stride = std::max(1u, stride);
+
+        for (size_t i = 0; i < stats.apeValues.size(); i += stride)
+        {
+            csv << method << "," << stats.apeValues[i] << "\n";
+        }
+    }
+}
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
@@ -1004,6 +1255,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
     if (mpScene)
     {
+        
             generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
             //generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
 
@@ -1012,6 +1264,8 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             );
             mpProbeDirSamplesBuffer->setName("Probe Dir Samples");
             initSHBasisGradientAndHessianTables(samplingDirs);
+
+            //exportIrradianceFieldErrorComparison();
 
            // program
            ProgramDesc desc;
@@ -1173,3 +1427,265 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     }
 }
 
+void PrecomputeSHCoefficients::exportIrradianceFieldErrorComparison()
+{
+    // ============================================================
+    // Files
+    // ============================================================
+
+    // Change this later to U128DataScene.txt when ready.
+    const std::string referenceFile = "U128DataScene.txt";
+    //const std::string referenceFile = "U64DataScene.txt";
+
+    const std::string uniform32File = "U32DataScene.txt";
+    const std::string adaptiveFile = "DirectAbsErr8p5N6DataScene.txt";
+
+    const std::string summaryCsvFile = "IrradianceFieldErrorSummary_U128Reference.csv";
+    const std::string sampleCsvFile = "IrradianceFieldErrorSamples_U128Reference.csv";
+    const std::string deltaCsvFile = "IrradianceFieldErrorDeltaByAdaptiveLevel_U128Reference.csv";
+
+    uint64_t adaptiveFailedLookup = 0;
+
+    // ============================================================
+    // Test settings
+    // ============================================================
+
+    const uint32_t queryRes = 64;
+    const std::vector<float3> normalDirs = makeSixAxisNormalsWorld();
+
+    const float relEpsilon = 1e-4f;
+    const uint32_t sampleCsvStride = 1;
+
+    // ============================================================
+    // Load grids
+    // ============================================================
+
+    logInfo("Loading irradiance field error test grids...");
+
+    ref<UniformProbeVolume> reference = UniformProbeVolume::create(mpDevice);
+    reference->loadFromFile(referenceFile);
+
+    ref<UniformProbeVolume> testU32 = UniformProbeVolume::create(mpDevice);
+    testU32->loadFromFile(uniform32File);
+
+    ref<AdaptiveProbeVolume> testAdaptive = AdaptiveProbeVolume::create(mpDevice);
+    testAdaptive->loadFromFile(adaptiveFile);
+
+    // Query domain: loaded reference bounds, with half-cell margin.
+    float3 evalMin = reference->getMinPoint();
+    float3 evalMax = reference->getMaxPoint();
+
+    float3 refCellSize = reference->getCellSize();
+    float3 margin = 0.5f * refCellSize;
+
+    evalMin += margin;
+    evalMax -= margin;
+
+    float3 evalExtent = evalMax - evalMin;
+
+    logInfo("Irradiance field error test:");
+    logInfo("  Reference = " + referenceFile);
+    logInfo("  Uniform   = " + uniform32File);
+    logInfo("  Adaptive  = " + adaptiveFile);
+    logInfo("  queryRes  = " + std::to_string(queryRes));
+    logInfo("  normals   = " + std::to_string(normalDirs.size()));
+
+    // ============================================================
+    // Accumulate normal error stats
+    // ============================================================
+
+    IrradianceFieldErrorStats u32Stats;
+    IrradianceFieldErrorStats adaptiveStats;
+
+    // ============================================================
+    // Accumulate delta/improvement stats
+    // Delta = U32 error - Adaptive error
+    // Positive means adaptive is better.
+    // ============================================================
+
+    DeltaErrorStats deltaAll;
+    DeltaErrorStats deltaL6;
+    DeltaErrorStats deltaL5;
+    DeltaErrorStats deltaCoarse;
+
+    uint64_t processedPositions = 0;
+
+    for (uint32_t z = 0; z < queryRes; ++z)
+    {
+        for (uint32_t y = 0; y < queryRes; ++y)
+        {
+            for (uint32_t x = 0; x < queryRes; ++x)
+            {
+                float3 u = float3(
+                    (float(x) + 0.5f) / float(queryRes),
+                    (float(y) + 0.5f) / float(queryRes),
+                    (float(z) + 0.5f) / float(queryRes)
+                );
+
+                float3 posW = evalMin + u * evalExtent;
+
+                int adaptiveProbeIdx = testAdaptive->traverseOctreeCPU(posW);
+                if (adaptiveProbeIdx < 0)
+                {
+                    adaptiveFailedLookup++;
+                    processedPositions++;
+                    continue;
+                }
+
+                int adaptiveLevel = testAdaptive->getProbeLevelCPU(adaptiveProbeIdx);
+
+                for (const float3& nWorld : normalDirs)
+                {
+                    float3 refIrr = reference->evaluateIrradianceHermiteCPU(posW, nWorld);
+                    float3 u32Irr = testU32->evaluateIrradianceHermiteCPU(posW, nWorld);
+                    float3 adaptiveIrr = testAdaptive->evaluateIrradianceHermiteCPU(posW, nWorld);
+
+                    // Existing global method-vs-reference stats.
+                    addIrradianceErrorSample(u32Stats, u32Irr, refIrr, relEpsilon);
+                    addIrradianceErrorSample(adaptiveStats, adaptiveIrr, refIrr, relEpsilon);
+
+                    // New direct U32-vs-adaptive improvement stats.
+                    addDeltaErrorSample(deltaAll, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+
+                    if (adaptiveLevel == 6)
+                    {
+                        addDeltaErrorSample(deltaL6, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                    }
+                    else if (adaptiveLevel == 5)
+                    {
+                        addDeltaErrorSample(deltaL5, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                    }
+                    else
+                    {
+                        addDeltaErrorSample(deltaCoarse, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                    }
+                }
+
+                processedPositions++;
+            }
+        }
+
+        if ((z % 4) == 0)
+        {
+            logInfo(
+                "Irradiance field error progress: z = " +
+                std::to_string(z) + " / " + std::to_string(queryRes)
+            );
+        }
+    }
+
+    logInfo("Finished sampling irradiance field error positions: " + std::to_string(processedPositions));
+    logInfo("Adaptive failed lookup count = " + std::to_string(adaptiveFailedLookup));
+
+    // ============================================================
+    // Write summary CSV
+    // ============================================================
+
+    {
+        std::ofstream csv(summaryCsvFile);
+        if (!csv)
+        {
+            logError("Failed to open summary CSV: " + summaryCsvFile);
+            return;
+        }
+
+        csv << std::fixed << std::setprecision(8);
+
+        csv
+            << "Method,"
+            << "File,"
+            << "MaxDepth,"
+            << "Threshold,"
+            << "SampleCount,"
+            << "MAPE_percent,"
+            << "P50_MAPE_percent,"
+            << "P95_MAPE_percent,"
+            << "P99_MAPE_percent,"
+            << "MAE,"
+            << "RMSE,"
+            << "MeanRefLuminance,"
+            << "MeanTestLuminance"
+            << "\n";
+
+        writeFieldErrorSummaryRow(
+            csv,
+            "Uniform U32",
+            uniform32File,
+            5,
+            "-",
+            u32Stats
+        );
+
+        writeFieldErrorSummaryRow(
+            csv,
+            "Adaptive N6",
+            adaptiveFile,
+            6,
+            "8.5",
+            adaptiveStats
+        );
+
+        csv.close();
+    }
+
+    // ============================================================
+    // Write raw sample CSV for Python CDF
+    // ============================================================
+
+    {
+        std::ofstream csv(sampleCsvFile);
+        if (!csv)
+        {
+            logError("Failed to open sample CSV: " + sampleCsvFile);
+            return;
+        }
+
+        csv << std::fixed << std::setprecision(8);
+        csv << "Method,APE_percent\n";
+
+        writeFieldErrorSamples(csv, "Uniform U32", u32Stats, sampleCsvStride);
+        writeFieldErrorSamples(csv, "Adaptive N6 Error Threshold 8.5", adaptiveStats, sampleCsvStride);
+
+        csv.close();
+    }
+
+    // ============================================================
+    // Write delta/improvement CSV grouped by adaptive leaf level
+    // ============================================================
+
+    {
+        std::ofstream csv(deltaCsvFile);
+        if (!csv)
+        {
+            logError("Failed to open delta CSV: " + deltaCsvFile);
+            return;
+        }
+
+        csv << std::fixed << std::setprecision(8);
+
+        csv
+            << "Region,"
+            << "SampleCount,"
+            << "SampleShare_percent,"
+            << "MeanDeltaMAPE,"
+            << "MedianDeltaMAPE,"
+            << "P05DeltaMAPE,"
+            << "P95DeltaMAPE,"
+            << "MeanDeltaAbsErr,"
+            << "AdaptiveBetterRate_percent"
+            << "\n";
+
+        const uint64_t totalDeltaSamples = deltaAll.sampleCount;
+
+        writeDeltaErrorRow(csv, "All", deltaAll, totalDeltaSamples);
+        writeDeltaErrorRow(csv, "Adaptive_L6", deltaL6, totalDeltaSamples);
+        writeDeltaErrorRow(csv, "Adaptive_L5", deltaL5, totalDeltaSamples);
+        writeDeltaErrorRow(csv, "Adaptive_L0_L4", deltaCoarse, totalDeltaSamples);
+
+        csv.close();
+    }
+
+    logInfo("Wrote irradiance field error summary CSV: " + summaryCsvFile);
+    logInfo("Wrote irradiance field error sample CSV: " + sampleCsvFile);
+    logInfo("Wrote irradiance field delta CSV: " + deltaCsvFile);
+}

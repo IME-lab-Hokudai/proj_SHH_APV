@@ -111,8 +111,8 @@ private:
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
     ref<UniformProbeVolume> mUniformProbeVolume;
-    //bool mNeedRebuildProbeVolume = false;
-    bool mNeedRebuildProbeVolume = true;
+    bool mNeedRebuildProbeVolume = false;
+    //bool mNeedRebuildProbeVolume = true;
 
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
@@ -120,4 +120,5 @@ private:
 
     void SinglePassBuild(RenderContext* pRenderContext);
     void ProgressiveRefineBuild(RenderContext* pRenderContext);
+    void exportIrradianceFieldErrorComparison();
 };

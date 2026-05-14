@@ -447,7 +447,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     const uint instanceID = vsOut.instanceID.index;
     if (instanceID < 19) {
          //litColor = albedo;
-       discard;
+       //discard;
     }
         
 

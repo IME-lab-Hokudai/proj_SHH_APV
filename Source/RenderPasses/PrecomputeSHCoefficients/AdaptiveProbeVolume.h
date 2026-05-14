@@ -94,14 +94,19 @@ public:
         }
     };
 
-    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
-
-    void constrainHangingNodesHermite();
-
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
     void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
+    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
+    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs) const;
+    int getProbeLevelCPU(int probeIdx) const
+    {
+        if (probeIdx < 0 || probeIdx >= int(mProbes.size()))
+            return -1;
 
+        return mProbes[probeIdx].level;
+    }
+    void constrainHangingNodesHermite();
     // ----------------------------------------------------------------
     // Batch Processing Interface
     // ----------------------------------------------------------------
@@ -171,6 +176,8 @@ public:
         const std::vector<std::vector<float3x3>>& hessiansBatch
     );
 
+    float3 evaluateIrradianceHermiteCPU(float3 posW, float3 normalW) const;
+
     uint32_t getPendingCornerCount() const { return (uint32_t)mPendingNewCorners.size(); }
 
     // New: seed-grid aware traversal helpers
@@ -239,8 +246,8 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    //int mMaxLevel = 6;
-    int mMaxLevel = 5;
+    int mMaxLevel = 6;
+    //int mMaxLevel = 5;
     //int mMaxLevel = 0;
     bool mUseRelativeError = false;
 

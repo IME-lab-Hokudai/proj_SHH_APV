@@ -36,6 +36,9 @@ public:
     double getBuildTimeMs() const { return mBuildTimeMs; }
     void setBuildTimeMs(double t) { mBuildTimeMs = t; }
 
+    bool fetchHermiteSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const;
+    float3 evaluateIrradianceHermiteCPU(float3 posW, float3 normalW) const;
+
 private:
     UniformProbeVolume(ref<Device> pDevice);
 

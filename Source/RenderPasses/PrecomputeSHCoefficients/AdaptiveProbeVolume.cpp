@@ -6,7 +6,71 @@
 // ------------------------------------------------------------------
 // CPU PORT OF SHADER LOGIC
 // ------------------------------------------------------------------
+float3 evaluateIrradiance(float3 n, const std::vector<float3>& shCoeffs)
+{
+    // Real Spherical Harmonics up to band 2
+    // Coordinate convention: x = forward, y = right, z = up
+    // so we need to remap falcor coords (Y-up) to polar coords (Z-up)
+    float x = n.z;
+    float y = n.x;
+    float z = n.y;
 
+    // ============================================================
+    // Real Spherical Harmonics up to l = 2
+    // Convention: Y_l^m, index = l(l + 1) + m
+    // Coordinate system: (x, y, z)
+    // ============================================================
+    //
+    //  Index layout table:
+    //
+    //   l |   m   | index |       Expression
+    //  ----|-------|--------|------------------------------------
+    //   0 |   0   |   0    | Y_0^0  = 0.282095
+    //   1 |  -1   |   1    | Y_1^-1 = 0.488603 * y
+    //   1 |   0   |   2    | Y_1^0  = 0.488603 * z
+    //   1 |   1   |   3    | Y_1^1  = 0.488603 * x
+    //   2 |  -2   |   4    | Y_2^-2 = 1.092548 * xy
+    //   2 |  -1   |   5    | Y_2^-1 = 1.092548 * yz
+    //   2 |   0   |   6    | Y_2^0  = 0.946175 * z^2 - 0.315392
+    //   2 |   1   |   7    | Y_2^1  = 1.092548 * xz
+    //   2 |   2   |   8    | Y_2^2  = 0.546274 * (x^2 - y^2)
+    // ============================================================
+
+    // with Condon–Shortley phase(-1) ^ m to match Iwasaki sensei code convention
+    //  Band 0
+    float Y0 = 0.2820947917738781f; // l=0, m=0
+
+    // Band 1
+    float Y1 = -0.4886025119029200f * y; // l=1, m=-1
+    float Y2 = 0.4886025119029200f * z;  // l=1, m=0
+    float Y3 = -0.4886025119029200f * x; // l=1, m=1
+
+    // Band 2
+    float Y4 = 1.0925484305920792f * x * y;                       // l=2, m=-2
+    float Y5 = -1.0925484305920792f * y * z;                      // l=2, m=-1
+    float Y6 = 0.9461746957575601f * z * z - 0.3153915652525200f; // l=2, m=0
+    float Y7 = -1.0925484305920792f * x * z;                      // l=2, m=1
+    float Y8 = 0.546274f * (x * x - y * y);                       // l=2, m=2
+
+    // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
+    float A[3] = { 3.141593f, 2.094395f, 0.785398f };
+
+    // Dot product: coeffs · basis
+    float3 result =
+        shCoeffs[0] * Y0 * A[0] +
+        shCoeffs[1] * Y1 * A[1] +
+        shCoeffs[2] * Y2 * A[1] +
+        shCoeffs[3] * Y3 * A[1] +
+        shCoeffs[4] * Y4 * A[2] +
+        shCoeffs[5] * Y5 * A[2] +
+        shCoeffs[6] * Y6 * A[2] +
+        shCoeffs[7] * Y7 * A[2] +
+        shCoeffs[8] * Y8 * A[2];
+
+    // Clamp negative lighting
+    // return max(result, float3(0.f));
+    return result;
+}
 // 1. Standard Cubic Hermite Basis
 float hermite1D(float t, float v0, float s0, float v1, float s1)
 {
@@ -171,6 +235,165 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
         outGrads[band].r = float3(gradZ.x, gradX.x, gradY.x);
         outGrads[band].g = float3(gradZ.y, gradX.y, gradY.y);
         outGrads[band].b = float3(gradZ.z, gradX.z, gradY.z);
+    }
+}
+
+void AdaptiveProbeVolume::interpolateHermite_CPU(
+    int coarseProbeIdx,
+    float3 pos,
+    std::vector<float3>& outCoeffs) const
+{
+    const auto& p = mProbes[coarseProbeIdx];
+
+    float3 size = p.maxPoint - p.minPoint;
+    float3 t = (pos - p.minPoint) / size;
+
+    t.x = std::max(0.0f, std::min(1.0f, t.x));
+    t.y = std::max(0.0f, std::min(1.0f, t.y));
+    t.z = std::max(0.0f, std::min(1.0f, t.z));
+
+    int cIdx[8];
+    for (int k = 0; k < 8; ++k)
+    {
+        cIdx[k] = p.corners[k];
+    }
+
+    if (cIdx[0] < 0 || cIdx[0] >= int(mCorners.size()))
+    {
+        outCoeffs.clear();
+        return;
+    }
+
+    const size_t numBands = mCorners[cIdx[0]].shCoeffs.size();
+
+    outCoeffs.clear();
+    outCoeffs.resize(numBands, float3(0.0f));
+
+    for (size_t band = 0; band < numBands; ++band)
+    {
+        float3 v[8];
+
+        // Gradients in Falcor/world axes.
+        float3 gX[8];
+        float3 gY[8];
+        float3 gZ[8];
+
+        for (int i = 0; i < 8; ++i)
+        {
+            if (cIdx[i] < 0 || cIdx[i] >= int(mCorners.size()))
+            {
+                outCoeffs.clear();
+                return;
+            }
+
+            const Corner& c = mCorners[cIdx[i]];
+
+            if (band >= c.shCoeffs.size())
+            {
+                outCoeffs.clear();
+                return;
+            }
+
+            v[i] = c.shCoeffs[band];
+
+            if (band < c.shGradients.size())
+            {
+                // Stored gradient convention:
+                // .x = world Z
+                // .y = world X
+                // .z = world Y
+                //
+                // Therefore:
+                // world X = .y
+                // world Y = .z
+                // world Z = .x
+                gX[i] = float3(
+                    c.shGradients[band].r.y,
+                    c.shGradients[band].g.y,
+                    c.shGradients[band].b.y
+                );
+
+                gY[i] = float3(
+                    c.shGradients[band].r.z,
+                    c.shGradients[band].g.z,
+                    c.shGradients[band].b.z
+                );
+
+                gZ[i] = float3(
+                    c.shGradients[band].r.x,
+                    c.shGradients[band].g.x,
+                    c.shGradients[band].b.x
+                );
+            }
+            else
+            {
+                gX[i] = float3(0.0f);
+                gY[i] = float3(0.0f);
+                gZ[i] = float3(0.0f);
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Corner order:
+        // 0 = (0,0,0)
+        // 1 = (0,0,1)
+        // 2 = (0,1,0)
+        // 3 = (0,1,1)
+        // 4 = (1,0,0)
+        // 5 = (1,0,1)
+        // 6 = (1,1,0)
+        // 7 = (1,1,1)
+        //
+        // Same separable value-only Hermite logic as uniform version.
+        // ------------------------------------------------------------
+
+        // Pass 1: Hermite along Z.
+        float3 q[4];
+        float3 q_dX[4];
+        float3 q_dY[4];
+
+        for (int i = 0; i < 4; ++i)
+        {
+            int i0 = 2 * i;
+            int i1 = 2 * i + 1;
+
+            q[i] = float3(
+                hermite1D(t.z, v[i0].x, gZ[i0].x * size.z, v[i1].x, gZ[i1].x * size.z),
+                hermite1D(t.z, v[i0].y, gZ[i0].y * size.z, v[i1].y, gZ[i1].y * size.z),
+                hermite1D(t.z, v[i0].z, gZ[i0].z * size.z, v[i1].z, gZ[i1].z * size.z)
+            );
+
+            // Propagate transverse gradients by linear interpolation,
+            // same as the uniform CPU version.
+            q_dX[i] = lerp(gX[i0], gX[i1], t.z);
+            q_dY[i] = lerp(gY[i0], gY[i1], t.z);
+        }
+
+        // Pass 2: Hermite along Y.
+        float3 r[2];
+        float3 r_dX[2];
+
+        for (int i = 0; i < 2; ++i)
+        {
+            int i0 = 2 * i;
+            int i1 = 2 * i + 1;
+
+            r[i] = float3(
+                hermite1D(t.y, q[i0].x, q_dY[i0].x * size.y, q[i1].x, q_dY[i1].x * size.y),
+                hermite1D(t.y, q[i0].y, q_dY[i0].y * size.y, q[i1].y, q_dY[i1].y * size.y),
+                hermite1D(t.y, q[i0].z, q_dY[i0].z * size.y, q[i1].z, q_dY[i1].z * size.y)
+            );
+
+            // Propagate remaining transverse X gradient.
+            r_dX[i] = lerp(q_dX[i0], q_dX[i1], t.y);
+        }
+
+        // Pass 3: Hermite along X.
+        outCoeffs[band] = float3(
+            hermite1D(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
+            hermite1D(t.x, r[0].y, r_dX[0].y * size.x, r[1].y, r_dX[1].y * size.x),
+            hermite1D(t.x, r[0].z, r_dX[0].z * size.x, r[1].z, r_dX[1].z * size.x)
+        );
     }
 }
 
@@ -1452,6 +1675,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
 }
 
+
 void AdaptiveProbeVolume::startBuildSeeded(
     const ref<Scene>& pScene,
     uint3 seedResolution,
@@ -1592,6 +1816,22 @@ void AdaptiveProbeVolume::setCornerDataRange(
     {
         setCornerData(start + i, coeffsBatch[i], gradsBatch[i], hessiansBatch[i]);
     }
+}
+
+float3 AdaptiveProbeVolume::evaluateIrradianceHermiteCPU(float3 posW, float3 normalW) const
+{
+    std::vector<float3> coeffs;
+
+    int probeIdx = traverseOctreeCPU(posW);
+    if (probeIdx < 0)
+        return float3(0.0f);
+
+    interpolateHermite_CPU(probeIdx, posW, coeffs);
+
+    if (coeffs.size() < 9)
+        return float3(0.0f);
+
+    return evaluateIrradiance(normalW, coeffs);
 }
 
 int AdaptiveProbeVolume::findSeedProbeCPU(float3 pos) const
