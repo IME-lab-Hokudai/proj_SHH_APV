@@ -362,6 +362,157 @@ namespace
             csv << method << "," << stats.apeValues[i] << "\n";
         }
     }
+
+    static void computeEigenvalues3x3(const float3x3& A, float& e1, float& e2, float& e3)
+    {
+        const float ONE_THIRD = 1.0f / 3.0f;
+        float m = (A[0][0] + A[1][1] + A[2][2]) * ONE_THIRD;
+        float k00 = A[0][0] - m, k11 = A[1][1] - m, k22 = A[2][2] - m;
+        float k01 = A[0][1], k02 = A[0][2], k12 = A[1][2];
+        float q = 0.5f * (k00 * (k11 * k22 - k12 * k12) - k01 * (k01 * k22 - k12 * k02) + k02 * (k01 * k12 - k11 * k02));
+        float p = (k00 * k00 + k11 * k11 + k22 * k22 + 2.0f * (k01 * k01 + k02 * k02 + k12 * k12)) / 6.0f;
+
+        if (p < 1e-20f) { e1 = e2 = e3 = m; return; }
+
+        float p_sqrt = std::sqrt(p);
+        float det_val = q / (p * p_sqrt);
+        det_val = std::max(-1.0f, std::min(1.0f, det_val));
+        float phi = ONE_THIRD * std::acos(det_val);
+        float two_sqrt_p = 2.0f * p_sqrt;
+        float s = std::sin(phi), c = std::cos(phi);
+
+        e1 = m + two_sqrt_p * c;
+        e2 = m - two_sqrt_p * (c * 0.5f + s * 0.8660254f);
+        e3 = m - two_sqrt_p * (c * 0.5f - s * 0.8660254f);
+    }
+
+    //error vs distance
+    static float maxAbsEigenvalue3x3(const float3x3& H)
+    {
+        float e1, e2, e3;
+        computeEigenvalues3x3(H, e1, e2, e3);
+        return std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+    }
+
+    static float lambdaL2OverBands(const std::array<float3x3, 9>& H)
+    {
+        float sumSq = 0.0f;
+
+        for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+        {
+            float lambda = maxAbsEigenvalue3x3(H[basisIdx]);
+            sumSq += lambda * lambda;
+        }
+
+        return std::sqrt(sumSq);
+    }
+
+    void exportAnalyticErrorVsDistanceTest()
+    {
+        const std::string outCsv = "AnalyticErrorVsDistanceTest.csv";
+
+        // Virtual grid only defines ||Delta x|| for Eabs.
+        const float sceneExtent = 1.0f;
+        const uint32_t virtualGridResolution = 64;
+        const float cellSize = sceneExtent / float(virtualGridResolution);
+        const float deltaXNorm = std::sqrt(3.0f) * cellSize;
+
+        // Controlled setup:
+        // fixed surface point s = origin.
+        // q = s - X = r * qDir.
+        const float3 qDir = math::normalize(float3(0.35f, 0.45f, 0.82f));
+
+        // Surface normal faces the probe direction.
+        const float3 n = -qDir;
+
+        // Constant radiance assumption.
+        const float L = 1.0f;
+
+        // One analytic patch contribution.
+        // Same role as Omega_i = 4pi / sampleCount in your normal code.
+        const float Omega_i = 1.0f;
+
+        const float rMin = 0.02f;
+        const float rMax = 4.0f;
+        const uint32_t sampleCount = 160;
+
+        std::ofstream csv(outCsv);
+        csv << std::fixed << std::setprecision(10);
+
+        csv
+            << "r,"
+            << "LambdaL2,"
+            << "Eabs,"
+            << "VirtualGridResolution,"
+            << "DeltaXNorm"
+            << "\n";
+
+        for (uint32_t i = 0; i < sampleCount; ++i)
+        {
+            float t = float(i) / float(sampleCount - 1);
+
+            // Log-spaced r because the metric changes rapidly near the surface.
+            float r = rMin * std::pow(rMax / rMin, t);
+
+            float3 q = r * qDir;
+            float rInv = 1.0f / r;
+            float rInvSq = rInv * rInv;
+            float cosXi = -(dot(n, q)) * rInv;
+
+            float3 gradOmega = gradientOmega(q, n, rInv, cosXi, Omega_i);
+            float3x3 H_Omega = hessianOmega(q, n, rInv, cosXi, Omega_i);
+
+            std::array<float, 9> ylm;
+            std::array<float3, 9> gradYlm;
+            std::array<float3x3, 9> hessYlm;
+
+            SHGradientAndHessianL2(qDir, ylm, gradYlm, hessYlm);
+
+            std::array<float3x3, 9> HTotal;
+
+            for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+            {
+                HTotal[basisIdx] = float3x3::zeros();
+
+                for (int j = 0; j < 3; ++j)
+                {
+                    for (int k = j; k < 3; ++k)
+                    {
+                        float term1 = H_Omega[j][k] * ylm[basisIdx];
+
+                        float term2 = -rInv * (
+                            gradOmega[j] * gradYlm[basisIdx][k] +
+                            gradOmega[k] * gradYlm[basisIdx][j]
+                            );
+
+                        float term3 = Omega_i * rInvSq * hessYlm[basisIdx][j][k];
+
+                        float hessContrib = L * (term1 + term2 + term3);
+
+                        HTotal[basisIdx][j][k] += hessContrib;
+
+                        if (j != k)
+                            HTotal[basisIdx][k][j] += hessContrib;
+                    }
+                }
+            }
+
+            float lambdaL2 = lambdaL2OverBands(HTotal);
+            float eabs = 0.5f * lambdaL2 * deltaXNorm * deltaXNorm;
+
+            csv
+                << r << ","
+                << lambdaL2 << ","
+                << eabs << ","
+                << virtualGridResolution << ","
+                << deltaXNorm
+                << "\n";
+        }
+
+        csv.close();
+
+        logInfo("Wrote analytic error-vs-distance test: " + outCsv);
+    }
 }
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -1266,7 +1417,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
             initSHBasisGradientAndHessianTables(samplingDirs);
 
             //exportIrradianceFieldErrorComparison();
-
+            exportAnalyticErrorVsDistanceTest();
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());

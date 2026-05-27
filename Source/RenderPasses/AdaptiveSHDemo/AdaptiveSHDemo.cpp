@@ -25,10 +25,12 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+#include <fstream>
 #include "AdaptiveSHDemo.h"
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Utils/Logger.h"
+
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
@@ -104,6 +106,13 @@ RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
 
 void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    static uint32_t frameIndex = 0;
+    static constexpr uint32_t kWarmupFrames = 100;
+    static constexpr uint32_t kMeasureFrames = 1000;
+
+    static auto lastTime = std::chrono::high_resolution_clock::now();
+    static std::vector<double> frameTimesMs;
+
     // STEP 1: Rasterize Scene into UV Space
     auto pTargetFbo = renderData.getTexture("output");
     const float4 clearColor(0, 0, 0, 1);
@@ -182,6 +191,55 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 #endif
 
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
+
+        auto now = std::chrono::high_resolution_clock::now();
+        double frameMs = std::chrono::duration<double, std::milli>(now - lastTime).count();
+        lastTime = now;
+
+        if (frameIndex >= kWarmupFrames && frameIndex < kWarmupFrames + kMeasureFrames)
+        {
+            frameTimesMs.push_back(frameMs);
+        }
+
+        if (frameIndex == kWarmupFrames + kMeasureFrames)
+        {
+            double sum = 0.0;
+            for (double v : frameTimesMs) sum += v;
+
+            double meanMs = sum / double(frameTimesMs.size());
+            double meanFps = 1000.0 / meanMs;
+
+            double variance = 0.0;
+            for (double v : frameTimesMs)
+            {
+                double d = v - meanMs;
+                variance += d * d;
+            }
+            variance /= double(frameTimesMs.size());
+            double stdMs = std::sqrt(variance);
+
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+            std::string modeName = "Adaptive";
+#else
+            std::string modeName = "Uniform";
+#endif
+
+            std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
+            out << modeName << ","
+                << loadFromFileName << ","
+                << kWarmupFrames << ","
+                << kMeasureFrames << ","
+                << std::fixed << std::setprecision(4)
+                << meanMs << ","
+                << stdMs << ","
+                << meanFps << "\n";
+            out.close();
+
+            logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
+                loadFromFileName, meanMs, stdMs, meanFps);
+        }
+
+        frameIndex++;
 
         if (mbShowAdaptiveGrid)
         {
