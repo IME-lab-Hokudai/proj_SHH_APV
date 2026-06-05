@@ -34,16 +34,16 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string loadFromFileName = "DirectAbsErr20DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
+//const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
-//const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
@@ -217,22 +217,27 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
             }
             variance /= double(frameTimesMs.size());
             double stdMs = std::sqrt(variance);
-
+            uint64_t probeCount = 0;
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
             std::string modeName = "Adaptive";
+            probeCount = mAdaptiveProbeVolume->getProbes().size();
 #else
             std::string modeName = "Uniform";
+            const uint3 res = mUniformProbeVolume->getCellResolution();
+            probeCount = uint64_t(res.x) * uint64_t(res.y) * uint64_t(res.z);
 #endif
 
             std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
             out << modeName << ","
                 << loadFromFileName << ","
+                << probeCount << ","
                 << kWarmupFrames << ","
                 << kMeasureFrames << ","
                 << std::fixed << std::setprecision(4)
                 << meanMs << ","
                 << stdMs << ","
                 << meanFps << "\n";
+
             out.close();
 
             logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
@@ -335,6 +340,12 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
     mpScene = pScene;
     if (mpScene)
     {
+        std::ifstream check("AdaptiveSHDemo_RuntimeFPS.csv");
+        if (!check.good())
+        {
+            std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv");
+            out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
+        }
         mBakeTargets =
         {
             { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },

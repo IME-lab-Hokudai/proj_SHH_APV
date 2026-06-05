@@ -52,6 +52,11 @@ public:
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
     virtual void renderUI(Gui::Widgets& widget) override;
     void loadLightmaps();
+    void loadDataSceneLightmaps();
+    void setupCorridorBakeTargets();
+    void setupDataSceneBakeTargets();
+    void bindDataCorridor(ShaderVar var);
+    void bindDataSceneData(ShaderVar var);
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
@@ -106,8 +111,8 @@ private:
     bool mNeedsPreparation = true;
     uint32_t mCurrentSample = 0;
     uint32_t mTotalSamples = 4096; // Set your target quality here
-    bool mbloadLightMap = false;
-    //bool mbloadLightMap = true;
+    //bool mbloadLightMap = false;
+    bool mbloadLightMap = true;
     ref<Sampler> mpLinearSampler;
 
     std::vector<BakeTarget> mBakeTargets;
@@ -140,4 +145,21 @@ private:
     uint32_t mPillar5InstanceID = 8;
     uint32_t mPillar6InstanceID = 9;
     uint32_t mPillar7InstanceID = 10;
+
+    //data scene
+    ref<Texture> mpDataFloorLightmap;
+    ref<Texture> mpDataCeilingLightmap;
+    ref<Texture> mpDataLeftWallLightmap;
+    ref<Texture> mpDataRightWallLightmap;
+    ref<Texture> mpDataBackWallLightmap;
+    ref<Texture> mpDataFrontWallLightmap;
+
+    ref<Texture> mpDataTallBoxALightmap;
+    ref<Texture> mpDataWideBoxBLightmap;
+    ref<Texture> mpDataBlockCLightmap;
+    ref<Texture> mpDataLowBoxDLightmap;
+    ref<Texture> mpDataThinSlabELightmap;
+    ref<Texture> mpDataThinSlabFLightmap;
+    ref<Texture> mpDataTallBoxJLightmap;
+    ref<Texture> mpDataShortBoxLLightmap;
 };

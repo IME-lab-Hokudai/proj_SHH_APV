@@ -21,8 +21,6 @@ void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution
     mCornerResolution = mProbeResolution + uint3(1, 1, 1);
     mTotalProbes = mCornerResolution.x * mCornerResolution.y * mCornerResolution.z;
 
-
-
     auto bounds = pScene->getSceneBounds();
 
     float boundsScale = 0.98f;

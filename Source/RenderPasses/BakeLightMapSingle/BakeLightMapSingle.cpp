@@ -36,6 +36,7 @@ const char kUVrasterPillarFile[] = "RenderPasses/BakeLightMapSingle/UVPassPillar
 const char kExtractFile[] = "RenderPasses/BakeLightMapSingle/ExtractTexelsSingle.cs.slang";
 const char kNormalizeFile[] = "RenderPasses/BakeLightMapSingle/NormalizeLightmapSingle.cs.slang";
 const char kShaderFile[] = "RenderPasses/BakeLightMapSingle/ApplyLightmapSingle.slang";
+const char kDataShaderFile[] = "RenderPasses/BakeLightMapSingle/ApplyLightmapDataScene.slang";
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
@@ -84,52 +85,53 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
     if (mpScene) {
         if (mbloadLightMap) {
             auto applyVar = mpVars->getRootVar();
-            applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-            applyVar["gFloorLightmap"] = mpFloorLightmap;
-            applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
-            applyVar["gRightWallLightmap"] = mpRightWallLightmap;
-            applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
-            applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
-            applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
-            applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
-            applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
-            applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
-            applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
-            applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
-            applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
-            applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
+            //applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
+            //applyVar["gFloorLightmap"] = mpFloorLightmap;
+            //applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
+            //applyVar["gRightWallLightmap"] = mpRightWallLightmap;
+            //applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
+            //applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
+            //applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
+            //applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
+            //applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
+            //applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
+            //applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
+            //applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
+            //applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
+            //applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
 
-            applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
-            applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
-            applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
-            applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
-            applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
-            applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
-            applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
-            applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
-            applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
-            applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
-            applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
-            applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
-            applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
+            //applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
+            //applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
+            //applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
+            //applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
+            //applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
+            //applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
+            //applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
+            //applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
+            //applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
+            //applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
+            //applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
+            //applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
+            //applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
 
-            applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
-            applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
-            applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
-            applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
-            applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
-            applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
-            applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
-            applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
+            //applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
+            //applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
+            //applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
+            //applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
+            //applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
+            //applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
+            //applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
+            //applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
 
-            applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            //applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+            bindDataSceneData(applyVar);
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
         }
         else {
@@ -357,26 +359,31 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
     mpScene = pScene;
     if (mpScene)
     {
-        mBakeTargets =
-        {
-            { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
-            { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
-            { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
-            { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
-            { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
-            { "Pillar0",  3, 512, 512, "BakedPillar0.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar2",  5, 512, 512, "BakedPillar2.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar3",  6, 512, 512, "BakedPillar3.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar4",  7, 512, 512, "BakedPillar4.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar5",  8, 512, 512, "BakedPillar5.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
-        };
+        //mBakeTargets =
+        //{
+        //    { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
+        //    { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
+        //    { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
+        //    { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
+        //    { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
+        //    { "Pillar0",  3, 512, 512, "BakedPillar0.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar2",  5, 512, 512, "BakedPillar2.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar3",  6, 512, 512, "BakedPillar3.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar4",  7, 512, 512, "BakedPillar4.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar5",  8, 512, 512, "BakedPillar5.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
+        //    { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
+        //};
+
+        setupDataSceneBakeTargets();
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
             previewDesc.addShaderModules(mpScene->getShaderModules());
-            previewDesc.addShaderLibrary(kShaderFile)
+            //previewDesc.addShaderLibrary(kShaderFile)
+            //    .vsEntry("vsMain")
+            //    .psEntry("psMain");
+            previewDesc.addShaderLibrary(kDataShaderFile)
                 .vsEntry("vsMain")
                 .psEntry("psMain");
 
@@ -400,7 +407,8 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
             mpGraphicsState->setFbo(mpFbo);
             mpGraphicsState->setDepthStencilState(pDsState);
 
-            loadLightmaps();
+            //loadLightmaps();
+            loadDataSceneLightmaps();
         }
         else {
             //logInfo("Geometry instance count = {}", mpScene->getGeometryInstanceCount());
@@ -551,4 +559,296 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
             }
         }
     }
+}
+
+void BakeLightMapSingle::setupDataSceneBakeTargets()
+{
+    // Instance IDs follow the addMeshInstance() order in SceneForData.pyscene:
+    //
+    //  0 Floor
+    //  1 Ceiling
+    //  2 LeftWall
+    //  3 RightWall
+    //  4 BackWall
+    //  5 FrontWall
+    //  6 TallBoxA
+    //  7 WideBoxB
+    //  8 BlockC
+    //  9 LowBoxD
+    // 10 ThinSlabE
+    // 11 ThinSlabF
+    // 12 TallBoxJ
+    // 13 ShortBoxL
+    //
+    // NOTE:
+    // For cube targets, the existing UVPassPillar.slang uses world-space
+    // box projection:
+    //
+    //     p = (posW - gPillarCenterW) / gPillarHalfExtentW
+    //
+    // Therefore gPillarCenterW and gPillarHalfExtentW must approximately
+    // enclose the cube in world space. For rotated boxes, we use conservative
+    // world-space AABB half extents rather than exact local-space half extents.
+
+    mBakeTargets =
+    {
+        // Room shell.
+        { "Floor",     0, 1024, 1024, "BakedData_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedData_Ceiling.exr"   },
+        { "LeftWall",  2, 1024,  512, "BakedData_LeftWall.exr"  },
+        { "RightWall", 3, 1024,  512, "BakedData_RightWall.exr" },
+        { "BackWall",  4, 1024,  512, "BakedData_BackWall.exr"  },
+        { "FrontWall", 5, 1024,  512, "BakedData_FrontWall.exr" },
+
+        // Scattered cubes / boxes.
+        // Non-rotated box:
+        // scaling=float3(0.9, 2.6, 0.9), translation=float3(-3.8, 1.3, -2.8)
+        { "TallBoxA", 6, 512, 512, "BakedData_TallBoxA.exr",
+            BakeTargetType::Pillar,
+            float3(-3.8f, 1.3f, -2.8f),
+            float3(0.45f, 1.30f, 0.45f) },
+
+            // Non-rotated box:
+            // scaling=float3(1.8, 1.0, 1.2), translation=float3(-1.9, 0.5, 2.2)
+            { "WideBoxB", 7, 512, 512, "BakedData_WideBoxB.exr",
+                BakeTargetType::Pillar,
+                float3(-1.9f, 0.5f, 2.2f),
+                float3(0.90f, 0.50f, 0.60f) },
+
+                // Rotated around Y by 18 degrees.
+                // scaling=float3(1.1, 1.6, 1.1), translation=float3(2.8, 0.8, -2.6)
+                // Conservative world-space AABB half extent.
+                { "BlockC", 8, 512, 512, "BakedData_BlockC.exr",
+                    BakeTargetType::Pillar,
+                    float3(2.8f, 0.8f, -2.6f),
+                    float3(0.72f, 0.80f, 0.72f) },
+
+                    // Rotated around Y by -22 degrees.
+                    // scaling=float3(1.6, 0.7, 1.4), translation=float3(1.4, 0.35, 2.8)
+                    // Conservative world-space AABB half extent.
+                    { "LowBoxD", 9, 512, 512, "BakedData_LowBoxD.exr",
+                        BakeTargetType::Pillar,
+                        float3(1.4f, 0.35f, 2.8f),
+                        float3(1.05f, 0.35f, 1.00f) },
+
+                        // Non-rotated thin slab:
+                        // scaling=float3(0.35, 3.0, 1.4), translation=float3(-0.4, 1.5, -0.8)
+                        { "ThinSlabE", 10, 512, 512, "BakedData_ThinSlabE.exr",
+                            BakeTargetType::Pillar,
+                            float3(-0.4f, 1.5f, -0.8f),
+                            float3(0.175f, 1.50f, 0.70f) },
+
+                            // Rotated around Y by 12 degrees.
+                            // scaling=float3(0.35, 2.4, 1.6), translation=float3(3.4, 1.2, 0.8)
+                            // Conservative world-space AABB half extent.
+                            { "ThinSlabF", 11, 512, 512, "BakedData_ThinSlabF.exr",
+                                BakeTargetType::Pillar,
+                                float3(3.4f, 1.2f, 0.8f),
+                                float3(0.36f, 1.20f, 0.85f) },
+
+                                // Rotated around Y by -18 degrees and Z by 8 degrees.
+                                // scaling=float3(0.7, 2.2, 0.7), translation=float3(-4.2, 1.5, 2.8)
+                                // Conservative world-space AABB half extent.
+                                { "TallBoxJ", 12, 512, 512, "BakedData_TallBoxJ.exr",
+                                    BakeTargetType::Pillar,
+                                    float3(-4.2f, 1.5f, 2.8f),
+                                    float3(0.75f, 1.25f, 0.75f) },
+
+                                    // Rotated around Y by 40 degrees.
+                                    // scaling=float3(1.0, 0.9, 1.0), translation=float3(-0.8, 0.45, -3.3)
+                                    // Conservative world-space AABB half extent.
+                                    { "ShortBoxL", 13, 512, 512, "BakedData_ShortBoxL.exr",
+                                        BakeTargetType::Pillar,
+                                        float3(-0.8f, 0.45f, -3.3f),
+                                        float3(0.75f, 0.45f, 0.75f) },
+    };
+}
+
+void BakeLightMapSingle::bindDataCorridor(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
+    applyVar["gFloorLightmap"] = mpFloorLightmap;
+    applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
+    applyVar["gRightWallLightmap"] = mpRightWallLightmap;
+    applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
+    applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
+    applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
+    applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
+    applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
+    applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
+    applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
+    applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
+    applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
+    applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
+
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
+    applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
+    applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
+    applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
+    applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
+    applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
+    applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
+    applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
+    applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
+    applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
+    applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
+
+    applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
+    applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
+    applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
+    applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
+    applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
+    applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
+    applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
+    applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
+
+    applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+    applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+}
+
+void BakeLightMapSingle::bindDataSceneData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    applyVar["gFloorLightmap"] = mpDataFloorLightmap;
+    applyVar["gCeilingLightmap"] = mpDataCeilingLightmap;
+    applyVar["gLeftWallLightmap"] = mpDataLeftWallLightmap;
+    applyVar["gRightWallLightmap"] = mpDataRightWallLightmap;
+    applyVar["gBackWallLightmap"] = mpDataBackWallLightmap;
+    applyVar["gFrontWallLightmap"] = mpDataFrontWallLightmap;
+
+    applyVar["gTallBoxALightmap"] = mpDataTallBoxALightmap;
+    applyVar["gWideBoxBLightmap"] = mpDataWideBoxBLightmap;
+    applyVar["gBlockCLightmap"] = mpDataBlockCLightmap;
+    applyVar["gLowBoxDLightmap"] = mpDataLowBoxDLightmap;
+    applyVar["gThinSlabELightmap"] = mpDataThinSlabELightmap;
+    applyVar["gThinSlabFLightmap"] = mpDataThinSlabFLightmap;
+    applyVar["gTallBoxJLightmap"] = mpDataTallBoxJLightmap;
+    applyVar["gShortBoxLLightmap"] = mpDataShortBoxLLightmap;
+
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gFrontWallInstanceID"] = 5;
+
+    applyVar["PerFrameCB"]["gTallBoxAInstanceID"] = 6;
+    applyVar["PerFrameCB"]["gWideBoxBInstanceID"] = 7;
+    applyVar["PerFrameCB"]["gBlockCInstanceID"] = 8;
+    applyVar["PerFrameCB"]["gLowBoxDInstanceID"] = 9;
+    applyVar["PerFrameCB"]["gThinSlabEInstanceID"] = 10;
+    applyVar["PerFrameCB"]["gThinSlabFInstanceID"] = 11;
+    applyVar["PerFrameCB"]["gTallBoxJInstanceID"] = 12;
+    applyVar["PerFrameCB"]["gShortBoxLInstanceID"] = 13;
+
+    applyVar["PerFrameCB"]["gTallBoxACenterW"] = float3(-3.8f, 1.3f, -2.8f);
+    applyVar["PerFrameCB"]["gWideBoxBCenterW"] = float3(-1.9f, 0.5f, 2.2f);
+    applyVar["PerFrameCB"]["gBlockCCenterW"] = float3(2.8f, 0.8f, -2.6f);
+    applyVar["PerFrameCB"]["gLowBoxDCenterW"] = float3(1.4f, 0.35f, 2.8f);
+    applyVar["PerFrameCB"]["gThinSlabECenterW"] = float3(-0.4f, 1.5f, -0.8f);
+    applyVar["PerFrameCB"]["gThinSlabFCenterW"] = float3(3.4f, 1.2f, 0.8f);
+    applyVar["PerFrameCB"]["gTallBoxJCenterW"] = float3(-4.2f, 1.5f, 2.8f);
+    applyVar["PerFrameCB"]["gShortBoxLCenterW"] = float3(-0.8f, 0.45f, -3.3f);
+
+    applyVar["PerFrameCB"]["gTallBoxAHalfExtentW"] = float3(0.45f, 1.30f, 0.45f);
+    applyVar["PerFrameCB"]["gWideBoxBHalfExtentW"] = float3(0.90f, 0.50f, 0.60f);
+    applyVar["PerFrameCB"]["gBlockCHalfExtentW"] = float3(0.72f, 0.80f, 0.72f);
+    applyVar["PerFrameCB"]["gLowBoxDHalfExtentW"] = float3(1.05f, 0.35f, 1.00f);
+    applyVar["PerFrameCB"]["gThinSlabEHalfExtentW"] = float3(0.175f, 1.50f, 0.70f);
+    applyVar["PerFrameCB"]["gThinSlabFHalfExtentW"] = float3(0.36f, 1.20f, 0.85f);
+    applyVar["PerFrameCB"]["gTallBoxJHalfExtentW"] = float3(0.75f, 1.25f, 0.75f);
+    applyVar["PerFrameCB"]["gShortBoxLHalfExtentW"] = float3(0.75f, 0.45f, 0.75f);
+}
+
+void BakeLightMapSingle::setupCorridorBakeTargets()
+{
+    mBakeTargets =
+    {
+        { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
+        { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
+        { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
+        { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
+        { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
+
+        { "Pillar0",  3, 512, 512, "BakedPillar0.exr",
+            BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar1",  4, 512, 512, "BakedPillar1.exr",
+            BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar2",  5, 512, 512, "BakedPillar2.exr",
+            BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar3",  6, 512, 512, "BakedPillar3.exr",
+            BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar4",  7, 512, 512, "BakedPillar4.exr",
+            BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar5",  8, 512, 512, "BakedPillar5.exr",
+            BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar6",  9, 512, 512, "BakedPillar6.exr",
+            BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
+
+        { "Pillar7", 10, 512, 512, "BakedPillar7.exr",
+            BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
+    };
+}
+
+void BakeLightMapSingle::loadDataSceneLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size())
+            {
+                logWarning("Bake target index {} is out of range.", idx);
+                return;
+            }
+
+            const auto& target = mBakeTargets[idx];
+
+            dst = Texture::createFromFile(
+                mpDevice,
+                target.outputPath,
+                true,
+                false,
+                ResourceBindFlags::ShaderResource
+            );
+
+            if (dst)
+            {
+                dst->setName(debugName);
+                logInfo("Successfully loaded data-scene lightmap '{}' from {}", target.name, target.outputPath);
+            }
+            else
+            {
+                logWarning("Failed to load data-scene lightmap '{}' from {}", target.name, target.outputPath);
+            }
+        };
+
+    loadOne(0, mpDataFloorLightmap, "DataFloorLightmap");
+    loadOne(1, mpDataCeilingLightmap, "DataCeilingLightmap");
+    loadOne(2, mpDataLeftWallLightmap, "DataLeftWallLightmap");
+    loadOne(3, mpDataRightWallLightmap, "DataRightWallLightmap");
+    loadOne(4, mpDataBackWallLightmap, "DataBackWallLightmap");
+    loadOne(5, mpDataFrontWallLightmap, "DataFrontWallLightmap");
+
+    loadOne(6, mpDataTallBoxALightmap, "DataTallBoxALightmap");
+    loadOne(7, mpDataWideBoxBLightmap, "DataWideBoxBLightmap");
+    loadOne(8, mpDataBlockCLightmap, "DataBlockCLightmap");
+    loadOne(9, mpDataLowBoxDLightmap, "DataLowBoxDLightmap");
+    loadOne(10, mpDataThinSlabELightmap, "DataThinSlabELightmap");
+    loadOne(11, mpDataThinSlabFLightmap, "DataThinSlabFLightmap");
+    loadOne(12, mpDataTallBoxJLightmap, "DataTallBoxJLightmap");
+    loadOne(13, mpDataShortBoxLLightmap, "DataShortBoxLLightmap");
 }

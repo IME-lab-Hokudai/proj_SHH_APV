@@ -19,7 +19,7 @@ SamplerState gEnvSampler;
 
 static const bool kUseEmissiveLights = USE_EMISSIVE_LIGHTS;
 static const bool kUseAnalyticLights = USE_ANALYTIC_LIGHTS;
-static const uint kMaxBounces = 5;
+static const uint kMaxBounces = 3;
 
 cbuffer PerFrameCB
 {
@@ -214,7 +214,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
     // EMISSIVE LIGHTS
     if (kUseEmissiveLights) {
-        const int numEmissiveSamplesPerTriangle = 8;
+        const int numEmissiveSamplesPerTriangle = 1;
         int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
         const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
 

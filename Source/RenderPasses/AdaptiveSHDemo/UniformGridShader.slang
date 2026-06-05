@@ -194,15 +194,31 @@ void fetchHermiteInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
     // 3. Fetch Indices (Using Helper)
     // ----------------------------------------------------------
     // We order these to match the loop bit-logic: Bit 0=Z, Bit 1=Y, Bit 2=X
+    //int cIdx[8];
+    //cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
+    //cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
+    //cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
+    //cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
+    //cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
+    //cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
+    //cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
+    //cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
+
+    int baseIdx = getUniformGridIndex(cellCoords);
+
+    int strideX = 1;
+    int strideY = gProbeCountDim.x;
+    int strideZ = gProbeCountDim.x * gProbeCountDim.y;
+
     int cIdx[8];
-    cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
-    cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
-    cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
-    cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
-    cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
-    cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
-    cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
-    cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
+    cIdx[0] = baseIdx;                               // 000
+    cIdx[1] = baseIdx + strideZ;                     // 001
+    cIdx[2] = baseIdx + strideY;                     // 010
+    cIdx[3] = baseIdx + strideY + strideZ;           // 011
+    cIdx[4] = baseIdx + strideX;                     // 100
+    cIdx[5] = baseIdx + strideX + strideZ;           // 101
+    cIdx[6] = baseIdx + strideX + strideY;           // 110
+    cIdx[7] = baseIdx + strideX + strideY + strideZ; // 111
     float3 size = gCellSize;
     for (int band = 0; band < 9; ++band)
     {
@@ -438,7 +454,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     const uint instanceID = vsOut.instanceID.index;
     if (instanceID < 19) {
         // litColor = albedo;
-        discard;
+        //discard;
     }
     //if (instanceID == gFloorInstanceID)
     //{
@@ -521,7 +537,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     //    float3 irradiance = gPillar7Lightmap.Sample(gLinearSampler, pillarUV).rgb;
     //    litColor = albedo * irradiance / 3.14159265f;
     //}
-    else {
+    //else {
         float3 finalSH[MAX_SH_BASIS];
 
             // 2. Compute interpolated SH Coeffs
@@ -529,7 +545,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
        // fetchTrilinearInterpolatedSH(vsOut.posW, finalSH);
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
-    }
+    //}
     litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);
 }
