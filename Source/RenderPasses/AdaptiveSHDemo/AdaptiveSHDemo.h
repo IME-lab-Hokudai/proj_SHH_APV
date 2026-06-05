@@ -57,7 +57,9 @@ public:
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
-
+    void loadDataSceneLightmaps();
+    void setupDataSceneBakeTargets();
+    void bindDataSceneData(ShaderVar var);
 private:
     enum class BakeTargetType
     {
@@ -75,6 +77,7 @@ private:
         BakeTargetType type = BakeTargetType::Quad;
         float3 pillarCenterW = float3(0.f);
         float3 pillarHalfExtentW = float3(1.f);
+        float3 pillarRotationEulerDeg = float3(0.f);
     };
 
     ref<Scene> mpScene;
@@ -99,33 +102,33 @@ private:
     std::vector<BakeTarget> mBakeTargets;
     uint32_t mCurrentTargetIndex = 0;
 
-    ref<Texture> mpFloorLightmap;
-    ref<Texture> mpLeftWallLightmap;
-    ref<Texture> mpRightWallLightmap;
-    ref<Texture> mpRoofLeftLightmap;
-    ref<Texture> mpRoofRightLightmap;
-    ref<Texture> mpPillar0Lightmap;
-    ref<Texture> mpPillar1Lightmap;
-    ref<Texture> mpPillar2Lightmap;
-    ref<Texture> mpPillar3Lightmap;
-    ref<Texture> mpPillar4Lightmap;
-    ref<Texture> mpPillar5Lightmap;
-    ref<Texture> mpPillar6Lightmap;
-    ref<Texture> mpPillar7Lightmap;
+    //ref<Texture> mpFloorLightmap;
+    //ref<Texture> mpLeftWallLightmap;
+    //ref<Texture> mpRightWallLightmap;
+    //ref<Texture> mpRoofLeftLightmap;
+    //ref<Texture> mpRoofRightLightmap;
+    //ref<Texture> mpPillar0Lightmap;
+    //ref<Texture> mpPillar1Lightmap;
+    //ref<Texture> mpPillar2Lightmap;
+    //ref<Texture> mpPillar3Lightmap;
+    //ref<Texture> mpPillar4Lightmap;
+    //ref<Texture> mpPillar5Lightmap;
+    //ref<Texture> mpPillar6Lightmap;
+    //ref<Texture> mpPillar7Lightmap;
 
-    uint32_t mFloorInstanceID = 0;
-    uint32_t mLeftWallInstanceID = 1;
-    uint32_t mRightWallInstanceID = 2;
-    uint32_t mRoofLeftInstanceID = 11;
-    uint32_t mRoofRightInstanceID = 12;
-    uint32_t mPillar0InstanceID = 3;
-    uint32_t mPillar1InstanceID = 4;
-    uint32_t mPillar2InstanceID = 5;
-    uint32_t mPillar3InstanceID = 6;
-    uint32_t mPillar4InstanceID = 7;
-    uint32_t mPillar5InstanceID = 8;
-    uint32_t mPillar6InstanceID = 9;
-    uint32_t mPillar7InstanceID = 10;
+    //uint32_t mFloorInstanceID = 0;
+    //uint32_t mLeftWallInstanceID = 1;
+    //uint32_t mRightWallInstanceID = 2;
+    //uint32_t mRoofLeftInstanceID = 11;
+    //uint32_t mRoofRightInstanceID = 12;
+    //uint32_t mPillar0InstanceID = 3;
+    //uint32_t mPillar1InstanceID = 4;
+    //uint32_t mPillar2InstanceID = 5;
+    //uint32_t mPillar3InstanceID = 6;
+    //uint32_t mPillar4InstanceID = 7;
+    //uint32_t mPillar5InstanceID = 8;
+    //uint32_t mPillar6InstanceID = 9;
+    //uint32_t mPillar7InstanceID = 10;
 
     // First dynamic object for now.
     // Dynamic raster pass
@@ -149,4 +152,20 @@ private:
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
     bool mbDrawLeafOnly = false;
+
+    ref<Texture> mpDataFloorLightmap;
+    ref<Texture> mpDataCeilingLightmap;
+    ref<Texture> mpDataLeftWallLightmap;
+    ref<Texture> mpDataRightWallLightmap;
+    ref<Texture> mpDataBackWallLightmap;
+    ref<Texture> mpDataFrontWallLightmap;
+
+    ref<Texture> mpDataTallBoxALightmap;
+    ref<Texture> mpDataWideBoxBLightmap;
+    ref<Texture> mpDataBlockCLightmap;
+    ref<Texture> mpDataLowBoxDLightmap;
+    ref<Texture> mpDataThinSlabELightmap;
+    ref<Texture> mpDataThinSlabFLightmap;
+    ref<Texture> mpDataTallBoxJLightmap;
+    ref<Texture> mpDataShortBoxLLightmap;
 };

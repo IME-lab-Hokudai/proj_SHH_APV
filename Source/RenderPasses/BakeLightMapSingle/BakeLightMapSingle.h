@@ -78,6 +78,7 @@ private:
         BakeTargetType type = BakeTargetType::Quad;
         float3 pillarCenterW = float3(0.f);
         float3 pillarHalfExtentW = float3(1.f);
+        float3 pillarRotationEulerDeg = float3(0.f);
     };
 
     ref<Scene> mpScene;

@@ -300,13 +300,107 @@ sceneBuilder.addMeshInstance(
 )
 
 # -------------------------
+# Animated dynamic bunny for demo capture
+# -------------------------
+bunny_mat = StandardMaterial('DynamicBunnyMaterial')
+bunny_mat.baseColor = float4(0.72, 0.72, 0.72, 1.0)
+bunny_mat.roughness = 1.0
+bunny_mat.metallic = 0.0
+
+# Replace this path if your bunny mesh is elsewhere.
+bunnyMesh = TriangleMesh.createFromFile('meshes/bunny_dense.obj', smoothNormals=True)
+
+bunnyNodeID = sceneBuilder.addNode(
+    'DynamicBunny',
+    Transform(
+        translation=float3(-3.6, 0.12, 3.4),
+        rotationEulerDeg=float3(0.0, 35.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+sceneBuilder.addMeshInstance(
+    bunnyNodeID,
+    sceneBuilder.addTriangleMesh(bunnyMesh, bunny_mat)
+)
+
+# Ten-second loop for demo capture.
+# The final keyframe returns to the first transform, so the animation loops.
+bunnyAnim = Animation('DynamicBunnyAnim', bunnyNodeID, 10.0)
+
+bunnyAnim.addKeyframe(
+    0.0,
+    Transform(
+        translation=float3(-3.6, 1, 3.4),
+        rotationEulerDeg=float3(0.0, 35.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    1.5,
+    Transform(
+        translation=float3(-2.2, 1, 1.2),
+        rotationEulerDeg=float3(0.0, 160.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    3.0,
+    Transform(
+        translation=float3(0.2, 1, -0.9),
+        rotationEulerDeg=float3(0.0, 310.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    4.5,
+    Transform(
+        translation=float3(2.5, 1, -2.1),
+        rotationEulerDeg=float3(0.0, 470.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    6.5,
+    Transform(
+        translation=float3(3.6, 1, 1.7),
+        rotationEulerDeg=float3(0.0, 650.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    8.2,
+    Transform(
+        translation=float3(0.0, 1, 3.2),
+        rotationEulerDeg=float3(0.0, 820.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+bunnyAnim.addKeyframe(
+    10.0,
+    Transform(
+        translation=float3(-3.6, 1, 3.4),
+        rotationEulerDeg=float3(0.0, 1080.0 + 35.0, 0.0),
+        scaling=float3(0.55, 0.55, 0.55)
+    )
+)
+
+sceneBuilder.addAnimation(bunnyAnim)
+
+# -------------------------
 # Camera
 # -------------------------
 camera = Camera()
 #camera.position = float3(-1.1356, 1.9824,-3.3712)
 #camera.target = float3(-1.0902, 1.9196, -2.3742)
-camera.position = float3(-2.8498, 2.6995,-4.6577)
-camera.target = float3(-2.3211, 2.4819, -3.8373)
+camera.position = float3(-2.5796, 2.7449,-4.0730)
+camera.target = float3(-2.0510, 2.5590, -3.2447)
 camera.farPlane = 10000.0
 camera.nearPlane = 0.1
 sceneBuilder.addCamera(camera)

@@ -42,8 +42,8 @@
 //const std::string loadFromFileName = "DirectAbsErr20DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
-//const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
+//const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
@@ -128,52 +128,7 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        //applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-        //applyVar["gFloorLightmap"] = mpFloorLightmap;
-        //applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
-        //applyVar["gRightWallLightmap"] = mpRightWallLightmap;
-        //applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
-        //applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
-        //applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
-        //applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
-        //applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
-        //applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
-        //applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
-        //applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
-        //applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
-        //applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
-
-        //applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
-        //applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
-        //applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
-        //applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
-        //applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
-        //applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
-        //applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
-        //applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
-        //applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
-        //applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
-        //applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
-        //applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
-        //applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
-
-        //applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
-        //applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
-        //applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
-        //applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
-        //applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
-        //applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
-        //applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
-        //applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
-
-        //applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-        //applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
+        bindDataSceneData(applyVar);
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
@@ -290,49 +245,49 @@ void AdaptiveSHDemo::loadLightmaps()
 {
     // Load as a 2D texture. Falcor handles EXR (HDR) automatically.
     // We set loadAsSrgb to false because lightmaps contain linear radiance data.
-    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
-        {
-            if (idx >= mBakeTargets.size())
-            {
-                logWarning("Bake target index {} is out of range.", idx);
-                return;
-            }
+    //auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+    //    {
+    //        if (idx >= mBakeTargets.size())
+    //        {
+    //            logWarning("Bake target index {} is out of range.", idx);
+    //            return;
+    //        }
 
-            const auto& target = mBakeTargets[idx];
+    //        const auto& target = mBakeTargets[idx];
 
-            dst = Texture::createFromFile(
-                mpDevice,
-                target.outputPath,
-                true,
-                false,
-                ResourceBindFlags::ShaderResource
-            );
+    //        dst = Texture::createFromFile(
+    //            mpDevice,
+    //            target.outputPath,
+    //            true,
+    //            false,
+    //            ResourceBindFlags::ShaderResource
+    //        );
 
-            if (dst)
-            {
-                dst->setName(debugName);
-                logInfo("Successfully loaded lightmap '{}' from {}", target.name, target.outputPath);
-            }
-            else
-            {
-                logWarning("Failed to load lightmap '{}' from {}", target.name, target.outputPath);
-            }
-        };
+    //        if (dst)
+    //        {
+    //            dst->setName(debugName);
+    //            logInfo("Successfully loaded lightmap '{}' from {}", target.name, target.outputPath);
+    //        }
+    //        else
+    //        {
+    //            logWarning("Failed to load lightmap '{}' from {}", target.name, target.outputPath);
+    //        }
+    //    };
 
-    loadOne(0, mpFloorLightmap, "FloorLightmap");
-    loadOne(1, mpLeftWallLightmap, "LeftWallLightmap");
-    loadOne(2, mpRightWallLightmap, "RightWallLightmap");
-    loadOne(3, mpRoofLeftLightmap, "RoofLeftLightmap");
-    loadOne(4, mpRoofRightLightmap, "RoofRightLightmap");
+    //loadOne(0, mpFloorLightmap, "FloorLightmap");
+    //loadOne(1, mpLeftWallLightmap, "LeftWallLightmap");
+    //loadOne(2, mpRightWallLightmap, "RightWallLightmap");
+    //loadOne(3, mpRoofLeftLightmap, "RoofLeftLightmap");
+    //loadOne(4, mpRoofRightLightmap, "RoofRightLightmap");
 
-    loadOne(5, mpPillar0Lightmap, "Pillar0Lightmap");
-    loadOne(6, mpPillar1Lightmap, "Pillar1Lightmap");
-    loadOne(7, mpPillar2Lightmap, "Pillar2Lightmap");
-    loadOne(8, mpPillar3Lightmap, "Pillar3Lightmap");
-    loadOne(9, mpPillar4Lightmap, "Pillar4Lightmap");
-    loadOne(10, mpPillar5Lightmap, "Pillar5Lightmap");
-    loadOne(11, mpPillar6Lightmap, "Pillar6Lightmap");
-    loadOne(12, mpPillar7Lightmap, "Pillar7Lightmap");
+    //loadOne(5, mpPillar0Lightmap, "Pillar0Lightmap");
+    //loadOne(6, mpPillar1Lightmap, "Pillar1Lightmap");
+    //loadOne(7, mpPillar2Lightmap, "Pillar2Lightmap");
+    //loadOne(8, mpPillar3Lightmap, "Pillar3Lightmap");
+    //loadOne(9, mpPillar4Lightmap, "Pillar4Lightmap");
+    //loadOne(10, mpPillar5Lightmap, "Pillar5Lightmap");
+    //loadOne(11, mpPillar6Lightmap, "Pillar6Lightmap");
+    //loadOne(12, mpPillar7Lightmap, "Pillar7Lightmap");
 }
 
 void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -346,22 +301,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv");
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
-        mBakeTargets =
-        {
-            { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
-            { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
-            { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
-            { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
-            { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
-            { "Pillar0",  3, 512, 512, "BakedPillar0.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar2",  5, 512, 512, "BakedPillar2.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar3",  6, 512, 512, "BakedPillar3.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar4",  7, 512, 512, "BakedPillar4.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar5",  8, 512, 512, "BakedPillar5.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
-            { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
-        };
+
+        setupDataSceneBakeTargets();
 
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
@@ -492,7 +433,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpCompositeState->setVao(mpEmptyVao);
 
         //loadLightmaps();
-  
+        loadDataSceneLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
@@ -529,4 +470,174 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             }
         }
     }
+}
+
+void AdaptiveSHDemo::loadDataSceneLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size())
+            {
+                logWarning("Bake target index {} is out of range.", idx);
+                return;
+            }
+
+            const auto& target = mBakeTargets[idx];
+
+            dst = Texture::createFromFile(
+                mpDevice,
+                target.outputPath,
+                true,
+                false,
+                ResourceBindFlags::ShaderResource
+            );
+
+            if (dst)
+            {
+                dst->setName(debugName);
+                logInfo("Successfully loaded data-scene lightmap '{}' from {}", target.name, target.outputPath);
+            }
+            else
+            {
+                logWarning("Failed to load data-scene lightmap '{}' from {}", target.name, target.outputPath);
+            }
+        };
+
+    loadOne(0, mpDataFloorLightmap, "DataFloorLightmap");
+    loadOne(1, mpDataCeilingLightmap, "DataCeilingLightmap");
+    loadOne(2, mpDataLeftWallLightmap, "DataLeftWallLightmap");
+    loadOne(3, mpDataRightWallLightmap, "DataRightWallLightmap");
+    loadOne(4, mpDataBackWallLightmap, "DataBackWallLightmap");
+    loadOne(5, mpDataFrontWallLightmap, "DataFrontWallLightmap");
+
+    loadOne(6, mpDataTallBoxALightmap, "DataTallBoxALightmap");
+    loadOne(7, mpDataWideBoxBLightmap, "DataWideBoxBLightmap");
+    loadOne(8, mpDataBlockCLightmap, "DataBlockCLightmap");
+    loadOne(9, mpDataLowBoxDLightmap, "DataLowBoxDLightmap");
+    loadOne(10, mpDataThinSlabELightmap, "DataThinSlabELightmap");
+    loadOne(11, mpDataThinSlabFLightmap, "DataThinSlabFLightmap");
+    loadOne(12, mpDataTallBoxJLightmap, "DataTallBoxJLightmap");
+    loadOne(13, mpDataShortBoxLLightmap, "DataShortBoxLLightmap");
+}
+
+void AdaptiveSHDemo::bindDataSceneData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    applyVar["gFloorLightmap"] = mpDataFloorLightmap;
+    applyVar["gCeilingLightmap"] = mpDataCeilingLightmap;
+    applyVar["gLeftWallLightmap"] = mpDataLeftWallLightmap;
+    applyVar["gRightWallLightmap"] = mpDataRightWallLightmap;
+    applyVar["gBackWallLightmap"] = mpDataBackWallLightmap;
+    applyVar["gFrontWallLightmap"] = mpDataFrontWallLightmap;
+
+    applyVar["gTallBoxALightmap"] = mpDataTallBoxALightmap;
+    applyVar["gWideBoxBLightmap"] = mpDataWideBoxBLightmap;
+    applyVar["gBlockCLightmap"] = mpDataBlockCLightmap;
+    applyVar["gLowBoxDLightmap"] = mpDataLowBoxDLightmap;
+    applyVar["gThinSlabELightmap"] = mpDataThinSlabELightmap;
+    applyVar["gThinSlabFLightmap"] = mpDataThinSlabFLightmap;
+    applyVar["gTallBoxJLightmap"] = mpDataTallBoxJLightmap;
+    applyVar["gShortBoxLLightmap"] = mpDataShortBoxLLightmap;
+
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gFrontWallInstanceID"] = 5;
+
+    applyVar["PerFrameCB"]["gTallBoxAInstanceID"] = 6;
+    applyVar["PerFrameCB"]["gWideBoxBInstanceID"] = 7;
+    applyVar["PerFrameCB"]["gBlockCInstanceID"] = 8;
+    applyVar["PerFrameCB"]["gLowBoxDInstanceID"] = 9;
+    applyVar["PerFrameCB"]["gThinSlabEInstanceID"] = 10;
+    applyVar["PerFrameCB"]["gThinSlabFInstanceID"] = 11;
+    applyVar["PerFrameCB"]["gTallBoxJInstanceID"] = 12;
+    applyVar["PerFrameCB"]["gShortBoxLInstanceID"] = 13;
+
+    applyVar["PerFrameCB"]["gTallBoxACenterW"] = float3(-3.8f, 1.3f, -2.8f);
+    applyVar["PerFrameCB"]["gWideBoxBCenterW"] = float3(-1.9f, 0.5f, 2.2f);
+    applyVar["PerFrameCB"]["gBlockCCenterW"] = float3(2.8f, 0.8f, -2.6f);
+    applyVar["PerFrameCB"]["gLowBoxDCenterW"] = float3(1.4f, 0.35f, 2.8f);
+    applyVar["PerFrameCB"]["gThinSlabECenterW"] = float3(-0.4f, 1.5f, -0.8f);
+    applyVar["PerFrameCB"]["gThinSlabFCenterW"] = float3(3.4f, 1.2f, 0.8f);
+    applyVar["PerFrameCB"]["gTallBoxJCenterW"] = float3(-4.2f, 1.5f, 2.8f);
+    applyVar["PerFrameCB"]["gShortBoxLCenterW"] = float3(-0.8f, 0.45f, -3.3f);
+
+    applyVar["PerFrameCB"]["gTallBoxAHalfExtentW"] = float3(0.45f, 1.30f, 0.45f);
+    applyVar["PerFrameCB"]["gWideBoxBHalfExtentW"] = float3(0.90f, 0.50f, 0.60f);
+    applyVar["PerFrameCB"]["gBlockCHalfExtentW"] = float3(0.72f, 0.80f, 0.72f);
+    applyVar["PerFrameCB"]["gLowBoxDHalfExtentW"] = float3(1.05f, 0.35f, 1.00f);
+    applyVar["PerFrameCB"]["gThinSlabEHalfExtentW"] = float3(0.175f, 1.50f, 0.70f);
+    applyVar["PerFrameCB"]["gThinSlabFHalfExtentW"] = float3(0.36f, 1.20f, 0.85f);
+    applyVar["PerFrameCB"]["gTallBoxJHalfExtentW"] = float3(0.75f, 1.25f, 0.75f);
+    applyVar["PerFrameCB"]["gShortBoxLHalfExtentW"] = float3(0.75f, 0.45f, 0.75f);
+}
+
+void AdaptiveSHDemo::setupDataSceneBakeTargets()
+{
+    mBakeTargets =
+    {
+        // Room shell.
+        //{ "Floor",     0, 1024, 1024, "BakedData_Floor.exr"     },
+        { "Floor",     0, 2048, 2048, "BakedData_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedData_Ceiling.exr"   },
+        { "LeftWall",  2, 1024,  512, "BakedData_LeftWall.exr"  },
+        { "RightWall", 3, 1024,  512, "BakedData_RightWall.exr" },
+        { "BackWall",  4, 1024,  512, "BakedData_BackWall.exr"  },
+        { "FrontWall", 5, 1024,  512, "BakedData_FrontWall.exr" },
+
+        //Box targets.
+        //halfExtent = scaling * 0.5
+        //rotationEulerDeg = same as SceneForData.pyscene
+
+       { "TallBoxA", 6, 512, 512, "BakedData_TallBoxA.exr",
+           BakeTargetType::Pillar,
+           float3(-3.8f, 1.3f, -2.8f),
+           float3(0.45f, 1.30f, 0.45f),
+           float3(0.0f, 0.0f, 0.0f) },
+
+       { "WideBoxB", 7, 1024, 1024, "BakedData_WideBoxB.exr",
+           BakeTargetType::Pillar,
+           float3(-1.9f, 0.5f, 2.2f),
+           float3(0.90f, 0.50f, 0.60f),
+           float3(0.0f, 0.0f, 0.0f) },
+
+       { "BlockC", 8, 512, 512, "BakedData_BlockC.exr",
+           BakeTargetType::Pillar,
+           float3(2.8f, 0.8f, -2.6f),
+           float3(0.55f, 0.80f, 0.55f),
+           float3(0.0f, 18.0f, 0.0f) },
+
+       { "LowBoxD", 9, 512, 512, "BakedData_LowBoxD.exr",
+           BakeTargetType::Pillar,
+           float3(1.4f, 0.35f, 2.8f),
+           float3(0.80f, 0.35f, 0.70f),
+           float3(0.0f, -22.0f, 0.0f) },
+
+       { "ThinSlabE", 10, 512, 512, "BakedData_ThinSlabE.exr",
+           BakeTargetType::Pillar,
+           float3(-0.4f, 1.5f, -0.8f),
+           float3(0.175f, 1.50f, 0.70f),
+           float3(0.0f, 0.0f, 0.0f) },
+
+       { "ThinSlabF", 11, 512, 512, "BakedData_ThinSlabF.exr",
+           BakeTargetType::Pillar,
+           float3(3.4f, 1.2f, 0.8f),
+           float3(0.175f, 1.20f, 0.80f),
+           float3(0.0f, 12.0f, 0.0f) },
+
+       { "TallBoxJ", 12, 512, 512, "BakedData_TallBoxJ.exr",
+           BakeTargetType::Pillar,
+           float3(-4.2f, 1.5f, 2.8f),
+           float3(0.35f, 1.10f, 0.35f),
+           float3(0.0f, -18.0f, 8.0f) },
+
+       { "ShortBoxL", 13, 512, 512, "BakedData_ShortBoxL.exr",
+           BakeTargetType::Pillar,
+           float3(-0.8f, 0.45f, -3.3f),
+           float3(0.50f, 0.45f, 0.50f),
+           float3(0.0f, 40.0f, 0.0f) },
+    };
 }

@@ -6,6 +6,7 @@ cbuffer BakeCB
     uint gReceiverInstanceID;
     float3 gPillarCenterW;
     float3 gPillarHalfExtentW;
+    float3 gPillarRotationEulerDeg;
 };
 
 struct PSOut

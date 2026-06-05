@@ -205,6 +205,7 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
                     var["BakeCB"]["gReceiverInstanceID"] = target.instanceID;
                     var["BakeCB"]["gPillarCenterW"] = target.pillarCenterW;
                     var["BakeCB"]["gPillarHalfExtentW"] = target.pillarHalfExtentW;
+                    var["BakeCB"]["gPillarRotationEulerDeg"] = target.pillarRotationEulerDeg;
                     mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
 
                     pRenderContext->clearUAV(mpCounterBuffer->getUAV().get(), uint4(0));
@@ -563,104 +564,68 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
 
 void BakeLightMapSingle::setupDataSceneBakeTargets()
 {
-    // Instance IDs follow the addMeshInstance() order in SceneForData.pyscene:
-    //
-    //  0 Floor
-    //  1 Ceiling
-    //  2 LeftWall
-    //  3 RightWall
-    //  4 BackWall
-    //  5 FrontWall
-    //  6 TallBoxA
-    //  7 WideBoxB
-    //  8 BlockC
-    //  9 LowBoxD
-    // 10 ThinSlabE
-    // 11 ThinSlabF
-    // 12 TallBoxJ
-    // 13 ShortBoxL
-    //
-    // NOTE:
-    // For cube targets, the existing UVPassPillar.slang uses world-space
-    // box projection:
-    //
-    //     p = (posW - gPillarCenterW) / gPillarHalfExtentW
-    //
-    // Therefore gPillarCenterW and gPillarHalfExtentW must approximately
-    // enclose the cube in world space. For rotated boxes, we use conservative
-    // world-space AABB half extents rather than exact local-space half extents.
-
     mBakeTargets =
     {
         // Room shell.
-        { "Floor",     0, 1024, 1024, "BakedData_Floor.exr"     },
+        //{ "Floor",     0, 1024, 1024, "BakedData_Floor.exr"     },
+        { "Floor",     0, 2048, 2048, "BakedData_Floor.exr"     },
         { "Ceiling",   1, 1024, 1024, "BakedData_Ceiling.exr"   },
         { "LeftWall",  2, 1024,  512, "BakedData_LeftWall.exr"  },
         { "RightWall", 3, 1024,  512, "BakedData_RightWall.exr" },
         { "BackWall",  4, 1024,  512, "BakedData_BackWall.exr"  },
         { "FrontWall", 5, 1024,  512, "BakedData_FrontWall.exr" },
 
-        // Scattered cubes / boxes.
-        // Non-rotated box:
-        // scaling=float3(0.9, 2.6, 0.9), translation=float3(-3.8, 1.3, -2.8)
+         //Box targets.
+         //halfExtent = scaling * 0.5
+         //rotationEulerDeg = same as SceneForData.pyscene
+
         { "TallBoxA", 6, 512, 512, "BakedData_TallBoxA.exr",
             BakeTargetType::Pillar,
             float3(-3.8f, 1.3f, -2.8f),
-            float3(0.45f, 1.30f, 0.45f) },
+            float3(0.45f, 1.30f, 0.45f),
+            float3(0.0f, 0.0f, 0.0f) },
 
-            // Non-rotated box:
-            // scaling=float3(1.8, 1.0, 1.2), translation=float3(-1.9, 0.5, 2.2)
-            { "WideBoxB", 7, 512, 512, "BakedData_WideBoxB.exr",
-                BakeTargetType::Pillar,
-                float3(-1.9f, 0.5f, 2.2f),
-                float3(0.90f, 0.50f, 0.60f) },
+        { "WideBoxB", 7, 1024, 1024, "BakedData_WideBoxB.exr",
+            BakeTargetType::Pillar,
+            float3(-1.9f, 0.5f, 2.2f),
+            float3(0.90f, 0.50f, 0.60f),
+            float3(0.0f, 0.0f, 0.0f) },
 
-                // Rotated around Y by 18 degrees.
-                // scaling=float3(1.1, 1.6, 1.1), translation=float3(2.8, 0.8, -2.6)
-                // Conservative world-space AABB half extent.
-                { "BlockC", 8, 512, 512, "BakedData_BlockC.exr",
-                    BakeTargetType::Pillar,
-                    float3(2.8f, 0.8f, -2.6f),
-                    float3(0.72f, 0.80f, 0.72f) },
+        { "BlockC", 8, 512, 512, "BakedData_BlockC.exr",
+            BakeTargetType::Pillar,
+            float3(2.8f, 0.8f, -2.6f),
+            float3(0.55f, 0.80f, 0.55f),
+            float3(0.0f, 18.0f, 0.0f) },
 
-                    // Rotated around Y by -22 degrees.
-                    // scaling=float3(1.6, 0.7, 1.4), translation=float3(1.4, 0.35, 2.8)
-                    // Conservative world-space AABB half extent.
-                    { "LowBoxD", 9, 512, 512, "BakedData_LowBoxD.exr",
-                        BakeTargetType::Pillar,
-                        float3(1.4f, 0.35f, 2.8f),
-                        float3(1.05f, 0.35f, 1.00f) },
+        { "LowBoxD", 9, 512, 512, "BakedData_LowBoxD.exr",
+            BakeTargetType::Pillar,
+            float3(1.4f, 0.35f, 2.8f),
+            float3(0.80f, 0.35f, 0.70f),
+            float3(0.0f, -22.0f, 0.0f) },
 
-                        // Non-rotated thin slab:
-                        // scaling=float3(0.35, 3.0, 1.4), translation=float3(-0.4, 1.5, -0.8)
-                        { "ThinSlabE", 10, 512, 512, "BakedData_ThinSlabE.exr",
-                            BakeTargetType::Pillar,
-                            float3(-0.4f, 1.5f, -0.8f),
-                            float3(0.175f, 1.50f, 0.70f) },
+        { "ThinSlabE", 10, 512, 512, "BakedData_ThinSlabE.exr",
+            BakeTargetType::Pillar,
+            float3(-0.4f, 1.5f, -0.8f),
+            float3(0.175f, 1.50f, 0.70f),
+            float3(0.0f, 0.0f, 0.0f) },
 
-                            // Rotated around Y by 12 degrees.
-                            // scaling=float3(0.35, 2.4, 1.6), translation=float3(3.4, 1.2, 0.8)
-                            // Conservative world-space AABB half extent.
-                            { "ThinSlabF", 11, 512, 512, "BakedData_ThinSlabF.exr",
-                                BakeTargetType::Pillar,
-                                float3(3.4f, 1.2f, 0.8f),
-                                float3(0.36f, 1.20f, 0.85f) },
+        { "ThinSlabF", 11, 512, 512, "BakedData_ThinSlabF.exr",
+            BakeTargetType::Pillar,
+            float3(3.4f, 1.2f, 0.8f),
+            float3(0.175f, 1.20f, 0.80f),
+            float3(0.0f, 12.0f, 0.0f) },
 
-                                // Rotated around Y by -18 degrees and Z by 8 degrees.
-                                // scaling=float3(0.7, 2.2, 0.7), translation=float3(-4.2, 1.5, 2.8)
-                                // Conservative world-space AABB half extent.
-                                { "TallBoxJ", 12, 512, 512, "BakedData_TallBoxJ.exr",
-                                    BakeTargetType::Pillar,
-                                    float3(-4.2f, 1.5f, 2.8f),
-                                    float3(0.75f, 1.25f, 0.75f) },
+        { "TallBoxJ", 12, 512, 512, "BakedData_TallBoxJ.exr",
+            BakeTargetType::Pillar,
+            float3(-4.2f, 1.5f, 2.8f),
+            float3(0.35f, 1.10f, 0.35f),
+            float3(0.0f, -18.0f, 8.0f) },
 
-                                    // Rotated around Y by 40 degrees.
-                                    // scaling=float3(1.0, 0.9, 1.0), translation=float3(-0.8, 0.45, -3.3)
-                                    // Conservative world-space AABB half extent.
-                                    { "ShortBoxL", 13, 512, 512, "BakedData_ShortBoxL.exr",
-                                        BakeTargetType::Pillar,
-                                        float3(-0.8f, 0.45f, -3.3f),
-                                        float3(0.75f, 0.45f, 0.75f) },
+        { "ShortBoxL", 13, 512, 512, "BakedData_ShortBoxL.exr",
+            BakeTargetType::Pillar,
+            float3(-0.8f, 0.45f, -3.3f),
+            float3(0.50f, 0.45f, 0.50f),
+            float3(0.0f, 40.0f, 0.0f) },
     };
 }
 
@@ -842,7 +807,6 @@ void BakeLightMapSingle::loadDataSceneLightmaps()
     loadOne(3, mpDataRightWallLightmap, "DataRightWallLightmap");
     loadOne(4, mpDataBackWallLightmap, "DataBackWallLightmap");
     loadOne(5, mpDataFrontWallLightmap, "DataFrontWallLightmap");
-
     loadOne(6, mpDataTallBoxALightmap, "DataTallBoxALightmap");
     loadOne(7, mpDataWideBoxBLightmap, "DataWideBoxBLightmap");
     loadOne(8, mpDataBlockCLightmap, "DataBlockCLightmap");

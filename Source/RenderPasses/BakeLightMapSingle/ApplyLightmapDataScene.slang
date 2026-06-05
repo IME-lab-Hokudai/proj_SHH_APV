@@ -63,12 +63,53 @@ VSOut vsMain(VSIn vIn)
     return vsOut;
 }
 
-float2 projectCubeFaceUV(float3 posW, float3 normalW, float3 centerW, float3 halfExtentW)
+float3 rotateX(float3 v, float a)
 {
-    float3 p = (posW - centerW) / max(halfExtentW, float3(1e-6f));
+    float s = sin(a);
+    float c = cos(a);
+    return float3(v.x, c * v.y - s * v.z, s * v.y + c * v.z);
+}
+
+float3 rotateY(float3 v, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+float3 rotateZ(float3 v, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float3(c * v.x - s * v.y, s * v.x + c * v.y, v.z);
+}
+
+float3 worldVectorToBoxLocal(float3 vW, float3 rotationEulerDeg)
+{
+    float3 r = radians(rotationEulerDeg);
+
+    float3 v = vW;
+    v = rotateZ(v, -r.z);
+    v = rotateY(v, -r.y);
+    v = rotateX(v, -r.x);
+    return v;
+}
+
+float2 projectCubeFaceUV(
+    float3 posW,
+    float3 normalW,
+    float3 centerW,
+    float3 halfExtentW,
+    float3 rotationEulerDeg
+)
+{
+    float3 pLocal = worldVectorToBoxLocal(posW - centerW, rotationEulerDeg);
+    float3 nLocal = normalize(worldVectorToBoxLocal(normalW, rotationEulerDeg));
+
+    float3 p = pLocal / max(halfExtentW, float3(1e-6f));
     p = clamp(p, -1.0f, 1.0f);
 
-    float3 n = normalize(normalW);
+    float3 n = normalize(nLocal);
     float3 an = abs(n);
 
     float2 uv;
@@ -186,49 +227,50 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     // Box targets.
     else if (instanceID == gTallBoxAInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxACenterW, gTallBoxAHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxACenterW, gTallBoxAHalfExtentW, float3(0.0f, 0.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gTallBoxALightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gWideBoxBInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gWideBoxBCenterW, gWideBoxBHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gWideBoxBCenterW, gWideBoxBHalfExtentW, float3(0.0f, 0.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gWideBoxBLightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gBlockCInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gBlockCCenterW, gBlockCHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gBlockCCenterW, gBlockCHalfExtentW, float3(0.0f, 18.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gBlockCLightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gLowBoxDInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gLowBoxDCenterW, gLowBoxDHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gLowBoxDCenterW, gLowBoxDHalfExtentW, float3(0.0f, -22.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gLowBoxDLightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gThinSlabEInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabECenterW, gThinSlabEHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabECenterW, gThinSlabEHalfExtentW, float3(0.0f, 0.0f, 0.0f)
+);
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gThinSlabELightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gThinSlabFInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabFCenterW, gThinSlabFHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabFCenterW, gThinSlabFHalfExtentW, float3(0.0f, 12.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gThinSlabFLightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gTallBoxJInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxJCenterW, gTallBoxJHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxJCenterW, gTallBoxJHalfExtentW, float3(0.0f, -18.0f, 8.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gTallBoxJLightmap.Sample(gLinearSampler, uv).rgb);
     }
     else if (instanceID == gShortBoxLInstanceID)
     {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gShortBoxLCenterW, gShortBoxLHalfExtentW);
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gShortBoxLCenterW, gShortBoxLHalfExtentW, float3(0.0f, 40.0f, 0.0f));
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gShortBoxLLightmap.Sample(gLinearSampler, uv).rgb);
     }

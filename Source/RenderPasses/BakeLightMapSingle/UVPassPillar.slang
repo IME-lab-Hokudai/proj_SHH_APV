@@ -5,6 +5,8 @@ cbuffer BakeCB
     uint   gReceiverInstanceID;
     float3 gPillarCenterW;
     float3 gPillarHalfExtentW;
+    // Object rotation in degrees, same values as SceneForData.pyscene.
+    float3 gPillarRotationEulerDeg;
 };
 
 struct PillarVSOut
@@ -21,18 +23,57 @@ struct PSOut
     float4 normW : SV_Target1;
 };
 
-float2 projectCubeFaceUV(float3 posW, float3 normalW)
+float3 rotateX(float3 v, float a)
 {
-    // Normalize into pillar-local space [-1,1]
-    float3 p = (posW - gPillarCenterW) / gPillarHalfExtentW;
+    float s = sin(a);
+    float c = cos(a);
+    return float3(v.x, c * v.y - s * v.z, s * v.y + c * v.z);
+}
 
-    float3 n = normalize(normalW);
+float3 rotateY(float3 v, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
+}
+
+float3 rotateZ(float3 v, float a)
+{
+    float s = sin(a);
+    float c = cos(a);
+    return float3(c * v.x - s * v.y, s * v.x + c * v.y, v.z);
+}
+
+float3 worldVectorToBoxLocal(float3 vW)
+{
+    float3 r = radians(gPillarRotationEulerDeg);
+
+    // Inverse rotation. This assumes the scene transform applies Euler rotation
+    // in X -> Y -> Z order. If one object still looks wrong, the rotation order
+    // is the first thing to check.
+    float3 v = vW;
+    v = rotateZ(v, -r.z);
+    v = rotateY(v, -r.y);
+    v = rotateX(v, -r.x);
+    return v;
+}
+
+float2 projectCubeFaceUVLocal(float3 posW, float3 normalW)
+{
+    // Transform world-space point and normal into the box's local orientation.
+    float3 pLocal = worldVectorToBoxLocal(posW - gPillarCenterW);
+    float3 nLocal = normalize(worldVectorToBoxLocal(normalW));
+
+    // Normalize into local box space [-1, 1].
+    float3 p = pLocal / max(gPillarHalfExtentW, float3(1e-6f));
+    p = clamp(p, -1.0f, 1.0f);
+
+    float3 n = normalize(nLocal);
     float3 an = abs(n);
 
     float2 uv;
     uint faceIndex = 0;
 
-    // Face selection
     if (an.x >= an.y && an.x >= an.z)
     {
         if (n.x > 0.0f)
@@ -73,10 +114,8 @@ float2 projectCubeFaceUV(float3 posW, float3 normalW)
         }
     }
 
-    // Map [-1,1] → [0,1]
     uv = uv * 0.5f + 0.5f;
 
-    // Pack into 3x2 atlas
     uint tileX = faceIndex % 3;
     uint tileY = faceIndex / 3;
 
@@ -96,9 +135,9 @@ PillarVSOut vsMain(VSIn v)
     o.normalW = normalize(base.normalW);
     o.instanceID = base.instanceID;
 
-    float2 atlasUV = projectCubeFaceUV(o.posW, o.normalW);
+    float2 atlasUV = projectCubeFaceUVLocal(o.posW, o.normalW);
 
-    // UV → clip space
+    // UV -> clip space.
     o.posH = float4(atlasUV * 2.0f - 1.0f, 0.0f, 1.0f);
 
     return o;
