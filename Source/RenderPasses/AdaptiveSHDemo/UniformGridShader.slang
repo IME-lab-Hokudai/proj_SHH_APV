@@ -282,50 +282,72 @@ void fetchTrilinearInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
 // ------------------------------------------------------------------
 void fetchHermiteInterpolatedSH(float3 pos, out float3 finalCoeffs[9])
 {
-    // 1. Calculate Grid Coordinates (Cell Logic)
-    // ----------------------------------------------------------
+    //// 1. Calculate Grid Coordinates (Cell Logic)
+    //// ----------------------------------------------------------
+    //float3 relPos = pos - gGridMin;
+
+    //// Determine which "Box" (Cell) we are in
+    //int3 cellCoords = int3(floor(relPos / gCellSize));
+
+    //// Clamp to valid range (0 to N-2) so we can always look up neighbor +1
+    //int3 maxCellIndex = int3(gProbeCountDim) - int3(1, 1, 1);
+    //cellCoords = max(int3(0), min(cellCoords, maxCellIndex - int3(1)));
+
+    //// 2. Calculate Local 't' (0..1)
+    //// ----------------------------------------------------------
+    //float3 cellOrigin = gGridMin + float3(cellCoords) * gCellSize;
+    //// float3 t = (pos - cellOrigin) / gCellSize;
+    //float3 t = saturate((pos - cellOrigin) / gCellSize);
     float3 relPos = pos - gGridMin;
 
-    // Determine which "Box" (Cell) we are in
+    int3 cellCount = int3(gProbeCountDim) - int3(1, 1, 1);
+
+    float3 gridMax = gGridMin + float3(cellCount) * gCellSize;
+
+    bool outside =
+    pos.x < gGridMin.x || pos.y < gGridMin.y || pos.z < gGridMin.z ||
+    pos.x > gridMax.x || pos.y > gridMax.y || pos.z > gridMax.z;
+
+    //// Optional debug.
+    //if (outside)
+    //{
+    //    return float4(1.0, 0.0, 0.0, 1.0);
+    //}
+
     int3 cellCoords = int3(floor(relPos / gCellSize));
+    cellCoords = clamp(cellCoords, int3(0), cellCount - int3(1, 1, 1));
 
-    // Clamp to valid range (0 to N-2) so we can always look up neighbor +1
-    int3 maxCellIndex = int3(gProbeCountDim) - int3(1, 1, 1);
-    cellCoords = max(int3(0), min(cellCoords, maxCellIndex - int3(1)));
-
-    // 2. Calculate Local 't' (0..1)
-    // ----------------------------------------------------------
     float3 cellOrigin = gGridMin + float3(cellCoords) * gCellSize;
-    // float3 t = (pos - cellOrigin) / gCellSize;
-    float3 t = saturate((pos - cellOrigin) / gCellSize);
+    float3 t = (pos - cellOrigin) / gCellSize;
+    t = clamp(t, 0.0f, 1.0f);
     // 3. Fetch Indices (Using Helper)
     // ----------------------------------------------------------
     // We order these to match the loop bit-logic: Bit 0=Z, Bit 1=Y, Bit 2=X
-    //int cIdx[8];
-    //cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
-    //cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
-    //cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
-    //cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
-    //cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
-    //cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
-    //cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
-    //cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
-
-    int baseIdx = getUniformGridIndex(cellCoords);
-
-    int strideX = 1;
-    int strideY = gProbeCountDim.x;
-    int strideZ = gProbeCountDim.x * gProbeCountDim.y;
-
     int cIdx[8];
-    cIdx[0] = baseIdx;                               // 000
-    cIdx[1] = baseIdx + strideZ;                     // 001
-    cIdx[2] = baseIdx + strideY;                     // 010
-    cIdx[3] = baseIdx + strideY + strideZ;           // 011
-    cIdx[4] = baseIdx + strideX;                     // 100
-    cIdx[5] = baseIdx + strideX + strideZ;           // 101
-    cIdx[6] = baseIdx + strideX + strideY;           // 110
-    cIdx[7] = baseIdx + strideX + strideY + strideZ; // 111
+    cIdx[0] = getUniformGridIndex(cellCoords + int3(0, 0, 0)); // 000
+    cIdx[1] = getUniformGridIndex(cellCoords + int3(0, 0, 1)); // 001
+    cIdx[2] = getUniformGridIndex(cellCoords + int3(0, 1, 0)); // 010
+    cIdx[3] = getUniformGridIndex(cellCoords + int3(0, 1, 1)); // 011
+    cIdx[4] = getUniformGridIndex(cellCoords + int3(1, 0, 0)); // 100
+    cIdx[5] = getUniformGridIndex(cellCoords + int3(1, 0, 1)); // 101
+    cIdx[6] = getUniformGridIndex(cellCoords + int3(1, 1, 0)); // 110
+    cIdx[7] = getUniformGridIndex(cellCoords + int3(1, 1, 1)); // 111
+
+    //int baseIdx = getUniformGridIndex(cellCoords);
+
+    //int strideX = 1;
+    //int strideY = gProbeCountDim.x;
+    //int strideZ = gProbeCountDim.x * gProbeCountDim.y;
+
+    //int cIdx[8];
+    //cIdx[0] = baseIdx;                               // 000
+    //cIdx[1] = baseIdx + strideZ;                     // 001
+    //cIdx[2] = baseIdx + strideY;                     // 010
+    //cIdx[3] = baseIdx + strideY + strideZ;           // 011
+    //cIdx[4] = baseIdx + strideX;                     // 100
+    //cIdx[5] = baseIdx + strideX + strideZ;           // 101
+    //cIdx[6] = baseIdx + strideX + strideY;           // 110
+    //cIdx[7] = baseIdx + strideX + strideY + strideZ; // 111
     float3 size = gCellSize;
     for (int band = 0; band < 9; ++band)
     {
@@ -582,8 +604,10 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
             // 2. Compute interpolated SH Coeffs
        fetchHermiteInterpolatedSH(vsOut.posW, finalSH);
-       // fetchTrilinearInterpolatedSH(vsOut.posW, finalSH);
+        //fetchTrilinearInterpolatedSH(vsOut.posW, finalSH);
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
+    //    float3 irradiance =
+    //finalSH[0] * 0.2820947917738781f * 3.141593f;
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
     }
     litColor += emissiveSample.rgb;

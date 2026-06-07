@@ -45,7 +45,7 @@ private:
     ref<Device> mpDevice;
 
     // Dimensions
-    uint3 mProbeResolution = { 0, 0, 0 }; // Number of Boxes
+    uint3 mProbeResolution = { 0, 0, 0 }; // Number of Voxels
     uint3 mCornerResolution = { 0, 0, 0 };  // Number of Corners (Res + 1)
     uint32_t mTotalProbes = 0;           // Flattened count
 

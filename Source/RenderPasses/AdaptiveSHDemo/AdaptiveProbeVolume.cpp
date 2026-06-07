@@ -147,18 +147,22 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
         // PASS 3: X-Axis (Final Gather)
 
         // Final Value
+        //outCoeffs[band] = float3(
+        //    hermite1D(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
+        //    hermite1D(t.x, r[0].y, r_dX[0].y * size.y, r[1].y, r_dX[1].y * size.x),
+        //    hermite1D(t.x, r[0].z, r_dX[0].z * size.z, r[1].z, r_dX[1].z * size.x)
+        //);
         outCoeffs[band] = float3(
             hermite1D(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
-            hermite1D(t.x, r[0].y, r_dX[0].y * size.y, r[1].y, r_dX[1].y * size.x),
-            hermite1D(t.x, r[0].z, r_dX[0].z * size.z, r[1].z, r_dX[1].z * size.x)
+            hermite1D(t.x, r[0].y, r_dX[0].y * size.x, r[1].y, r_dX[1].y * size.x),
+            hermite1D(t.x, r[0].z, r_dX[0].z * size.x, r[1].z, r_dX[1].z * size.x)
         );
-
         // Final Gradients
         // d/dx comes from Hermite deriv of this stage
         float3 gradX = float3(
             hermite1D_deriv(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
-            hermite1D_deriv(t.x, r[0].y, r_dX[0].y * size.y, r[1].y, r_dX[1].y * size.x),
-            hermite1D_deriv(t.x, r[0].z, r_dX[0].z * size.z, r[1].z, r_dX[1].z * size.x)
+            hermite1D_deriv(t.x, r[0].y, r_dX[0].y * size.x, r[1].y, r_dX[1].y * size.x),
+            hermite1D_deriv(t.x, r[0].z, r_dX[0].z * size.x, r[1].z, r_dX[1].z * size.x)
         ) / size.x;
 
         // d/dy and d/dz come from linear interpolation of previous stages
@@ -358,9 +362,9 @@ void AdaptiveProbeVolume::computeNeighbors()
 void AdaptiveProbeVolume::uploadToGPU()
 {
     // Ensure neighbors are computed before uploading!
-    //computeNeighbors();
+    computeNeighbors();
     //constrainHangingNodes();
-    //constrainHangingNodesHermite();
+    constrainHangingNodesHermite();
     // 1. Pack Probes (Tree Topology)
     std::vector<GPUProbe> gpuProbes;
     gpuProbes.reserve(mProbes.size());

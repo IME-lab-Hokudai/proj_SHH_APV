@@ -299,6 +299,26 @@ sceneBuilder.addMeshInstance(
     sceneBuilder.addTriangleMesh(quadMesh, back_wall_light_mat)
 )
 
+sphere_mat = StandardMaterial('DynamicSphereMaterial')
+sphere_mat.baseColor = float4(0.78, 0.78, 0.78, 1.0)
+sphere_mat.roughness = 1.0
+sphere_mat.metallic = 0.0
+sphereMesh = TriangleMesh.createSphere(1.0, 64, 64)
+
+
+sphereNodeID = sceneBuilder.addNode(
+    'DynamicSphere',
+    Transform(
+        translation=float3(-1.5, 1.5,  3.4),
+        rotationEulerDeg=float3(0.0, 275.0, 0.0),
+        scaling=float3(.6,.6, .6)
+    )
+)
+
+sceneBuilder.addMeshInstance(
+    sphereNodeID,
+    sceneBuilder.addTriangleMesh(sphereMesh, sphere_mat)
+)
 # -------------------------
 # Camera
 # -------------------------
