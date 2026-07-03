@@ -182,8 +182,8 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
     // 2. Direct Lighting (Next Event Estimation / Explicit Light Sampling)
     // -------------------------------------------------------------------------
     // For bounces (depth > 0), we rely on NEE (sampleLight) to handle lighting smoothly.
-    float3 accumLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
-    //float3 accumLight = float3(0.0f);
+   float3 accumLight = (hitData.depth == 0) ? bsdfProperties.emission : float3(0.0f);
+    //float3 accumLight = float3(0.0f); //uncomment when bake indirect light only
     //if (hitData.depth > 0) {
         // ANALYTIC LIGHTS
         if (kUseAnalyticLights) {
@@ -208,7 +208,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
         // EMISSIVE LIGHTS
         if (kUseEmissiveLights) {
-            const int numEmissiveSamplesPerTriangle = 1;
+            const int numEmissiveSamplesPerTriangle = 4;
             int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
             const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
 
@@ -227,7 +227,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
             }
             accumLight += accum / float(numEmissiveSamples);
         }
-   // }
+  // }
 
         hitData.Li = accumLight;
 
@@ -286,7 +286,9 @@ void rayGen()
     float firstHitT = -1.0f;
 
     //UniformSampleGenerator sg = UniformSampleGenerator(DispatchRaysIndex().xy, sampleIndex);
-    UniformSampleGenerator sg = UniformSampleGenerator(uint2(dirIdx, 0), 0);
+    // UniformSampleGenerator sg = UniformSampleGenerator(uint2(dirIdx, 0), 0);
+    //UniformSampleGenerator sg = UniformSampleGenerator(uint2(dirIdx, probeIdx), sampleIndex);
+    UniformSampleGenerator sg = UniformSampleGenerator(uint2(dirIdx, 0), sampleIndex);
     // 3. The Bounce Loop
     for (uint depth = 0; depth <= kMaxBounces; ++depth)
     {

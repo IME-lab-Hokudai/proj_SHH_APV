@@ -42,8 +42,8 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 1024;
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 1024;
 const uint32_t kMaxSamplesPerProbe = 1024;
 
 //const int numSamplesPerProbe = 1;
@@ -100,7 +100,8 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
 //const std::string saveToFileName = "U64DataScene.txt";
-const std::string saveToFileName = "U32DataScene.txt";
+//const std::string saveToFileName = "U32DataScene.txt";
+const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";
 
 //const std::string saveToFileName = "DirectAbsErr20N6DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10N6DataScene.txt";
