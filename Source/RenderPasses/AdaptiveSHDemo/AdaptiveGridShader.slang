@@ -543,10 +543,10 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 litColor = albedo;
 
     const uint instanceID = vsOut.instanceID.index;
-    //if (instanceID < 19) {
+    if (instanceID < 19) {
          //litColor = albedo;
-       //discard;
-    //}
+         discard;
+    }
 
     // Room shell.
     if (instanceID == gFloorInstanceID)
@@ -623,7 +623,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         uv.y = 1.0f - uv.y;
         litColor = shadeWithLightmap(albedo, gShortBoxLLightmap.Sample(gLinearSampler, uv).rgb);
     }
-    else {
+    //else {
         float3 finalSH[MAX_SH_BASIS];
         // 1. Find the Leaf Voxel
         int probeIdx = traverseOctree(shadingData.posW);
@@ -633,7 +633,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
         float3 irradiance = evaluateIrradiance(shadingData.frame.N, finalSH);
         litColor = baseColorSample.rgb * irradiance.rgb / M_PI;
-    }
+    //}
 
     litColor += emissiveSample.rgb;
     return float4(litColor, 1.0f);

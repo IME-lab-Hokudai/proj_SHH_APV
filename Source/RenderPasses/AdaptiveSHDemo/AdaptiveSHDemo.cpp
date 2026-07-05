@@ -34,16 +34,20 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string loadFromFileName = "DirectAbsErr20DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
+//const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
+//const std::string loadFromFileName = "DirectAbsErr7p95DataSceneIrrMetric.txt";
+//const std::string loadFromFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
+const std::string loadFromFileName = "DirectAbsErr2p1DataSceneIrrMetric.txt";
+
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
@@ -183,21 +187,21 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
             probeCount = uint64_t(res.x) * uint64_t(res.y) * uint64_t(res.z);
 #endif
 
-            std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
-            out << modeName << ","
-                << loadFromFileName << ","
-                << probeCount << ","
-                << kWarmupFrames << ","
-                << kMeasureFrames << ","
-                << std::fixed << std::setprecision(4)
-                << meanMs << ","
-                << stdMs << ","
-                << meanFps << "\n";
+            //std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
+            //out << modeName << ","
+            //    << loadFromFileName << ","
+            //    << probeCount << ","
+            //    << kWarmupFrames << ","
+            //    << kMeasureFrames << ","
+            //    << std::fixed << std::setprecision(4)
+            //    << meanMs << ","
+            //    << stdMs << ","
+            //    << meanFps << "\n";
 
-            out.close();
+            //out.close();
 
-            logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
-                loadFromFileName, meanMs, stdMs, meanFps);
+            //logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
+            //    loadFromFileName, meanMs, stdMs, meanFps);
         }
 
         frameIndex++;

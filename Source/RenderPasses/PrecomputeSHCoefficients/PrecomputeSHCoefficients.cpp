@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -42,9 +42,9 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-const int numSamplesPerProbe = 4096;
-//const int numSamplesPerProbe = 1024;
-const uint32_t kMaxSamplesPerProbe = 1024;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 1024;
+const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 
 //const int numSamplesPerProbe = 1;
 const int verificationRes = 100;
@@ -55,14 +55,18 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 100000000.0f;
 //const float ErrorThreshold = 20.0f;
 //const float ErrorThreshold = 10.0f;
-const float ErrorThreshold = 8.5f;
+//const float ErrorThreshold = 8.5f;
 //const float ErrorThreshold = 8.0f;
+//const float ErrorThreshold = 7.95f;
+//const float ErrorThreshold = 4.25f;
+//const float ErrorThreshold = 3.0f;
 //const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.0f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-//const float ErrorThreshold =2.0f;//threshold for Erel
+const float ErrorThreshold =2.1f;//threshold for Erel
 const bool useRelativeError = false;
+const bool useIrradianceSpaceMetric = true;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
 const uint3 unifromGridSize = uint3(32, 32, 32);
@@ -101,7 +105,7 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
 //const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
-const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";
+//const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";
 
 //const std::string saveToFileName = "DirectAbsErr20N6DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10N6DataScene.txt";
@@ -111,6 +115,16 @@ const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
 //const std::string saveToFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
+
+//const std::string saveToFileName = "DirectAbsErr10DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr8DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr7p95DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr7p5DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr5DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr4DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr3DataSceneIrrMetric.txt";
+const std::string saveToFileName = "DirectAbsErr2p1DataSceneIrrMetric.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -1084,7 +1098,12 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     const uint3 seedResolution = uint3(1, 1, 1);
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
-    //const uint3 seedResolution = uint3(16, 16, 16); 
+    //const uint3 seedResolution = uint3(16, 16, 16);
+    mAdaptiveProbeVolume->setErrorMetricMode(
+        useIrradianceSpaceMetric
+        ? AdaptiveProbeVolume::ErrorMetricMode::IrradianceSpace
+        : AdaptiveProbeVolume::ErrorMetricMode::SHSpace
+    );
     mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this

@@ -208,7 +208,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, BuiltInTriangleIntersection
 
         // EMISSIVE LIGHTS
         if (kUseEmissiveLights) {
-            const int numEmissiveSamplesPerTriangle = 4;
+            const int numEmissiveSamplesPerTriangle = 1;
             int emissiveTriangleCount = gScene.lightCollection.getActiveTriangleCount();
             const int numEmissiveSamples = max(1, (numEmissiveSamplesPerTriangle * emissiveTriangleCount));
 

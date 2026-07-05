@@ -468,6 +468,120 @@ static void computeEigenvalues3x3(const float3x3& A, float& e1, float& e2, float
     e3 = m - two_sqrt_p * (c * 0.5f - s * 0.8660254f);
 }
 
+static int basisIndexToBand(int basisIdx)
+{
+    if (basisIdx == 0) return 0;
+    if (basisIdx <= 3) return 1;
+    return 2;
+}
+
+static float diffuseCosineA(int l)
+{
+    switch (l)
+    {
+    case 0: return 3.141593f;
+    case 1: return 2.094395f; // 2pi / 3
+    case 2: return 0.785398f; // pi / 4
+    default: return 0.0f;
+    }
+}
+
+static float maxAbsEigenvalue3x3_Local(const float3x3& h)
+{
+    float e1, e2, e3;
+    computeEigenvalues3x3(h, e1, e2, e3);
+    return std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+}
+
+static float computeCoeffVecL2_SHSpace(const std::vector<float3>& coeffs)
+{
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    float sumSq = 0.0f;
+    for (const auto& coeff : coeffs)
+    {
+        float lum = dot(coeff, kLuma);
+        sumSq += lum * lum;
+    }
+
+    return std::sqrt(sumSq);
+}
+static constexpr float kInvSqrt4Pi = 0.28209479177387814f;
+
+static constexpr float kDiffuseA[3] =
+{
+    3.14159265358979324f, // pi
+    2.09439510239319549f, // 2pi/3
+    0.78539816339744831f  // pi/4
+};
+
+// Weight for each SH basis coefficient (l <= 2)
+static constexpr float kBasisWeight[9] =
+{
+    3.14159265358979324f, // Y00
+
+    2.09439510239319549f, // Y1-1
+    2.09439510239319549f, // Y10
+    2.09439510239319549f, // Y11
+
+    0.78539816339744831f, // Y2-2
+    0.78539816339744831f, // Y2-1
+    0.78539816339744831f, // Y20
+    0.78539816339744831f, // Y21
+    0.78539816339744831f  // Y22
+};
+
+static float computeCoeffVecL2_IrradianceSpace(const std::vector<float3>& coeffs)
+{
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    float sumSq = 0.0f;
+    for (size_t basisIdx = 0; basisIdx < coeffs.size(); ++basisIdx)
+    {
+        //int l = basisIndexToBand((int)basisIdx);
+        //float A = diffuseCosineA(l);
+
+        float lum = dot(coeffs[basisIdx], kLuma);
+        float weightedLum = kBasisWeight[basisIdx] * lum;
+
+        sumSq += weightedLum * weightedLum;
+    }
+
+    return std::sqrt(sumSq);
+}
+
+static float computeLambdaVecL2_SHSpace(const std::vector<float3x3>& hessians)
+{
+    float sumSq = 0.0f;
+
+    for (const auto& h : hessians)
+    {
+        float lambda = maxAbsEigenvalue3x3_Local(h);
+        sumSq += lambda * lambda;
+    }
+
+    return std::sqrt(sumSq);
+}
+
+
+static float computeLambdaVecL2_IrradianceSpace(const std::vector<float3x3>& hessians)
+{
+    float sumSq = 0.0f;
+
+    for (size_t basisIdx = 0; basisIdx < hessians.size(); ++basisIdx)
+    {
+        //int l = basisIndexToBand((int)basisIdx);
+        //float A = diffuseCosineA(l);
+
+        float lambda = maxAbsEigenvalue3x3_Local(hessians[basisIdx]);
+        float weightedLambda = kBasisWeight[basisIdx] * lambda;;
+
+        sumSq += weightedLambda * weightedLambda;
+    }
+
+    return kInvSqrt4Pi * std::sqrt(sumSq);
+}
+
 // ------------------------------------------------------------------
 // Lifecycle
 // ------------------------------------------------------------------
@@ -476,7 +590,6 @@ ref<AdaptiveProbeVolume> AdaptiveProbeVolume::create(ref<Device> pDevice)
 {
     return ref<AdaptiveProbeVolume>(new AdaptiveProbeVolume(pDevice));
 }
-
 
 
 AdaptiveProbeVolume::AdaptiveProbeVolume(ref<Device> pDevice) : mpDevice(pDevice) {}
@@ -575,34 +688,49 @@ void AdaptiveProbeVolume::setCornerData(
     // -----------------------------------------------------------
     // PART B: CONSTRUCTION METRICS (Use Luminance)
     // -----------------------------------------------------------
-    if (mUseRelativeError) {
-        const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+    //if (mUseRelativeError) {
+    //    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
 
-        // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
-        // ||L|| = sqrt( sum( (c_i . luma)^2 ) )
-        float sumSqL = 0.0f;
-        for (const auto& coeff : coeffs)
-        {
-            // Project this band's RGB coefficient to Luminance
-            float lum = dot(coeff, kLuma);
-            sumSqL += lum * lum;
-        }
-        c.coeffVecL2 = std::sqrt(sumSqL);
-    }
+    //    // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
+    //    // ||L|| = sqrt( sum( (c_i . luma)^2 ) )
+    //    float sumSqL = 0.0f;
+    //    for (const auto& coeff : coeffs)
+    //    {
+    //        // Project this band's RGB coefficient to Luminance
+    //        float lum = dot(coeff, kLuma);
+    //        sumSqL += lum * lum;
+    //    }
+    //    c.coeffVecL2 = std::sqrt(sumSqL);
+    //}
     // 2. Calculate Curvature of LUMINANCE Field (Hessian)
-    float sumSquares = 0.0f;
-    for (const auto& h : hessians)
+    //float sumSquares = 0.0f;
+    //for (const auto& h : hessians)
+    //{
+    //    // Compute Eigenvalues of the Luminance Hessian
+    //    float e1, e2, e3;
+    //    computeEigenvalues3x3(h, e1, e2, e3);
+
+    //    // Max curvature
+    //    float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+    //    sumSquares += maxLambda * maxLambda;
+    //}
+
+    //c.maxLambdaVecL2 = std::sqrt(sumSquares);
+
+    if (mErrorMetricMode == ErrorMetricMode::IrradianceSpace)
     {
-        // Compute Eigenvalues of the Luminance Hessian
-        float e1, e2, e3;
-        computeEigenvalues3x3(h, e1, e2, e3);
+        c.maxLambdaVecL2 = computeLambdaVecL2_IrradianceSpace(hessians);
 
-        // Max curvature
-        float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
-        sumSquares += maxLambda * maxLambda;
+        if (mUseRelativeError)
+            c.coeffVecL2 = computeCoeffVecL2_IrradianceSpace(coeffs);
     }
+    else
+    {
+        c.maxLambdaVecL2 = computeLambdaVecL2_SHSpace(hessians);
 
-    c.maxLambdaVecL2 = std::sqrt(sumSquares);
+        if (mUseRelativeError)
+            c.coeffVecL2 = computeCoeffVecL2_SHSpace(coeffs);
+    }
 }
 
 void AdaptiveProbeVolume::setCornerMetricData(uint32_t batchIndex, float coeffVecL2, float maxLambdaVecL2)

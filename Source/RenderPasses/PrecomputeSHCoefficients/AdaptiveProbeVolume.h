@@ -94,6 +94,14 @@ public:
         }
     };
 
+    enum class ErrorMetricMode
+    {
+        SHSpace,
+        IrradianceSpace
+    };
+
+    void setErrorMetricMode(ErrorMetricMode mode) { mErrorMetricMode = mode; }
+
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
 
     void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
@@ -234,7 +242,7 @@ private:
     // ----------------------------------------------------------------
     // Internal Data Structures
     // ----------------------------------------------------------------
-
+    ErrorMetricMode mErrorMetricMode = ErrorMetricMode::SHSpace;
     ref<Device> mpDevice;
 
     std::vector<Probe> mProbes;
