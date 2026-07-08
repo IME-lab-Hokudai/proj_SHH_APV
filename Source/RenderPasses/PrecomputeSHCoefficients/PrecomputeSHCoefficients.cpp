@@ -62,11 +62,12 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 3.0f;
 //const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold = 1.0f;
-//const float ErrorThreshold =3.0f;//threshold for Erel
+//const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
 const float ErrorThreshold =2.1f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = true;
+//const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
 const uint3 unifromGridSize = uint3(32, 32, 32);
@@ -116,15 +117,26 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
 //const std::string saveToFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
-//const std::string saveToFileName = "DirectAbsErr10DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr10DataScenePresentativeNormalMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr8DataSceneIrrMetric.txt";
-//const std::string saveToFileName = "DirectAbsErr7p95DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr8DataScenePresentativeNormalMetricAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr3DataScenePresentativeNormalMetricAvg.txt";
+const std::string saveToFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr2DataScenePresentativeNormalMetricAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr8DataScenePresentativeNormalMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr7p5DataSceneIrrMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr5DataSceneIrrMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr4DataSceneIrrMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr3DataSceneIrrMetric.txt";
-const std::string saveToFileName = "DirectAbsErr2p1DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr2p1DataSceneIrrMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr20DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr10DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr5DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr4DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr3p5DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr3DataSceneAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr2DataSceneAvg.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";

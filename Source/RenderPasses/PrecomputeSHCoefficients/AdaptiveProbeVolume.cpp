@@ -506,48 +506,67 @@ static float computeCoeffVecL2_SHSpace(const std::vector<float3>& coeffs)
 
     return std::sqrt(sumSq);
 }
-static constexpr float kInvSqrt4Pi = 0.28209479177387814f;
 
-static constexpr float kDiffuseA[3] =
+static constexpr float kDiffuseA[9] =
 {
-    3.14159265358979324f, // pi
-    2.09439510239319549f, // 2pi/3
-    0.78539816339744831f  // pi/4
+    3.14159265358979324f, // l = 0
+
+    2.09439510239319549f, // l = 1
+    2.09439510239319549f,
+    2.09439510239319549f,
+
+    0.78539816339744831f, // l = 2
+    0.78539816339744831f,
+    0.78539816339744831f,
+    0.78539816339744831f,
+    0.78539816339744831f
 };
 
-// Weight for each SH basis coefficient (l <= 2)
-static constexpr float kBasisWeight[9] =
+static void evalSH9ForNormal(float3 n, float Y[9])
 {
-    3.14159265358979324f, // Y00
+    // Same coordinate convention as evaluateIrradiance().
+    //float x = n.z;
+    //float y = n.x;
+    //float z = n.y;
+    float x = n.x;
+    float y = n.y;
+    float z = n.z;
 
-    2.09439510239319549f, // Y1-1
-    2.09439510239319549f, // Y10
-    2.09439510239319549f, // Y11
+    Y[0] = 0.2820947917738781f;
 
-    0.78539816339744831f, // Y2-2
-    0.78539816339744831f, // Y2-1
-    0.78539816339744831f, // Y20
-    0.78539816339744831f, // Y21
-    0.78539816339744831f  // Y22
-};
+    Y[1] = -0.4886025119029200f * y;
+    Y[2] = 0.4886025119029200f * z;
+    Y[3] = -0.4886025119029200f * x;
 
-static float computeCoeffVecL2_IrradianceSpace(const std::vector<float3>& coeffs)
+    Y[4] = 1.0925484305920792f * x * y;
+    Y[5] = -1.0925484305920792f * y * z;
+    Y[6] = 0.9461746957575601f * z * z - 0.3153915652525200f;
+    Y[7] = -1.0925484305920792f * x * z;
+    Y[8] = 0.5462742152960396f * (x * x - y * y);
+}
+
+static const std::vector<float3>& sampledNormalsForIrrMetric()
 {
-    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
-
-    float sumSq = 0.0f;
-    for (size_t basisIdx = 0; basisIdx < coeffs.size(); ++basisIdx)
+    static const std::vector<float3> normals =
     {
-        //int l = basisIndexToBand((int)basisIdx);
-        //float A = diffuseCosineA(l);
+        float3(1,  0,  0),
+        float3(-1,  0,  0),
+        float3(0,  1,  0),
+        float3(0, -1,  0),
+        float3(0,  0,  1),
+        float3(0,  0, -1),
 
-        float lum = dot(coeffs[basisIdx], kLuma);
-        float weightedLum = kBasisWeight[basisIdx] * lum;
+        math::normalize(float3(1,  1,  1)),
+        math::normalize(float3(1,  1, -1)),
+        math::normalize(float3(1, -1,  1)),
+        math::normalize(float3(1, -1, -1)),
+        math::normalize(float3(-1,  1,  1)),
+        math::normalize(float3(-1,  1, -1)),
+        math::normalize(float3(-1, -1,  1)),
+        math::normalize(float3(-1, -1, -1))
+    };
 
-        sumSq += weightedLum * weightedLum;
-    }
-
-    return std::sqrt(sumSq);
+    return normals;
 }
 
 static float computeLambdaVecL2_SHSpace(const std::vector<float3x3>& hessians)
@@ -566,20 +585,33 @@ static float computeLambdaVecL2_SHSpace(const std::vector<float3x3>& hessians)
 
 static float computeLambdaVecL2_IrradianceSpace(const std::vector<float3x3>& hessians)
 {
-    float sumSq = 0.0f;
+    if (hessians.empty())
+        return 0.0f;
 
-    for (size_t basisIdx = 0; basisIdx < hessians.size(); ++basisIdx)
+    const auto& normals = sampledNormalsForIrrMetric();
+
+    float sumLambdaSq = 0.0f;
+
+    for (float3 n : normals)
     {
-        //int l = basisIndexToBand((int)basisIdx);
-        //float A = diffuseCosineA(l);
+        float Y[9];
+        evalSH9ForNormal(n, Y);
 
-        float lambda = maxAbsEigenvalue3x3_Local(hessians[basisIdx]);
-        float weightedLambda = kBasisWeight[basisIdx] * lambda;;
+        float3x3 HI = float3x3::zeros();
 
-        sumSq += weightedLambda * weightedLambda;
+        const size_t basisCount = std::min<size_t>(hessians.size(), 9);
+
+        for (size_t basisIdx = 0; basisIdx < basisCount; ++basisIdx)
+        {
+            float w = kDiffuseA[basisIdx] * Y[basisIdx];
+            HI = HI + hessians[basisIdx] * w;
+        }
+
+        float lambda = maxAbsEigenvalue3x3_Local(HI);
+        sumLambdaSq += lambda * lambda;
     }
 
-    return kInvSqrt4Pi * std::sqrt(sumSq);
+    return std::sqrt(sumLambdaSq / float(normals.size()));
 }
 
 // ------------------------------------------------------------------
@@ -721,15 +753,15 @@ void AdaptiveProbeVolume::setCornerData(
     {
         c.maxLambdaVecL2 = computeLambdaVecL2_IrradianceSpace(hessians);
 
-        if (mUseRelativeError)
-            c.coeffVecL2 = computeCoeffVecL2_IrradianceSpace(coeffs);
+        //if (mUseRelativeError)
+            //c.coeffVecL2 = computeCoeffVecL2_IrradianceSpace(coeffs);
     }
     else
     {
         c.maxLambdaVecL2 = computeLambdaVecL2_SHSpace(hessians);
 
-        if (mUseRelativeError)
-            c.coeffVecL2 = computeCoeffVecL2_SHSpace(coeffs);
+        //if (mUseRelativeError)
+            //c.coeffVecL2 = computeCoeffVecL2_SHSpace(coeffs);
     }
 }
 
@@ -860,53 +892,41 @@ void AdaptiveProbeVolume::finishBatch()
         float3 diag = mProbes[probeIdx].maxPoint - mProbes[probeIdx].minPoint;
         float distSq = dot(diag, diag);
 
-        //float totalError = 0.0f;
-        //uint countValidCorner = 0;
-        //for (int k = 0; k < 8; ++k)
-        //{
-        //    int cIdx = mProbes[probeIdx].corners[k];
-        //    const Corner& c = mCorners[cIdx];
-        //    if (!c.isValid) continue;
-        //    countValidCorner++;
-        //    // E_abs = 0.5 * Lambda * dx^2
-        //    float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
-
-        //    if (mUseRelativeError)
-        //    {
-        //        float norm = std::max(c.coeffVecL2, 1e-5f);
-        //        totalError += (e / norm);
-        //    }
-        //    else
-        //    {
-        //        totalError += e;
-        //    }
-        //}
-        //float avgProbeError = 0.0f;
-        ////if (countValidCorner == 0) avgProbeError = mCurrentThreshold + 0.1f;//force subdivision if no 
-        //avgProbeError = totalError / float(countValidCorner);
-        float maxProbeError = 0.0f;
-
+        float totalError = 0.0f;
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
-
             // E_abs = 0.5 * Lambda * dx^2
-            float e = 0.5f * c.maxLambdaVecL2 * distSq;
+            float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
 
-            if (mUseRelativeError)
-            {
-                float norm = std::max(c.coeffVecL2, 1e-5f);
-                e /= norm;
-            }
-
-            maxProbeError = std::max(maxProbeError, e);
+            totalError += e;
         }
+        float avgProbeError = 0.0f;
+        avgProbeError = totalError / 8.0f;
+        //float maxProbeError = 0.0f;
+        //for (int k = 0; k < 8; ++k)
+        //{
+        //    int cIdx = mProbes[probeIdx].corners[k];
+        //    const Corner& c = mCorners[cIdx];
+
+        //    // E_abs = 0.5 * Lambda * dx^2
+        //    float e = 0.5f * c.maxLambdaVecL2 * distSq;
+
+        //    //if (mUseRelativeError)
+        //    //{
+        //    //    float norm = std::max(c.coeffVecL2, 1e-5f);
+        //    //    e /= norm;
+        //    //}
+
+        //    maxProbeError = std::max(maxProbeError, e);
+        //}
 
         // --------------------------------------------------
         // Step 5: Subdivide
         // --------------------------------------------------
-        if (maxProbeError > mCurrentThreshold)
+        if (avgProbeError > mCurrentThreshold)
+        //if (maxProbeError > mCurrentThreshold)
         {
             mProbes[probeIdx].isLeaf = false;
 

@@ -43,10 +43,11 @@
 //const std::string loadFromFileName = "DirectAbsErr10DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr5DataSceneAvg.txt";
 //const std::string loadFromFileName = "DirectAbsErr1DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr7p95DataSceneIrrMetric.txt";
 //const std::string loadFromFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
-const std::string loadFromFileName = "DirectAbsErr2p1DataSceneIrrMetric.txt";
+//const std::string loadFromFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
 
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
