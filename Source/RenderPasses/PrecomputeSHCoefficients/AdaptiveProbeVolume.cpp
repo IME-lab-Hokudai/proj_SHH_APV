@@ -442,6 +442,53 @@ void AdaptiveProbeVolume::constrainHangingNodesHermite()
         }
     }
 }
+
+static std::string replaceExtensionOrAppend(
+    const std::string& baseName,
+    const std::string& suffixWithExtension
+)
+{
+    std::string result = baseName;
+
+    size_t dotPos = result.find_last_of('.');
+
+    if (dotPos != std::string::npos)
+    {
+        result.replace(
+            dotPos,
+            std::string::npos,
+            suffixWithExtension
+        );
+    }
+    else
+    {
+        result += suffixWithExtension;
+    }
+
+    return result;
+}
+
+static double percentileForPaper(std::vector<float> values, double percentile)
+{
+    if (values.empty())
+        return 0.0;
+
+    std::sort(values.begin(), values.end());
+
+    double pos = percentile * 0.01 * double(values.size() - 1);
+    size_t i0 = size_t(std::floor(pos));
+    size_t i1 = std::min(i0 + 1, values.size() - 1);
+
+    double t = pos - double(i0);
+
+    return double(values[i0]) * (1.0 - t) + double(values[i1]) * t;
+}
+
+static double percentForPaper(uint64_t n, uint64_t d)
+{
+    return d > 0 ? 100.0 * double(n) / double(d) : 0.0;
+}
+
 // ------------------------------------------------------------------
 // Helper: Analytic Eigenvalues for 3x3 Symmetric Matrix
 // ------------------------------------------------------------------
@@ -491,6 +538,29 @@ static float maxAbsEigenvalue3x3_Local(const float3x3& h)
     float e1, e2, e3;
     computeEigenvalues3x3(h, e1, e2, e3);
     return std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
+}
+
+static float computeCoeffResidualL2_SHSpace(
+    const std::vector<float3>& actualCoeffs,
+    const std::vector<float3>& predictedCoeffs
+)
+{
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    const size_t basisCount = 9;
+
+    float sumSq = 0.0f;
+
+    for (size_t basisIdx = 0; basisIdx < basisCount; ++basisIdx)
+    {
+        float actualLum = dot(actualCoeffs[basisIdx], kLuma);
+        float predLum = dot(predictedCoeffs[basisIdx], kLuma);
+
+        float diff = actualLum - predLum;
+        sumSq += diff * diff;
+    }
+
+    return std::sqrt(sumSq);
 }
 
 static float computeCoeffVecL2_SHSpace(const std::vector<float3>& coeffs)
@@ -639,7 +709,7 @@ void AdaptiveProbeVolume::startBuild(const ref<Scene>& pScene, float errorThresh
     mCornerLookup.clear();
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
-
+    resetResidualPaperStats();
     auto bounds = pScene->getSceneBounds();
 
     float boundsScale = 0.96f;
@@ -715,54 +785,94 @@ void AdaptiveProbeVolume::setCornerData(
     // -----------------------------------------------------------
     c.shCoeffs = coeffs;       // Full RGB for color rendering
     c.shGradients = grads;     // Full RGB for color interpolation
-    //c.distMean = distMeans;
-    //c.distMeanSq = distMeanSqs;
+
+    c.maxLambdaVecL2 = computeLambdaVecL2_SHSpace(hessians);
+
     // -----------------------------------------------------------
-    // PART B: CONSTRUCTION METRICS (Use Luminance)
-    // -----------------------------------------------------------
-    //if (mUseRelativeError) {
-    //    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+// Residual scale correction + paper statistics
+// -----------------------------------------------------------
+    c.residualObservedError = 0.0f;
+    c.residualRatio = 1.0f;
+    c.residualCorrectionScale = 1.0f;
 
-    //    // 1. Calculate Norm of LUMINANCE Coefficients (Vector L)
-    //    // ||L|| = sqrt( sum( (c_i . luma)^2 ) )
-    //    float sumSqL = 0.0f;
-    //    for (const auto& coeff : coeffs)
-    //    {
-    //        // Project this band's RGB coefficient to Luminance
-    //        float lum = dot(coeff, kLuma);
-    //        sumSqL += lum * lum;
-    //    }
-    //    c.coeffVecL2 = std::sqrt(sumSqL);
-    //}
-    // 2. Calculate Curvature of LUMINANCE Field (Hessian)
-    //float sumSquares = 0.0f;
-    //for (const auto& h : hessians)
-    //{
-    //    // Compute Eigenvalues of the Luminance Hessian
-    //    float e1, e2, e3;
-    //    computeEigenvalues3x3(h, e1, e2, e3);
+    bool hasResidualParent =
+        c.residualParentProbeIdx >= 0 &&
+        c.residualParentProbeIdx < int(mProbes.size());
 
-    //    // Max curvature
-    //    float maxLambda = std::max({ std::abs(e1), std::abs(e2), std::abs(e3) });
-    //    sumSquares += maxLambda * maxLambda;
-    //}
+    bool predictedIsValid =
+        c.residualPredictedError > mResidualCorrectionEps;
 
-    //c.maxLambdaVecL2 = std::sqrt(sumSquares);
+    bool validResidual = false;
 
-    if (mErrorMetricMode == ErrorMetricMode::IrradianceSpace)
+    float observed = 0.0f;
+    float predicted = 0.0f;
+    float rho = 1.0f;
+    float scale = 1.0f;
+
+    int parentLevel = -1;
+
+    if (hasResidualParent)
     {
-        c.maxLambdaVecL2 = computeLambdaVecL2_IrradianceSpace(hessians);
-
-        //if (mUseRelativeError)
-            //c.coeffVecL2 = computeCoeffVecL2_IrradianceSpace(coeffs);
+        parentLevel = mProbes[c.residualParentProbeIdx].level;
     }
-    else
+
+    if (mUseResidualCorrection && hasResidualParent && predictedIsValid)
     {
-        c.maxLambdaVecL2 = computeLambdaVecL2_SHSpace(hessians);
+        std::vector<float3> predictedCoeffs;
 
-        //if (mUseRelativeError)
-            //c.coeffVecL2 = computeCoeffVecL2_SHSpace(coeffs);
+        // Predict this new point from the parent cell.
+        interpolateHermite_CPU(
+            c.residualParentProbeIdx,
+            c.position,
+            predictedCoeffs
+        );
+
+        if (!predictedCoeffs.empty())
+        {
+            observed = computeCoeffResidualL2_SHSpace(
+                coeffs,
+                predictedCoeffs
+            );
+
+            predicted = std::max(
+                c.residualPredictedError,
+                mResidualCorrectionEps
+            );
+
+            rho = observed / predicted;
+
+            scale =
+                (1.0f - mResidualCorrectionEta) +
+                mResidualCorrectionEta * rho;
+
+            //float scale =
+            //    1.0f + mResidualCorrectionEta * (rho - 1.0f);
+
+            scale = std::max(
+                mResidualCorrectionMinScale,
+                std::min(mResidualCorrectionMaxScale, scale)
+            );
+
+
+            c.residualObservedError = observed;
+            c.residualRatio = rho;
+            c.residualCorrectionScale = scale;
+
+            validResidual = true;
+        }
     }
+
+    // Record directly during construction.
+    // This gives paper-useful statistics without scanning corners afterward.
+    recordResidualSampleForPaper(
+        parentLevel,
+        hasResidualParent,
+        validResidual,
+        observed,
+        predicted,
+        rho,
+        scale
+    );
 }
 
 void AdaptiveProbeVolume::setCornerMetricData(uint32_t batchIndex, float coeffVecL2, float maxLambdaVecL2)
@@ -892,18 +1002,61 @@ void AdaptiveProbeVolume::finishBatch()
         float3 diag = mProbes[probeIdx].maxPoint - mProbes[probeIdx].minPoint;
         float distSq = dot(diag, diag);
 
-        float totalError = 0.0f;
+        //float totalError = 0.0f;
+        //for (int k = 0; k < 8; ++k)
+        //{
+        //    int cIdx = mProbes[probeIdx].corners[k];
+        //    const Corner& c = mCorners[cIdx];
+        //    // E_abs = 0.5 * Lambda * dx^2
+        //    float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
+
+        //    totalError += e;
+        //}
+        //float avgProbeError = 0.0f;
+        //avgProbeError = totalError / 8.0f;
+        float totalCorrectedError = 0.0f;
+        float totalHessianPredictedError = 0.0f;
+
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
-            // E_abs = 0.5 * Lambda * dx^2
-            float e = (c.maxLambdaVecL2 * distSq) * 0.5f;
 
-            totalError += e;
+            // Original Hessian prediction:
+            // E_abs = 0.5 * ||lambda|| * ||Delta x||^2
+            float hessianError = 0.5f * c.maxLambdaVecL2 * distSq;
+
+            // Store the uncorrected prediction separately.
+            // This is used as parent predicted error for newly created child points.
+            totalHessianPredictedError += hessianError;
+
+            float correctedError = hessianError;
+
+            if (mUseResidualCorrection)
+            {
+                correctedError *= c.residualCorrectionScale;
+            }
+
+            //if (mUseRelativeError)
+            //{
+            //    float norm = std::max(c.coeffVecL2, 1e-5f);
+            //    correctedError /= norm;
+            //}
+
+            totalCorrectedError += correctedError;
         }
-        float avgProbeError = 0.0f;
-        avgProbeError = totalError / 8.0f;
+
+        float avgProbeError = totalCorrectedError / 8.0f;
+
+        // This is the parent Hessian prediction before residual scaling.
+        // New child points will use this as residualPredictedError.
+        float avgHessianPredictedError = totalHessianPredictedError / 8.0f;
+
+        recordResidualDecisionForPaper(
+            mProbes[probeIdx].level,
+            avgHessianPredictedError,
+            avgProbeError
+        );
         //float maxProbeError = 0.0f;
         //for (int k = 0; k < 8; ++k)
         //{
@@ -965,6 +1118,28 @@ void AdaptiveProbeVolume::finishBatch()
                 // NO: It's new. Create it.
                 Corner c;
                 c.position = pos;
+                // ------------------------------------------------------------
+                // Residual correction metadata
+                // ------------------------------------------------------------
+                // This point was created because parent probeIdx was subdivided.
+                // After tracing the point, setCornerData() will compare:
+                //
+                // actual SH at this point
+                // vs.
+                // parent Hermite interpolation at this point.
+                c.residualParentProbeIdx = probeIdx;
+
+                // Parent Hessian-predicted error before residual scaling.
+                //c.residualPredictedError = avgHessianPredictedError;
+                c.residualPredictedError = computeParentPointHessianPrediction(
+                    probeIdx,
+                    pos
+                );
+
+                c.residualObservedError = 0.0f;
+                c.residualRatio = 1.0f;
+                c.residualCorrectionScale = 1.0f;
+
                 mCorners.push_back(c);
                 int idx = (int)mCorners.size() - 1;
 
@@ -1831,6 +2006,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
     bool useRelativeError
 )
 {
+    resetResidualPaperStats();
     uint32_t cellsPerAxis = 1u << mMaxLevel;
     uint64_t maxNodes = 0;
     uint64_t levelCount = 1;
@@ -2324,4 +2500,835 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
     }
 
     mProbesPendingCheck = nextProbesToCheck;
+}
+void AdaptiveProbeVolume::resetResidualPaperStats()
+{
+    mResidualPaperStats.reset();
+}
+
+void AdaptiveProbeVolume::recordResidualSampleForPaper(
+    int parentLevel,
+    bool hasParent,
+    bool validResidual,
+    float observedResidual,
+    float predictedParentError,
+    float rho,
+    float scale
+)
+{
+    auto recordOne = [&](ResidualSamplePaperStats& s)
+        {
+            s.tracedCorners++;
+
+            if (!hasParent)
+            {
+                s.noParentCorners++;
+                return;
+            }
+
+            s.parentCorners++;
+
+            if (!validResidual)
+            {
+                s.invalidResidualCorners++;
+                return;
+            }
+
+            s.validResidualCorners++;
+
+            s.observedResidual.add(observedResidual);
+            s.predictedParentError.add(predictedParentError);
+            s.residualRatio.add(rho);
+            s.correctionScale.add(scale);
+
+            const float eps = 1e-5f;
+
+            if (scale < 1.0f - eps)
+                s.scaleBelowOne++;
+            else if (scale > 1.0f + eps)
+                s.scaleAboveOne++;
+            else
+                s.scaleEqualOne++;
+
+            if (std::abs(scale - mResidualCorrectionMinScale) <= eps)
+                s.scaleAtMinClamp++;
+
+            if (std::abs(scale - mResidualCorrectionMaxScale) <= eps)
+                s.scaleAtMaxClamp++;
+        };
+
+    recordOne(mResidualPaperStats.allSamples);
+
+    if (parentLevel >= 0 && parentLevel < kPaperStatsMaxLevel)
+        recordOne(mResidualPaperStats.samplesByParentLevel[parentLevel]);
+}
+
+void AdaptiveProbeVolume::recordResidualDecisionForPaper(
+    int cellLevel,
+    float originalHessianError,
+    float correctedResidualError
+)
+{
+    auto recordOne = [&](ResidualDecisionPaperStats& d)
+        {
+            d.testedCells++;
+
+            bool originalSubdivide =
+                originalHessianError > mCurrentThreshold;
+
+            bool correctedSubdivide =
+                correctedResidualError > mCurrentThreshold;
+
+            if (originalSubdivide && correctedSubdivide)
+                d.bothSubdivide++;
+            else if (!originalSubdivide && !correctedSubdivide)
+                d.bothLeaf++;
+            else if (originalSubdivide && !correctedSubdivide)
+                d.prunedByResidual++;
+            else if (!originalSubdivide && correctedSubdivide)
+                d.addedByResidual++;
+
+            d.originalHessianError.add(originalHessianError);
+            d.correctedResidualError.add(correctedResidualError);
+
+            float ratio = originalHessianError > 1e-8f
+                ? correctedResidualError / originalHessianError
+                : 1.0f;
+
+            d.correctedOverOriginalRatio.add(ratio);
+        };
+
+    recordOne(mResidualPaperStats.allDecisions);
+
+    if (cellLevel >= 0 && cellLevel < kPaperStatsMaxLevel)
+        recordOne(mResidualPaperStats.decisionsByCellLevel[cellLevel]);
+}
+
+void AdaptiveProbeVolume::printResidualPaperStats(std::ostream& out) const
+{
+    auto printScalar = [&](const char* name, const PaperScalarStats& s)
+        {
+            out << "   " << name << "\n";
+            out << "      count:       " << s.count << "\n";
+            out << "      mean:        " << s.mean() << "\n";
+            out << "      stddev:      " << s.stddev() << "\n";
+            out << "      median:      " << percentileForPaper(s.values, 50.0) << "\n";
+            out << "      p05:         " << percentileForPaper(s.values, 5.0) << "\n";
+            out << "      p95:         " << percentileForPaper(s.values, 95.0) << "\n";
+            out << "      min:         " << s.minOrZero() << "\n";
+            out << "      max:         " << s.maxOrZero() << "\n";
+        };
+
+    auto printSample = [&](const char* title, const ResidualSamplePaperStats& s)
+        {
+            out << "\n";
+            out << title << "\n";
+            out << "--------------------------------------------------------------------------------\n";
+
+            out << " Traced corners:              " << s.tracedCorners << "\n";
+            out << " No-parent corners:           " << s.noParentCorners
+                << " (" << percentForPaper(s.noParentCorners, s.tracedCorners) << "%)\n";
+            out << " Parent corners:              " << s.parentCorners
+                << " (" << percentForPaper(s.parentCorners, s.tracedCorners) << "%)\n";
+            out << " Valid residual corners:      " << s.validResidualCorners
+                << " (" << percentForPaper(s.validResidualCorners, s.tracedCorners) << "%)\n";
+            out << " Invalid residual corners:    " << s.invalidResidualCorners
+                << " (" << percentForPaper(s.invalidResidualCorners, s.tracedCorners) << "%)\n";
+
+            out << " Scale < 1:                   " << s.scaleBelowOne
+                << " (" << percentForPaper(s.scaleBelowOne, s.validResidualCorners) << "%)\n";
+            out << " Scale = 1:                   " << s.scaleEqualOne
+                << " (" << percentForPaper(s.scaleEqualOne, s.validResidualCorners) << "%)\n";
+            out << " Scale > 1:                   " << s.scaleAboveOne
+                << " (" << percentForPaper(s.scaleAboveOne, s.validResidualCorners) << "%)\n";
+
+            out << " Scale at min clamp:          " << s.scaleAtMinClamp
+                << " (" << percentForPaper(s.scaleAtMinClamp, s.validResidualCorners) << "%)\n";
+            out << " Scale at max clamp:          " << s.scaleAtMaxClamp
+                << " (" << percentForPaper(s.scaleAtMaxClamp, s.validResidualCorners) << "%)\n";
+
+            printScalar("Observed residual R_abs", s.observedResidual);
+            printScalar("Predicted parent error E_pred", s.predictedParentError);
+            printScalar("Residual ratio rho", s.residualRatio);
+            printScalar("Correction scale s", s.correctionScale);
+        };
+
+    auto printDecision = [&](const char* title, const ResidualDecisionPaperStats& d)
+        {
+            out << "\n";
+            out << title << "\n";
+            out << "--------------------------------------------------------------------------------\n";
+
+            uint64_t originalSubdivide =
+                d.bothSubdivide + d.prunedByResidual;
+
+            uint64_t correctedSubdivide =
+                d.bothSubdivide + d.addedByResidual;
+
+            out << " Tested cells:                " << d.testedCells << "\n";
+
+            out << " Original-Hessian subdivide:  " << originalSubdivide
+                << " (" << percentForPaper(originalSubdivide, d.testedCells) << "%)\n";
+
+            out << " Corrected subdivide:         " << correctedSubdivide
+                << " (" << percentForPaper(correctedSubdivide, d.testedCells) << "%)\n";
+
+            out << " Both subdivide:              " << d.bothSubdivide
+                << " (" << percentForPaper(d.bothSubdivide, d.testedCells) << "%)\n";
+
+            out << " Both leaf:                   " << d.bothLeaf
+                << " (" << percentForPaper(d.bothLeaf, d.testedCells) << "%)\n";
+
+            out << " Pruned by residual:          " << d.prunedByResidual
+                << " (" << percentForPaper(d.prunedByResidual, d.testedCells) << "%)\n";
+
+            out << " Added by residual:           " << d.addedByResidual
+                << " (" << percentForPaper(d.addedByResidual, d.testedCells) << "%)\n";
+
+            out << " Pruning rate among original subdivisions: "
+                << percentForPaper(d.prunedByResidual, originalSubdivide) << "%\n";
+
+            out << " Added-refinement rate among original leaves: "
+                << percentForPaper(d.addedByResidual, d.bothLeaf + d.addedByResidual) << "%\n";
+
+            printScalar("Original Hessian error", d.originalHessianError);
+            printScalar("Residual-corrected error", d.correctedResidualError);
+            printScalar("Corrected / original ratio", d.correctedOverOriginalRatio);
+        };
+
+    out << "\n";
+    out << "================================================================================\n";
+    out << " RESIDUAL PAPER STATISTICS\n";
+    out << "================================================================================\n";
+
+    out << " Threshold:                   " << mCurrentThreshold << "\n";
+    out << " Residual correction enabled: " << (mUseResidualCorrection ? "Yes" : "No") << "\n";
+    out << " Eta:                         " << mResidualCorrectionEta << "\n";
+    out << " Scale min / max:             "
+        << mResidualCorrectionMinScale << " / "
+        << mResidualCorrectionMaxScale << "\n";
+
+    printSample("ALL RESIDUAL SAMPLES", mResidualPaperStats.allSamples);
+    printDecision("ALL CELL DECISIONS", mResidualPaperStats.allDecisions);
+
+    out << "\n";
+    out << "================================================================================\n";
+    out << " RESIDUAL SAMPLES BY PARENT LEVEL\n";
+    out << "================================================================================\n";
+
+    for (int level = 0; level < kPaperStatsMaxLevel; ++level)
+    {
+        const auto& s = mResidualPaperStats.samplesByParentLevel[level];
+
+        if (s.tracedCorners == 0)
+            continue;
+
+        std::string title = "PARENT LEVEL " + std::to_string(level);
+        printSample(title.c_str(), s);
+    }
+
+    out << "\n";
+    out << "================================================================================\n";
+    out << " CELL DECISIONS BY CELL LEVEL\n";
+    out << "================================================================================\n";
+
+    for (int level = 0; level < kPaperStatsMaxLevel; ++level)
+    {
+        const auto& d = mResidualPaperStats.decisionsByCellLevel[level];
+
+        if (d.testedCells == 0)
+            continue;
+
+        std::string title = "CELL LEVEL " + std::to_string(level);
+        printDecision(title.c_str(), d);
+    }
+
+    out << "================================================================================\n";
+}
+
+void AdaptiveProbeVolume::writeResidualPaperStatsLog(
+    const std::string& filename
+) const
+{
+    std::ofstream out(filename);
+    if (!out)
+        return;
+
+    out << std::fixed << std::setprecision(8);
+
+    printResidualPaperStats(out);
+}
+
+void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
+    const std::string& summaryCsv,
+    const std::string& levelCsv
+) const
+{
+    auto writeScalarColumns = [](std::ofstream& csv, const PaperScalarStats& s)
+        {
+            csv
+                << s.count << ","
+                << s.mean() << ","
+                << s.stddev() << ","
+                << percentileForPaper(s.values, 50.0) << ","
+                << percentileForPaper(s.values, 5.0) << ","
+                << percentileForPaper(s.values, 95.0) << ","
+                << s.minOrZero() << ","
+                << s.maxOrZero();
+        };
+
+    auto writeSampleColumns = [&](std::ofstream& csv, const ResidualSamplePaperStats& s)
+        {
+            csv
+                << s.tracedCorners << ","
+                << s.noParentCorners << ","
+                << s.parentCorners << ","
+                << s.validResidualCorners << ","
+                << s.invalidResidualCorners << ","
+                << percentForPaper(s.validResidualCorners, s.tracedCorners) << ","
+                << s.scaleBelowOne << ","
+                << s.scaleEqualOne << ","
+                << s.scaleAboveOne << ","
+                << s.scaleAtMinClamp << ","
+                << s.scaleAtMaxClamp << ","
+                << percentForPaper(s.scaleBelowOne, s.validResidualCorners) << ","
+                << percentForPaper(s.scaleAboveOne, s.validResidualCorners) << ","
+                << percentForPaper(s.scaleAtMinClamp, s.validResidualCorners) << ","
+                << percentForPaper(s.scaleAtMaxClamp, s.validResidualCorners) << ",";
+
+            writeScalarColumns(csv, s.observedResidual);
+            csv << ",";
+            writeScalarColumns(csv, s.predictedParentError);
+            csv << ",";
+            writeScalarColumns(csv, s.residualRatio);
+            csv << ",";
+            writeScalarColumns(csv, s.correctionScale);
+        };
+
+    auto writeDecisionColumns = [&](std::ofstream& csv, const ResidualDecisionPaperStats& d)
+        {
+            uint64_t originalSubdivide =
+                d.bothSubdivide + d.prunedByResidual;
+
+            uint64_t correctedSubdivide =
+                d.bothSubdivide + d.addedByResidual;
+
+            csv
+                << d.testedCells << ","
+                << originalSubdivide << ","
+                << correctedSubdivide << ","
+                << d.bothSubdivide << ","
+                << d.bothLeaf << ","
+                << d.prunedByResidual << ","
+                << d.addedByResidual << ","
+                << percentForPaper(originalSubdivide, d.testedCells) << ","
+                << percentForPaper(correctedSubdivide, d.testedCells) << ","
+                << percentForPaper(d.prunedByResidual, originalSubdivide) << ","
+                << percentForPaper(d.addedByResidual, d.bothLeaf + d.addedByResidual) << ",";
+
+            writeScalarColumns(csv, d.originalHessianError);
+            csv << ",";
+            writeScalarColumns(csv, d.correctedResidualError);
+            csv << ",";
+            writeScalarColumns(csv, d.correctedOverOriginalRatio);
+        };
+
+    MemoryFootprintInfo mem = calculateMemoryFootprint();
+
+    uint64_t totalProbes = uint64_t(mProbes.size());
+    uint64_t leafProbes = 0;
+
+    for (const Probe& p : mProbes)
+    {
+        if (p.isLeaf)
+            leafProbes++;
+    }
+
+    // ------------------------------------------------------------
+    // Summary CSV: one row per run.
+    // ------------------------------------------------------------
+    {
+        std::ofstream csv(summaryCsv);
+        if (csv)
+        {
+            csv << std::fixed << std::setprecision(8);
+
+            csv
+                << "threshold,"
+                << "residualEnabled,"
+                << "eta,"
+                << "scaleMin,"
+                << "scaleMax,"
+                << "maxLevel,"
+                << "totalProbes,"
+                << "leafProbes,"
+                << "corners,"
+                << "gpuCornerBytes,"
+                << "gpuProbeBytes,"
+                << "totalBytes,"
+                << "totalMB,"
+                << "sample_tracedCorners,"
+                << "sample_noParentCorners,"
+                << "sample_parentCorners,"
+                << "sample_validResidualCorners,"
+                << "sample_invalidResidualCorners,"
+                << "sample_validResidualPercent,"
+                << "sample_scaleBelowOne,"
+                << "sample_scaleEqualOne,"
+                << "sample_scaleAboveOne,"
+                << "sample_scaleAtMinClamp,"
+                << "sample_scaleAtMaxClamp,"
+                << "sample_scaleBelowOnePercent,"
+                << "sample_scaleAboveOnePercent,"
+                << "sample_scaleAtMinClampPercent,"
+                << "sample_scaleAtMaxClampPercent,"
+                << "observed_count,observed_mean,observed_std,observed_median,observed_p05,observed_p95,observed_min,observed_max,"
+                << "predicted_count,predicted_mean,predicted_std,predicted_median,predicted_p05,predicted_p95,predicted_min,predicted_max,"
+                << "rho_count,rho_mean,rho_std,rho_median,rho_p05,rho_p95,rho_min,rho_max,"
+                << "scale_count,scale_mean,scale_std,scale_median,scale_p05,scale_p95,scale_minValue,scale_maxValue,"
+                << "decision_testedCells,"
+                << "decision_originalSubdivide,"
+                << "decision_correctedSubdivide,"
+                << "decision_bothSubdivide,"
+                << "decision_bothLeaf,"
+                << "decision_prunedByResidual,"
+                << "decision_addedByResidual,"
+                << "decision_originalSubdividePercent,"
+                << "decision_correctedSubdividePercent,"
+                << "decision_pruningRateAmongOriginalSubdivisions,"
+                << "decision_addedRateAmongOriginalLeaves,"
+                << "origErr_count,origErr_mean,origErr_std,origErr_median,origErr_p05,origErr_p95,origErr_min,origErr_max,"
+                << "corrErr_count,corrErr_mean,corrErr_std,corrErr_median,corrErr_p05,corrErr_p95,corrErr_min,corrErr_max,"
+                << "corrRatio_count,corrRatio_mean,corrRatio_std,corrRatio_median,corrRatio_p05,corrRatio_p95,corrRatio_min,corrRatio_max"
+                << "\n";
+
+            csv
+                << mCurrentThreshold << ","
+                << (mUseResidualCorrection ? 1 : 0) << ","
+                << mResidualCorrectionEta << ","
+                << mResidualCorrectionMinScale << ","
+                << mResidualCorrectionMaxScale << ","
+                << mMaxLevel << ","
+                << totalProbes << ","
+                << leafProbes << ","
+                << mCorners.size() << ","
+                << mem.gpuCornersBytes << ","
+                << mem.gpuProbesBytes << ","
+                << mem.totalBytes << ","
+                << mem.totalMB << ",";
+
+            writeSampleColumns(csv, mResidualPaperStats.allSamples);
+            csv << ",";
+            writeDecisionColumns(csv, mResidualPaperStats.allDecisions);
+            csv << "\n";
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Level CSV: one row per level.
+    // Useful for plots: pruning rate by level, scale distribution by level.
+    // ------------------------------------------------------------
+    {
+        std::ofstream csv(levelCsv);
+        if (csv)
+        {
+            csv << std::fixed << std::setprecision(8);
+
+            csv
+                << "kind,"
+                << "level,"
+                << "tracedCorners,"
+                << "noParentCorners,"
+                << "parentCorners,"
+                << "validResidualCorners,"
+                << "invalidResidualCorners,"
+                << "validResidualPercent,"
+                << "scaleBelowOne,"
+                << "scaleEqualOne,"
+                << "scaleAboveOne,"
+                << "scaleAtMinClamp,"
+                << "scaleAtMaxClamp,"
+                << "scaleBelowOnePercent,"
+                << "scaleAboveOnePercent,"
+                << "scaleAtMinClampPercent,"
+                << "scaleAtMaxClampPercent,"
+                << "observed_count,observed_mean,observed_std,observed_median,observed_p05,observed_p95,observed_min,observed_max,"
+                << "predicted_count,predicted_mean,predicted_std,predicted_median,predicted_p05,predicted_p95,predicted_min,predicted_max,"
+                << "rho_count,rho_mean,rho_std,rho_median,rho_p05,rho_p95,rho_min,rho_max,"
+                << "scale_count,scale_mean,scale_std,scale_median,scale_p05,scale_p95,scale_minValue,scale_maxValue,"
+                << "testedCells,"
+                << "originalSubdivide,"
+                << "correctedSubdivide,"
+                << "bothSubdivide,"
+                << "bothLeaf,"
+                << "prunedByResidual,"
+                << "addedByResidual,"
+                << "originalSubdividePercent,"
+                << "correctedSubdividePercent,"
+                << "pruningRateAmongOriginalSubdivisions,"
+                << "addedRateAmongOriginalLeaves,"
+                << "origErr_count,origErr_mean,origErr_std,origErr_median,origErr_p05,origErr_p95,origErr_min,origErr_max,"
+                << "corrErr_count,corrErr_mean,corrErr_std,corrErr_median,corrErr_p05,corrErr_p95,corrErr_min,corrErr_max,"
+                << "corrRatio_count,corrRatio_mean,corrRatio_std,corrRatio_median,corrRatio_p05,corrRatio_p95,corrRatio_min,corrRatio_max"
+                << "\n";
+
+            for (int level = 0; level < kPaperStatsMaxLevel; ++level)
+            {
+                const auto& s = mResidualPaperStats.samplesByParentLevel[level];
+                const auto& d = mResidualPaperStats.decisionsByCellLevel[level];
+
+                if (s.tracedCorners == 0 && d.testedCells == 0)
+                    continue;
+
+                csv << "level," << level << ",";
+
+                writeSampleColumns(csv, s);
+                csv << ",";
+                writeDecisionColumns(csv, d);
+                csv << "\n";
+            }
+        }
+    }
+}
+
+void AdaptiveProbeVolume::printResidualMainStats(std::ostream& out) const
+{
+    const auto& s = mResidualPaperStats.allSamples;
+    const auto& d = mResidualPaperStats.allDecisions;
+
+    auto percent = [](uint64_t n, uint64_t total) -> double
+        {
+            return total > 0
+                ? 100.0 * double(n) / double(total)
+                : 0.0;
+        };
+
+    uint64_t leafCount = 0;
+    for (const Probe& p : mProbes)
+    {
+        if (p.isLeaf)
+            leafCount++;
+    }
+
+    MemoryFootprintInfo mem = calculateMemoryFootprint();
+
+    uint64_t originalSubdivide =
+        d.bothSubdivide + d.prunedByResidual;
+
+    uint64_t correctedSubdivide =
+        d.bothSubdivide + d.addedByResidual;
+
+    uint64_t originalLeaf =
+        d.bothLeaf + d.addedByResidual;
+
+    double validResidualPercent =
+        percent(s.validResidualCorners, s.tracedCorners);
+
+    double scaleBelowOnePercent =
+        percent(s.scaleBelowOne, s.validResidualCorners);
+
+    double scaleAboveOnePercent =
+        percent(s.scaleAboveOne, s.validResidualCorners);
+
+    double minClampPercent =
+        percent(s.scaleAtMinClamp, s.validResidualCorners);
+
+    double maxClampPercent =
+        percent(s.scaleAtMaxClamp, s.validResidualCorners);
+
+    double pruningRateAmongOriginalSubdivisions =
+        percent(d.prunedByResidual, originalSubdivide);
+
+    double addedRateAmongOriginalLeaves =
+        percent(d.addedByResidual, originalLeaf);
+
+    double originalSubdividePercent =
+        percent(originalSubdivide, d.testedCells);
+
+    double correctedSubdividePercent =
+        percent(correctedSubdivide, d.testedCells);
+
+    out << std::fixed << std::setprecision(8);
+
+    out << "================================================================================\n";
+    out << " RESIDUAL MAIN STATISTICS\n";
+    out << "================================================================================\n";
+
+    out << " Threshold:                         " << mCurrentThreshold << "\n";
+    out << " Residual correction enabled:       " << (mUseResidualCorrection ? "Yes" : "No") << "\n";
+    out << " Eta:                               " << mResidualCorrectionEta << "\n";
+    out << " Scale min / max:                   "
+        << mResidualCorrectionMinScale << " / "
+        << mResidualCorrectionMaxScale << "\n";
+
+    out << "\n";
+
+    out << " Total probes:                      " << mProbes.size() << "\n";
+    out << " Leaf probes:                       " << leafCount << "\n";
+    out << " Corners:                           " << mCorners.size() << "\n";
+    out << " Total memory MB:                   " << mem.totalMB << "\n";
+    out << " Build time ms:                     " << mBuildTimeMs << "\n";
+
+    out << "\n";
+
+    out << " Valid residual samples:            "
+        << s.validResidualCorners
+        << " / " << s.tracedCorners
+        << " (" << validResidualPercent << "%)\n";
+
+    out << " Scale < 1:                         "
+        << s.scaleBelowOne
+        << " (" << scaleBelowOnePercent << "%)\n";
+
+    out << " Scale > 1:                         "
+        << s.scaleAboveOne
+        << " (" << scaleAboveOnePercent << "%)\n";
+
+    out << " Scale at min clamp:                "
+        << s.scaleAtMinClamp
+        << " (" << minClampPercent << "%)\n";
+
+    out << " Scale at max clamp:                "
+        << s.scaleAtMaxClamp
+        << " (" << maxClampPercent << "%)\n";
+
+    out << " Mean rho:                          "
+        << s.residualRatio.mean() << "\n";
+
+    out << " Median rho:                        "
+        << percentileForPaper(s.residualRatio.values, 50.0) << "\n";
+
+    out << " P95 rho:                           "
+        << percentileForPaper(s.residualRatio.values, 95.0) << "\n";
+
+    out << " Mean scale:                        "
+        << s.correctionScale.mean() << "\n";
+
+    out << " Median scale:                      "
+        << percentileForPaper(s.correctionScale.values, 50.0) << "\n";
+
+    out << "\n";
+
+    out << " Tested cells:                      " << d.testedCells << "\n";
+
+    out << " Original-Hessian subdivide:        "
+        << originalSubdivide
+        << " (" << originalSubdividePercent << "%)\n";
+
+    out << " Residual-corrected subdivide:      "
+        << correctedSubdivide
+        << " (" << correctedSubdividePercent << "%)\n";
+
+    out << " Pruned by residual:                "
+        << d.prunedByResidual
+        << " (" << pruningRateAmongOriginalSubdivisions
+        << "% of original subdivisions)\n";
+
+    out << " Added by residual:                 "
+        << d.addedByResidual
+        << " (" << addedRateAmongOriginalLeaves
+        << "% of original leaves)\n";
+
+    out << " Mean corrected/original error:     "
+        << d.correctedOverOriginalRatio.mean() << "\n";
+
+    out << " Median corrected/original error:   "
+        << percentileForPaper(d.correctedOverOriginalRatio.values, 50.0) << "\n";
+
+    out << "================================================================================\n";
+}
+
+void AdaptiveProbeVolume::writeResidualMainStatsLog(
+    const std::string& filename
+) const
+{
+    std::ofstream out(filename);
+    if (!out)
+        return;
+
+    printResidualMainStats(out);
+}
+
+void AdaptiveProbeVolume::exportResidualMainStatsCSV(
+    const std::string& filename
+) const
+{
+    std::ofstream csv(filename);
+    if (!csv)
+        return;
+
+    const auto& s = mResidualPaperStats.allSamples;
+    const auto& d = mResidualPaperStats.allDecisions;
+
+    auto percent = [](uint64_t n, uint64_t total) -> double
+        {
+            return total > 0
+                ? 100.0 * double(n) / double(total)
+                : 0.0;
+        };
+
+    uint64_t leafCount = 0;
+    for (const Probe& p : mProbes)
+    {
+        if (p.isLeaf)
+            leafCount++;
+    }
+
+    MemoryFootprintInfo mem = calculateMemoryFootprint();
+
+    uint64_t originalSubdivide =
+        d.bothSubdivide + d.prunedByResidual;
+
+    uint64_t correctedSubdivide =
+        d.bothSubdivide + d.addedByResidual;
+
+    uint64_t originalLeaf =
+        d.bothLeaf + d.addedByResidual;
+
+    csv << std::fixed << std::setprecision(8);
+
+    csv
+        << "threshold,"
+        << "residualEnabled,"
+        << "eta,"
+        << "scaleMin,"
+        << "scaleMax,"
+        << "totalProbes,"
+        << "leafProbes,"
+        << "corners,"
+        << "memoryMB,"
+        << "buildTimeMs,"
+        << "validResidualSamples,"
+        << "totalTracedCorners,"
+        << "validResidualPercent,"
+        << "scaleBelowOnePercent,"
+        << "scaleAboveOnePercent,"
+        << "scaleAtMinClampPercent,"
+        << "scaleAtMaxClampPercent,"
+        << "rhoMean,"
+        << "rhoMedian,"
+        << "rhoP95,"
+        << "scaleMean,"
+        << "scaleMedian,"
+        << "testedCells,"
+        << "originalSubdivide,"
+        << "correctedSubdivide,"
+        << "originalSubdividePercent,"
+        << "correctedSubdividePercent,"
+        << "prunedByResidual,"
+        << "addedByResidual,"
+        << "pruningRateAmongOriginalSubdivisions,"
+        << "addedRateAmongOriginalLeaves,"
+        << "correctedOverOriginalMean,"
+        << "correctedOverOriginalMedian"
+        << "\n";
+
+    csv
+        << mCurrentThreshold << ","
+        << (mUseResidualCorrection ? 1 : 0) << ","
+        << mResidualCorrectionEta << ","
+        << mResidualCorrectionMinScale << ","
+        << mResidualCorrectionMaxScale << ","
+        << mProbes.size() << ","
+        << leafCount << ","
+        << mCorners.size() << ","
+        << mem.totalMB << ","
+        << mBuildTimeMs << ","
+        << s.validResidualCorners << ","
+        << s.tracedCorners << ","
+        << percent(s.validResidualCorners, s.tracedCorners) << ","
+        << percent(s.scaleBelowOne, s.validResidualCorners) << ","
+        << percent(s.scaleAboveOne, s.validResidualCorners) << ","
+        << percent(s.scaleAtMinClamp, s.validResidualCorners) << ","
+        << percent(s.scaleAtMaxClamp, s.validResidualCorners) << ","
+        << s.residualRatio.mean() << ","
+        << percentileForPaper(s.residualRatio.values, 50.0) << ","
+        << percentileForPaper(s.residualRatio.values, 95.0) << ","
+        << s.correctionScale.mean() << ","
+        << percentileForPaper(s.correctionScale.values, 50.0) << ","
+        << d.testedCells << ","
+        << originalSubdivide << ","
+        << correctedSubdivide << ","
+        << percent(originalSubdivide, d.testedCells) << ","
+        << percent(correctedSubdivide, d.testedCells) << ","
+        << d.prunedByResidual << ","
+        << d.addedByResidual << ","
+        << percent(d.prunedByResidual, originalSubdivide) << ","
+        << percent(d.addedByResidual, originalLeaf) << ","
+        << d.correctedOverOriginalRatio.mean() << ","
+        << percentileForPaper(d.correctedOverOriginalRatio.values, 50.0)
+        << "\n";
+}
+
+float AdaptiveProbeVolume::computeParentPointHessianPrediction(
+    int parentProbeIdx,
+    const float3& position
+) const
+{
+    if (parentProbeIdx < 0 || parentProbeIdx >= int(mProbes.size()))
+        return 0.0f;
+
+    const Probe& p = mProbes[parentProbeIdx];
+
+    float3 pMin = mCorners[p.corners[0]].position;
+    float3 pMax = pMin;
+
+    for (int k = 1; k < 8; ++k)
+    {
+        const float3& cPos = mCorners[p.corners[k]].position;
+
+        pMin.x = std::min(pMin.x, cPos.x);
+        pMin.y = std::min(pMin.y, cPos.y);
+        pMin.z = std::min(pMin.z, cPos.z);
+
+        pMax.x = std::max(pMax.x, cPos.x);
+        pMax.y = std::max(pMax.y, cPos.y);
+        pMax.z = std::max(pMax.z, cPos.z);
+    }
+
+    float3 extent = pMax - pMin;
+
+    const float eps = 1e-8f;
+
+    float tx = extent.x > eps
+        ? (position.x - pMin.x) / extent.x
+        : 0.5f;
+
+    float ty = extent.y > eps
+        ? (position.y - pMin.y) / extent.y
+        : 0.5f;
+
+    float tz = extent.z > eps
+        ? (position.z - pMin.z) / extent.z
+        : 0.5f;
+
+    tx = std::max(0.0f, std::min(1.0f, tx));
+    ty = std::max(0.0f, std::min(1.0f, ty));
+    tz = std::max(0.0f, std::min(1.0f, tz));
+
+    float3 center = 0.5f * (pMin + pMax);
+
+    float predictedPointResidual = 0.0f;
+
+    for (int k = 0; k < 8; ++k)
+    {
+        const Corner& c = mCorners[p.corners[k]];
+        const float3& cPos = c.position;
+
+        float wx = cPos.x >= center.x ? tx : (1.0f - tx);
+        float wy = cPos.y >= center.y ? ty : (1.0f - ty);
+        float wz = cPos.z >= center.z ? tz : (1.0f - tz);
+
+        float w = wx * wy * wz;
+
+        float3 dx = position - cPos;
+        float distSq = dot(dx, dx);
+
+        float cornerPred =
+            0.5f * c.maxLambdaVecL2 * distSq;
+
+        predictedPointResidual += w * cornerPred;
+    }
+
+    return predictedPointResidual;
 }

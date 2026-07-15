@@ -64,9 +64,15 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-const float ErrorThreshold =2.1f;//threshold for Erel
+const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
-const bool useIrradianceSpaceMetric = true;
+const bool useIrradianceSpaceMetric = false;
+const bool useResidualCorrection = true;
+//const bool useResidualCorrection = false;
+//const float residualCorrectionEta = 0.0f;
+const float residualCorrectionEta = 1.0f;
+const float residualCorrectionMinScale = 0.5f;
+const float residualCorrectionMaxScale = 2.0f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
@@ -79,7 +85,6 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr10SubwayCorridorNoOpen.txt";
-
 
 //const std::string saveToFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded8RelErr3SubwayCorridorNoOpen.txt";
@@ -121,7 +126,7 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr8DataSceneIrrMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr8DataScenePresentativeNormalMetricAvg.txt";
 //const std::string saveToFileName = "DirectAbsErr3DataScenePresentativeNormalMetricAvg.txt";
-const std::string saveToFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
+//const std::string saveToFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
 //const std::string saveToFileName = "DirectAbsErr2DataScenePresentativeNormalMetricAvg.txt";
 //const std::string saveToFileName = "DirectAbsErr8DataScenePresentativeNormalMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr7p5DataSceneIrrMetric.txt";
@@ -137,6 +142,10 @@ const std::string saveToFileName = "DirectAbsErr2p1DataScenePresentativeNormalMe
 //const std::string saveToFileName = "DirectAbsErr3p5DataSceneAvg.txt";
 //const std::string saveToFileName = "DirectAbsErr3DataSceneAvg.txt";
 //const std::string saveToFileName = "DirectAbsErr2DataSceneAvg.txt";
+
+//const std::string saveToFileName = "DirectAbsErr10ResidualScaleMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
+const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -153,6 +162,31 @@ const char kShowSHGrid[] = "Show SH grid";
 
 namespace
 {
+    static std::string replaceExtensionOrAppend(
+        const std::string& baseName,
+        const std::string& suffixWithExtension
+    )
+    {
+        std::string result = baseName;
+
+        size_t dotPos = result.find_last_of('.');
+
+        if (dotPos != std::string::npos)
+        {
+            result.replace(
+                dotPos,
+                std::string::npos,
+                suffixWithExtension
+            );
+        }
+        else
+        {
+            result += suffixWithExtension;
+        }
+
+        return result;
+    }
+
     static float luminance709(float3 c)
     {
         return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
@@ -883,11 +917,72 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mAdaptiveProbeVolume->setBuildTimeMs(ms);
             // 3. TODO: upload to GPU for visualization
             mAdaptiveProbeVolume->uploadToGPU();
-            std::string debugFileName = saveToFileName;
-            size_t pos = debugFileName.find_last_of('.');
-            debugFileName.replace(pos, std::string::npos, "_DebugViz.txt");
-            //mAdaptiveProbeVolume->printDebugInfo("AdaptiveProbeVolumeTextViz.txt");
+
+            //std::string debugFileName = saveToFileName;
+            //size_t pos = debugFileName.find_last_of('.');
+            //debugFileName.replace(pos, std::string::npos, "_DebugViz.txt");
+            std::string debugFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_DebugViz.txt"
+                );
+
+            std::string residualLogFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_ResidualStats.txt"
+                );
+
+            std::string residualSummaryCsvFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_ResidualSummary.csv"
+                );
+
+
+            std::string residualLevelCsvFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_ResidualByLevel.csv"
+                );
+
+            // Separate residual statistics log.
+            mAdaptiveProbeVolume->writeResidualPaperStatsLog(
+                residualLogFileName
+            );
+
+            std::string residualMainStatsFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_ResidualMainStats.txt"
+                );
+
+            std::string residualMainStatsCsvFileName =
+                replaceExtensionOrAppend(
+                    saveToFileName,
+                    "_ResidualMainStats.csv"
+                );
+
+            mAdaptiveProbeVolume->writeResidualMainStatsLog(
+                residualMainStatsFileName
+            );
+
+            mAdaptiveProbeVolume->exportResidualMainStatsCSV(
+                residualMainStatsCsvFileName
+            );
+            // Separate residual CSV outputs.
+            mAdaptiveProbeVolume->exportResidualPaperStatsCSV(
+                residualSummaryCsvFileName,
+                residualLevelCsvFileName
+            );
+
+
+            logInfo("Wrote residual statistics log: " + residualLogFileName);
+            logInfo("Wrote residual summary CSV: " + residualSummaryCsvFileName);
+            logInfo("Wrote residual by-level CSV: " + residualLevelCsvFileName);
+
             mAdaptiveProbeVolume->printDebugInfo(debugFileName);
+            logInfo("Wrote hierarchy debug file: " + debugFileName);
             mAdaptiveProbeVolume->saveToFile(saveToFileName);
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
@@ -1111,10 +1206,18 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
     //const uint3 seedResolution = uint3(16, 16, 16);
-    mAdaptiveProbeVolume->setErrorMetricMode(
-        useIrradianceSpaceMetric
-        ? AdaptiveProbeVolume::ErrorMetricMode::IrradianceSpace
-        : AdaptiveProbeVolume::ErrorMetricMode::SHSpace
+    //mAdaptiveProbeVolume->setErrorMetricMode(
+    //    useIrradianceSpaceMetric
+    //    ? AdaptiveProbeVolume::ErrorMetricMode::IrradianceSpace
+    //    : AdaptiveProbeVolume::ErrorMetricMode::SHSpace
+    //);
+
+
+    mAdaptiveProbeVolume->setResidualCorrection(
+        useResidualCorrection,
+        residualCorrectionEta,
+        residualCorrectionMinScale,
+        residualCorrectionMaxScale
     );
     mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
 
