@@ -60,25 +60,30 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 7.95f;
 //const float ErrorThreshold = 4.25f;
 //const float ErrorThreshold = 3.0f;
-//const float ErrorThreshold = 5.0f;
+const float ErrorThreshold = 5.0f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-const float ErrorThreshold =2.0f;//threshold for Erel
+//const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
 const bool useResidualCorrection = true;
-//const bool useResidualCorrection = false;
-//const float residualCorrectionEta = 0.0f;
-const float residualCorrectionEta = 1.0f;
-const float residualCorrectionMinScale = 0.5f;
+
+const float residualPruneStrength = 0.10f;
+const float residualRefineStrength = 0.10f;
+
+const float residualCorrectionMinScale = 0.7f;
 const float residualCorrectionMaxScale = 2.0f;
+
+const float residualConfidenceTau0 = 0.9f;
+const float residualConfidenceTau1 = 1.1f;
+const float residualConfidenceEps = 1e-3f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-const uint3 unifromGridSize = uint3(32, 32, 32);
+//const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-//const uint3 unifromGridSize = uint3(64, 64, 64);
+const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
@@ -144,8 +149,10 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr2DataSceneAvg.txt";
 
 //const std::string saveToFileName = "DirectAbsErr10ResidualScaleMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr10ResidualScaleV2Metric.txt";
+const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2Metric.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
-const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
+//const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -1215,10 +1222,15 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
     mAdaptiveProbeVolume->setResidualCorrection(
         useResidualCorrection,
-        residualCorrectionEta,
+        residualPruneStrength,
+        residualRefineStrength,
         residualCorrectionMinScale,
-        residualCorrectionMaxScale
+        residualCorrectionMaxScale,
+        residualConfidenceTau0,
+        residualConfidenceTau1,
+        residualConfidenceEps
     );
+
     mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
@@ -1553,6 +1565,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
             //exportIrradianceFieldErrorComparison();
             //exportAnalyticErrorVsDistanceTest();
+            exportResidualTopologyRegionErrorComparison();
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());
@@ -1713,88 +1726,1476 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     }
 }
 
-void PrecomputeSHCoefficients::exportIrradianceFieldErrorComparison()
+// ============================================================================
+// Residual topology region / decision quality evaluation
+// ============================================================================
+
+struct PairwiseRegionErrorStats
+{
+    std::vector<float> hessianAPEValues;
+    std::vector<float> residualAPEValues;
+    std::vector<float> deltaAPEValues;
+
+    double sumHessianAbsErr = 0.0;
+    double sumResidualAbsErr = 0.0;
+    double sumDeltaAbsErr = 0.0;
+
+    double sumHessianAPE = 0.0;
+    double sumResidualAPE = 0.0;
+    double sumDeltaAPE = 0.0;
+
+    uint64_t sampleCount = 0;
+
+    uint64_t residualBetterCount = 0;
+    uint64_t residualWorseCount = 0;
+    uint64_t residualEqualCount = 0;
+
+    double sumPositiveDeltaAbsErr = 0.0;
+    double sumNegativeDeltaAbsErr = 0.0;
+
+    double sumPositiveDeltaAPE = 0.0;
+    double sumNegativeDeltaAPE = 0.0;
+};
+
+struct DecisionRegionErrorStats
+{
+    // One entry corresponds to one topology-decision region.
+    //
+    // Prune decision:
+    //     key = residual leaf index.
+    //
+    // Refine decision:
+    //     key = original Hessian leaf index.
+    //
+    // Each decision accumulates all query samples inside that decision region.
+    uint64_t sampleCount = 0;
+
+    double sumHessianAbsErr = 0.0;
+    double sumResidualAbsErr = 0.0;
+    double sumDeltaAbsErr = 0.0;
+
+    double sumHessianAPE = 0.0;
+    double sumResidualAPE = 0.0;
+    double sumDeltaAPE = 0.0;
+
+    // ------------------------------------------------------------
+// Leaf-level diagnostics.
+//
+// For prune:
+//   decision key = residual leaf.
+//   residual level is usually fixed.
+//   hessian level may vary inside that coarser residual leaf.
+//
+// For refine:
+//   decision key = hessian leaf.
+//   hessian level is usually fixed.
+//   residual level may vary inside that refined region.
+// ------------------------------------------------------------
+    bool hasLevelData = false;
+
+    int minHessianLevel = 0;
+    int maxHessianLevel = 0;
+    int minResidualLevel = 0;
+    int maxResidualLevel = 0;
+
+    double sumHessianLevel = 0.0;
+    double sumResidualLevel = 0.0;
+    double sumLevelDeltaResidualMinusHessian = 0.0;
+};
+
+enum class DecisionQualityBucket
+{
+    ResidualBetterGt20,
+    ResidualBetter10To20,
+    ResidualBetter5To10,
+    Within5Percent,
+    ResidualWorse5To10,
+    ResidualWorse10To20,
+    ResidualWorseGt20
+};
+
+struct DecisionQualityBucketCounts
+{
+    uint64_t betterGt20 = 0;
+    uint64_t better10To20 = 0;
+    uint64_t better5To10 = 0;
+    uint64_t within5 = 0;
+    uint64_t worse5To10 = 0;
+    uint64_t worse10To20 = 0;
+    uint64_t worseGt20 = 0;
+
+    void add(DecisionQualityBucket bucket)
+    {
+        switch (bucket)
+        {
+        case DecisionQualityBucket::ResidualBetterGt20:
+            betterGt20++;
+            break;
+
+        case DecisionQualityBucket::ResidualBetter10To20:
+            better10To20++;
+            break;
+
+        case DecisionQualityBucket::ResidualBetter5To10:
+            better5To10++;
+            break;
+
+        case DecisionQualityBucket::Within5Percent:
+            within5++;
+            break;
+
+        case DecisionQualityBucket::ResidualWorse5To10:
+            worse5To10++;
+            break;
+
+        case DecisionQualityBucket::ResidualWorse10To20:
+            worse10To20++;
+            break;
+
+        case DecisionQualityBucket::ResidualWorseGt20:
+            worseGt20++;
+            break;
+        }
+    }
+};
+
+static double meanFloatVectorForDecisionStats(
+    const std::vector<float>& values
+)
+{
+    if (values.empty())
+        return 0.0;
+
+    double sum = 0.0;
+
+    for (float v : values)
+        sum += double(v);
+
+    return sum / double(values.size());
+}
+
+static double computeDecisionDeltaAbsErrPercent(
+    double meanHessianAbsErr,
+    double meanResidualAbsErr,
+    float absTol
+)
+{
+    // Positive:
+    //     residual has lower error than Hessian.
+    //
+    // Negative:
+    //     residual has higher error than Hessian.
+    //
+    // The denominator is clamped by absTol so that very small Hessian errors
+    // do not produce unstable percentages.
+    double denom =
+        std::max(std::abs(meanHessianAbsErr), double(absTol));
+
+    return
+        100.0 *
+        (meanHessianAbsErr - meanResidualAbsErr) /
+        denom;
+}
+
+static DecisionQualityBucket classifyDecisionBucket(
+    double deltaAbsErrPercent
+)
+{
+    if (deltaAbsErrPercent >= 20.0)
+        return DecisionQualityBucket::ResidualBetterGt20;
+
+    if (deltaAbsErrPercent >= 10.0)
+        return DecisionQualityBucket::ResidualBetter10To20;
+
+    if (deltaAbsErrPercent >= 5.0)
+        return DecisionQualityBucket::ResidualBetter5To10;
+
+    if (deltaAbsErrPercent >= -5.0)
+        return DecisionQualityBucket::Within5Percent;
+
+    if (deltaAbsErrPercent >= -10.0)
+        return DecisionQualityBucket::ResidualWorse5To10;
+
+    if (deltaAbsErrPercent >= -20.0)
+        return DecisionQualityBucket::ResidualWorse10To20;
+
+    return DecisionQualityBucket::ResidualWorseGt20;
+}
+
+static std::string bucketNameForPrune(
+    DecisionQualityBucket bucket
+)
+{
+    switch (bucket)
+    {
+    case DecisionQualityBucket::ResidualBetterGt20:
+        return "prune_beneficial_gt20pct";
+
+    case DecisionQualityBucket::ResidualBetter10To20:
+        return "prune_beneficial_10_20pct";
+
+    case DecisionQualityBucket::ResidualBetter5To10:
+        return "prune_beneficial_5_10pct";
+
+    case DecisionQualityBucket::Within5Percent:
+        return "prune_within_5pct_tolerance";
+
+    case DecisionQualityBucket::ResidualWorse5To10:
+        return "prune_small_loss_5_10pct";
+
+    case DecisionQualityBucket::ResidualWorse10To20:
+        return "prune_higher_loss_10_20pct";
+
+    case DecisionQualityBucket::ResidualWorseGt20:
+        return "prune_severe_loss_gt20pct";
+    }
+
+    return "unknown_prune_bucket";
+}
+
+static std::string bucketNameForRefine(
+    DecisionQualityBucket bucket
+)
+{
+    switch (bucket)
+    {
+    case DecisionQualityBucket::ResidualBetterGt20:
+        return "refine_strong_improvement_gt20pct";
+
+    case DecisionQualityBucket::ResidualBetter10To20:
+        return "refine_useful_improvement_10_20pct";
+
+    case DecisionQualityBucket::ResidualBetter5To10:
+        return "refine_small_improvement_5_10pct";
+
+    case DecisionQualityBucket::Within5Percent:
+        return "refine_neutral_within_5pct";
+
+    case DecisionQualityBucket::ResidualWorse5To10:
+        return "refine_small_loss_5_10pct";
+
+    case DecisionQualityBucket::ResidualWorse10To20:
+        return "refine_harmful_loss_10_20pct";
+
+    case DecisionQualityBucket::ResidualWorseGt20:
+        return "refine_severe_loss_gt20pct";
+    }
+
+    return "unknown_refine_bucket";
+}
+
+static std::string decisionClassName(
+    const std::string& decisionType,
+    DecisionQualityBucket bucket
+)
+{
+    if (decisionType == "prune")
+        return bucketNameForPrune(bucket);
+
+    return bucketNameForRefine(bucket);
+}
+
+static void addPairwiseRegionErrorSample(
+    PairwiseRegionErrorStats& stats,
+    float3 hessianIrr,
+    float3 residualIrr,
+    float3 refIrr,
+    float relEpsilon
+)
+{
+    float yRef = luminance709(refIrr);
+    float yHessian = luminance709(hessianIrr);
+    float yResidual = luminance709(residualIrr);
+
+    float absErrHessian =
+        std::abs(yHessian - yRef);
+
+    float absErrResidual =
+        std::abs(yResidual - yRef);
+
+    float denom =
+        std::max(std::abs(yRef), relEpsilon);
+
+    float apeHessian =
+        absErrHessian / denom * 100.0f;
+
+    float apeResidual =
+        absErrResidual / denom * 100.0f;
+
+    if (!std::isfinite(apeHessian) ||
+        !std::isfinite(apeResidual))
+    {
+        return;
+    }
+
+    float deltaAPE =
+        apeHessian - apeResidual;
+
+    float deltaAbsErr =
+        absErrHessian - absErrResidual;
+
+    stats.hessianAPEValues.push_back(apeHessian);
+    stats.residualAPEValues.push_back(apeResidual);
+    stats.deltaAPEValues.push_back(deltaAPE);
+
+    stats.sumHessianAPE += double(apeHessian);
+    stats.sumResidualAPE += double(apeResidual);
+    stats.sumDeltaAPE += double(deltaAPE);
+
+    stats.sumHessianAbsErr += double(absErrHessian);
+    stats.sumResidualAbsErr += double(absErrResidual);
+    stats.sumDeltaAbsErr += double(deltaAbsErr);
+
+    stats.sampleCount++;
+
+    const float equalEps = 1e-8f;
+
+    if (absErrResidual + equalEps < absErrHessian)
+    {
+        stats.residualBetterCount++;
+
+        stats.sumPositiveDeltaAbsErr += double(deltaAbsErr);
+        stats.sumPositiveDeltaAPE += double(deltaAPE);
+    }
+    else if (absErrResidual > absErrHessian + equalEps)
+    {
+        stats.residualWorseCount++;
+
+        stats.sumNegativeDeltaAbsErr += double(deltaAbsErr);
+        stats.sumNegativeDeltaAPE += double(deltaAPE);
+    }
+    else
+    {
+        stats.residualEqualCount++;
+    }
+}
+
+static void addDecisionRegionErrorSample(
+    DecisionRegionErrorStats& stats,
+    float3 hessianIrr,
+    float3 residualIrr,
+    float3 refIrr,
+    float relEpsilon,
+    int hessianLevel,
+    int residualLevel
+)
+{
+    float yRef = luminance709(refIrr);
+    float yHessian = luminance709(hessianIrr);
+    float yResidual = luminance709(residualIrr);
+
+    float absErrHessian =
+        std::abs(yHessian - yRef);
+
+    float absErrResidual =
+        std::abs(yResidual - yRef);
+
+    float denom =
+        std::max(std::abs(yRef), relEpsilon);
+
+    float apeHessian =
+        absErrHessian / denom * 100.0f;
+
+    float apeResidual =
+        absErrResidual / denom * 100.0f;
+
+    if (!std::isfinite(apeHessian) ||
+        !std::isfinite(apeResidual))
+    {
+        return;
+    }
+
+    float deltaAPE =
+        apeHessian - apeResidual;
+
+    float deltaAbsErr =
+        absErrHessian - absErrResidual;
+
+    stats.sampleCount++;
+    // ------------------------------------------------------------
+// Leaf-level statistics.
+// These are sample-weighted. Because each position is evaluated
+// with multiple normals, this is also normal-sample weighted.
+// ------------------------------------------------------------
+    if (!stats.hasLevelData)
+    {
+        stats.hasLevelData = true;
+
+        stats.minHessianLevel = hessianLevel;
+        stats.maxHessianLevel = hessianLevel;
+
+        stats.minResidualLevel = residualLevel;
+        stats.maxResidualLevel = residualLevel;
+    }
+    else
+    {
+        stats.minHessianLevel =
+            std::min(stats.minHessianLevel, hessianLevel);
+
+        stats.maxHessianLevel =
+            std::max(stats.maxHessianLevel, hessianLevel);
+
+        stats.minResidualLevel =
+            std::min(stats.minResidualLevel, residualLevel);
+
+        stats.maxResidualLevel =
+            std::max(stats.maxResidualLevel, residualLevel);
+    }
+
+    stats.sumHessianLevel +=
+        double(hessianLevel);
+
+    stats.sumResidualLevel +=
+        double(residualLevel);
+
+    stats.sumLevelDeltaResidualMinusHessian +=
+        double(residualLevel - hessianLevel);
+
+    stats.sumHessianAbsErr += double(absErrHessian);
+    stats.sumResidualAbsErr += double(absErrResidual);
+    stats.sumDeltaAbsErr += double(deltaAbsErr);
+
+    stats.sumHessianAPE += double(apeHessian);
+    stats.sumResidualAPE += double(apeResidual);
+    stats.sumDeltaAPE += double(deltaAPE);
+}
+
+static void writePairwiseRegionErrorRow(
+    std::ofstream& csv,
+    const std::string& region,
+    const PairwiseRegionErrorStats& stats,
+    uint64_t totalSampleCount
+)
+{
+    double sampleSharePercent =
+        totalSampleCount > 0
+        ? 100.0 * double(stats.sampleCount) / double(totalSampleCount)
+        : 0.0;
+
+    double meanHessianMAPE =
+        stats.sampleCount > 0
+        ? stats.sumHessianAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double meanResidualMAPE =
+        stats.sampleCount > 0
+        ? stats.sumResidualAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double meanDeltaMAPE =
+        stats.sampleCount > 0
+        ? stats.sumDeltaAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double medianDeltaMAPE =
+        percentileVector(stats.deltaAPEValues, 50.0);
+
+    double p05DeltaMAPE =
+        percentileVector(stats.deltaAPEValues, 5.0);
+
+    double p95DeltaMAPE =
+        percentileVector(stats.deltaAPEValues, 95.0);
+
+    double meanHessianAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumHessianAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double meanResidualAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumResidualAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double meanDeltaAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumDeltaAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double residualBetterRate =
+        stats.sampleCount > 0
+        ? 100.0 * double(stats.residualBetterCount) / double(stats.sampleCount)
+        : 0.0;
+
+    double residualWorseRate =
+        stats.sampleCount > 0
+        ? 100.0 * double(stats.residualWorseCount) / double(stats.sampleCount)
+        : 0.0;
+
+    double residualEqualRate =
+        stats.sampleCount > 0
+        ? 100.0 * double(stats.residualEqualCount) / double(stats.sampleCount)
+        : 0.0;
+
+    double meanDeltaAPE_WhenResidualBetter =
+        stats.residualBetterCount > 0
+        ? stats.sumPositiveDeltaAPE / double(stats.residualBetterCount)
+        : 0.0;
+
+    double meanDeltaAPE_WhenResidualWorse =
+        stats.residualWorseCount > 0
+        ? stats.sumNegativeDeltaAPE / double(stats.residualWorseCount)
+        : 0.0;
+
+    double meanDeltaAbsErr_WhenResidualBetter =
+        stats.residualBetterCount > 0
+        ? stats.sumPositiveDeltaAbsErr / double(stats.residualBetterCount)
+        : 0.0;
+
+    double meanDeltaAbsErr_WhenResidualWorse =
+        stats.residualWorseCount > 0
+        ? stats.sumNegativeDeltaAbsErr / double(stats.residualWorseCount)
+        : 0.0;
+
+    csv
+        << region << ","
+        << stats.sampleCount << ","
+        << sampleSharePercent << ","
+
+        << meanHessianMAPE << ","
+        << meanResidualMAPE << ","
+        << meanDeltaMAPE << ","
+        << medianDeltaMAPE << ","
+        << p05DeltaMAPE << ","
+        << p95DeltaMAPE << ","
+
+        << meanHessianAbsErr << ","
+        << meanResidualAbsErr << ","
+        << meanDeltaAbsErr << ","
+
+        << residualBetterRate << ","
+        << residualWorseRate << ","
+        << residualEqualRate << ","
+
+        << meanDeltaAPE_WhenResidualBetter << ","
+        << meanDeltaAPE_WhenResidualWorse << ","
+        << meanDeltaAbsErr_WhenResidualBetter << ","
+        << meanDeltaAbsErr_WhenResidualWorse
+        << "\n";
+}
+
+static void writeDecisionDetailsRows(
+    std::ofstream& csv,
+    const std::string& decisionType,
+    const std::unordered_map<int, DecisionRegionErrorStats>& decisionStats,
+    float absTol
+)
+{
+    for (const auto& kv : decisionStats)
+    {
+        int decisionKey = kv.first;
+        const DecisionRegionErrorStats& s = kv.second;
+
+        if (s.sampleCount == 0)
+            continue;
+
+        double meanHessianAbsErr =
+            s.sumHessianAbsErr / double(s.sampleCount);
+
+        double meanResidualAbsErr =
+            s.sumResidualAbsErr / double(s.sampleCount);
+
+        double meanDeltaAbsErr =
+            s.sumDeltaAbsErr / double(s.sampleCount);
+
+        double meanHessianMAPE =
+            s.sumHessianAPE / double(s.sampleCount);
+
+        double meanResidualMAPE =
+            s.sumResidualAPE / double(s.sampleCount);
+
+        double meanDeltaMAPE =
+            s.sumDeltaAPE / double(s.sampleCount);
+
+        double deltaAbsErrPercent =
+            computeDecisionDeltaAbsErrPercent(
+                meanHessianAbsErr,
+                meanResidualAbsErr,
+                absTol
+            );
+
+        DecisionQualityBucket bucket =
+            classifyDecisionBucket(deltaAbsErrPercent);
+
+        std::string decisionClass =
+            decisionClassName(decisionType, bucket);
+        double meanHessianLevel =
+            s.sampleCount > 0
+            ? s.sumHessianLevel / double(s.sampleCount)
+            : 0.0;
+
+        double meanResidualLevel =
+            s.sampleCount > 0
+            ? s.sumResidualLevel / double(s.sampleCount)
+            : 0.0;
+
+        double meanLevelDelta =
+            s.sampleCount > 0
+            ? s.sumLevelDeltaResidualMinusHessian / double(s.sampleCount)
+            : 0.0;
+        csv
+            << decisionType << ","
+            << decisionKey << ","
+            << decisionClass << ","
+            << s.sampleCount << ","
+
+            << s.minHessianLevel << ","
+            << s.maxHessianLevel << ","
+            << s.minResidualLevel << ","
+            << s.maxResidualLevel << ","
+            << meanHessianLevel << ","
+            << meanResidualLevel << ","
+            << meanLevelDelta << ","
+
+            << meanHessianAbsErr << ","
+            << meanResidualAbsErr << ","
+            << meanDeltaAbsErr << ","
+            << deltaAbsErrPercent << ","
+
+            << meanHessianMAPE << ","
+            << meanResidualMAPE << ","
+            << meanDeltaMAPE
+            << "\n";
+    }
+}
+
+static void writeDecisionQualitySummaryRow(
+    std::ofstream& csv,
+    const std::string& decisionType,
+    const std::unordered_map<int, DecisionRegionErrorStats>& decisionStats,
+    uint64_t totalNormalSamples,
+    float absTol
+)
+{
+    uint64_t decisionCount = 0;
+    uint64_t totalDecisionSamples = 0;
+
+    DecisionQualityBucketCounts counts;
+
+    std::vector<float> decisionDeltaAbsErrValues;
+    std::vector<float> decisionDeltaAPEValues;
+    std::vector<float> decisionDeltaAbsErrPercentValues;
+
+    double sumDecisionHessianAbsErr = 0.0;
+    double sumDecisionResidualAbsErr = 0.0;
+    double sumDecisionDeltaAbsErr = 0.0;
+
+    double sumDecisionHessianMAPE = 0.0;
+    double sumDecisionResidualMAPE = 0.0;
+    double sumDecisionDeltaMAPE = 0.0;
+
+    for (const auto& kv : decisionStats)
+    {
+        const DecisionRegionErrorStats& s = kv.second;
+
+        if (s.sampleCount == 0)
+            continue;
+
+        double meanHessianAbsErr =
+            s.sumHessianAbsErr / double(s.sampleCount);
+
+        double meanResidualAbsErr =
+            s.sumResidualAbsErr / double(s.sampleCount);
+
+        double meanDeltaAbsErr =
+            s.sumDeltaAbsErr / double(s.sampleCount);
+
+        double meanHessianMAPE =
+            s.sumHessianAPE / double(s.sampleCount);
+
+        double meanResidualMAPE =
+            s.sumResidualAPE / double(s.sampleCount);
+
+        double meanDeltaMAPE =
+            s.sumDeltaAPE / double(s.sampleCount);
+
+        double deltaAbsErrPercent =
+            computeDecisionDeltaAbsErrPercent(
+                meanHessianAbsErr,
+                meanResidualAbsErr,
+                absTol
+            );
+
+        DecisionQualityBucket bucket =
+            classifyDecisionBucket(deltaAbsErrPercent);
+
+        counts.add(bucket);
+
+        decisionCount++;
+        totalDecisionSamples += s.sampleCount;
+
+        sumDecisionHessianAbsErr += meanHessianAbsErr;
+        sumDecisionResidualAbsErr += meanResidualAbsErr;
+        sumDecisionDeltaAbsErr += meanDeltaAbsErr;
+
+        sumDecisionHessianMAPE += meanHessianMAPE;
+        sumDecisionResidualMAPE += meanResidualMAPE;
+        sumDecisionDeltaMAPE += meanDeltaMAPE;
+
+        decisionDeltaAbsErrValues.push_back(float(meanDeltaAbsErr));
+        decisionDeltaAPEValues.push_back(float(meanDeltaMAPE));
+        decisionDeltaAbsErrPercentValues.push_back(float(deltaAbsErrPercent));
+    }
+
+    double sampleSharePercent =
+        totalNormalSamples > 0
+        ? 100.0 * double(totalDecisionSamples) / double(totalNormalSamples)
+        : 0.0;
+
+    double meanSamplesPerDecision =
+        decisionCount > 0
+        ? double(totalDecisionSamples) / double(decisionCount)
+        : 0.0;
+
+    auto percentOfDecisions =
+        [decisionCount](uint64_t v) -> double
+        {
+            return decisionCount > 0
+                ? 100.0 * double(v) / double(decisionCount)
+                : 0.0;
+        };
+
+    double meanDecisionHessianAbsErr =
+        decisionCount > 0
+        ? sumDecisionHessianAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionResidualAbsErr =
+        decisionCount > 0
+        ? sumDecisionResidualAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionDeltaAbsErr =
+        decisionCount > 0
+        ? sumDecisionDeltaAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionHessianMAPE =
+        decisionCount > 0
+        ? sumDecisionHessianMAPE / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionResidualMAPE =
+        decisionCount > 0
+        ? sumDecisionResidualMAPE / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionDeltaMAPE =
+        decisionCount > 0
+        ? sumDecisionDeltaMAPE / double(decisionCount)
+        : 0.0;
+
+    uint64_t residualBetterDecisionCount =
+        counts.betterGt20 +
+        counts.better10To20 +
+        counts.better5To10;
+
+    uint64_t withinToleranceDecisionCount =
+        counts.within5;
+
+    uint64_t residualWorseDecisionCount =
+        counts.worse5To10 +
+        counts.worse10To20 +
+        counts.worseGt20;
+
+    // Interpretation helper:
+    //
+    // Prune:
+    //     favorable = residual better or within ±5%.
+    //     because prune saves memory.
+    //
+    // Refine:
+    //     favorable = residual better by at least 5%.
+    //     because refine spends memory.
+    //
+    // Raw bucket counts are also written, so the interpretation can be changed later.
+    uint64_t favorableDecisionCount = 0;
+    uint64_t neutralDecisionCount = 0;
+    uint64_t unfavorableDecisionCount = 0;
+
+    if (decisionType == "prune")
+    {
+        favorableDecisionCount =
+            residualBetterDecisionCount +
+            withinToleranceDecisionCount;
+
+        neutralDecisionCount = 0;
+
+        unfavorableDecisionCount =
+            residualWorseDecisionCount;
+    }
+    else
+    {
+        favorableDecisionCount =
+            residualBetterDecisionCount;
+
+        neutralDecisionCount =
+            withinToleranceDecisionCount;
+
+        unfavorableDecisionCount =
+            residualWorseDecisionCount;
+    }
+
+    csv
+        << decisionType << ","
+        << decisionCount << ","
+        << totalDecisionSamples << ","
+        << sampleSharePercent << ","
+        << meanSamplesPerDecision << ","
+
+        << favorableDecisionCount << ","
+        << neutralDecisionCount << ","
+        << unfavorableDecisionCount << ","
+
+        << percentOfDecisions(favorableDecisionCount) << ","
+        << percentOfDecisions(neutralDecisionCount) << ","
+        << percentOfDecisions(unfavorableDecisionCount) << ","
+
+        << counts.betterGt20 << ","
+        << counts.better10To20 << ","
+        << counts.better5To10 << ","
+        << counts.within5 << ","
+        << counts.worse5To10 << ","
+        << counts.worse10To20 << ","
+        << counts.worseGt20 << ","
+
+        << percentOfDecisions(counts.betterGt20) << ","
+        << percentOfDecisions(counts.better10To20) << ","
+        << percentOfDecisions(counts.better5To10) << ","
+        << percentOfDecisions(counts.within5) << ","
+        << percentOfDecisions(counts.worse5To10) << ","
+        << percentOfDecisions(counts.worse10To20) << ","
+        << percentOfDecisions(counts.worseGt20) << ","
+
+        << meanDecisionHessianMAPE << ","
+        << meanDecisionResidualMAPE << ","
+        << meanDecisionDeltaMAPE << ","
+        << percentileVector(decisionDeltaAPEValues, 50.0) << ","
+        << percentileVector(decisionDeltaAPEValues, 5.0) << ","
+        << percentileVector(decisionDeltaAPEValues, 95.0) << ","
+
+        << meanDecisionHessianAbsErr << ","
+        << meanDecisionResidualAbsErr << ","
+        << meanDecisionDeltaAbsErr << ","
+        << percentileVector(decisionDeltaAbsErrValues, 50.0) << ","
+        << percentileVector(decisionDeltaAbsErrValues, 5.0) << ","
+        << percentileVector(decisionDeltaAbsErrValues, 95.0) << ","
+
+        << meanFloatVectorForDecisionStats(decisionDeltaAbsErrPercentValues) << ","
+        << percentileVector(decisionDeltaAbsErrPercentValues, 50.0) << ","
+        << percentileVector(decisionDeltaAbsErrPercentValues, 5.0) << ","
+        << percentileVector(decisionDeltaAbsErrPercentValues, 95.0)
+        << "\n";
+}
+
+static double safePercentU64(
+    uint64_t count,
+    uint64_t total
+)
+{
+    return total > 0
+        ? 100.0 * double(count) / double(total)
+        : 0.0;
+}
+
+static void writeRegionTextSummary(
+    std::ofstream& out,
+    const std::string& regionName,
+    const PairwiseRegionErrorStats& stats,
+    uint64_t totalNormalSamples
+)
+{
+    double sampleSharePercent =
+        totalNormalSamples > 0
+        ? 100.0 * double(stats.sampleCount) / double(totalNormalSamples)
+        : 0.0;
+
+    double hessianMAPE =
+        stats.sampleCount > 0
+        ? stats.sumHessianAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double residualMAPE =
+        stats.sampleCount > 0
+        ? stats.sumResidualAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double deltaMAPE =
+        stats.sampleCount > 0
+        ? stats.sumDeltaAPE / double(stats.sampleCount)
+        : 0.0;
+
+    double hessianAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumHessianAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double residualAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumResidualAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double deltaAbsErr =
+        stats.sampleCount > 0
+        ? stats.sumDeltaAbsErr / double(stats.sampleCount)
+        : 0.0;
+
+    double betterRate =
+        safePercentU64(stats.residualBetterCount, stats.sampleCount);
+
+    double worseRate =
+        safePercentU64(stats.residualWorseCount, stats.sampleCount);
+
+    double equalRate =
+        safePercentU64(stats.residualEqualCount, stats.sampleCount);
+
+    out << "------------------------------------------------------------\n";
+    out << " Region: " << regionName << "\n";
+    out << "------------------------------------------------------------\n";
+
+    out << " Sample count:                    "
+        << stats.sampleCount << "\n";
+
+    out << " Sample share:                    "
+        << sampleSharePercent << "%\n";
+
+    out << " Hessian MAPE:                    "
+        << hessianMAPE << "\n";
+
+    out << " Residual MAPE:                   "
+        << residualMAPE << "\n";
+
+    out << " Delta MAPE (Hessian - Residual): "
+        << deltaMAPE << "\n";
+
+    out << " Median delta MAPE:               "
+        << percentileVector(stats.deltaAPEValues, 50.0) << "\n";
+
+    out << " P05 delta MAPE:                  "
+        << percentileVector(stats.deltaAPEValues, 5.0) << "\n";
+
+    out << " P95 delta MAPE:                  "
+        << percentileVector(stats.deltaAPEValues, 95.0) << "\n";
+
+    out << " Hessian mean abs error:          "
+        << hessianAbsErr << "\n";
+
+    out << " Residual mean abs error:         "
+        << residualAbsErr << "\n";
+
+    out << " Delta mean abs error:            "
+        << deltaAbsErr << "\n";
+
+    out << " Residual better samples:         "
+        << stats.residualBetterCount
+        << " (" << betterRate << "%)\n";
+
+    out << " Residual worse samples:          "
+        << stats.residualWorseCount
+        << " (" << worseRate << "%)\n";
+
+    out << " Residual equal samples:          "
+        << stats.residualEqualCount
+        << " (" << equalRate << "%)\n";
+
+    out << "\n";
+}
+
+static void writeDecisionQualityTextSummary(
+    std::ofstream& out,
+    const std::string& decisionType,
+    const std::unordered_map<int, DecisionRegionErrorStats>& decisionStats,
+    uint64_t totalNormalSamples,
+    float absTol
+)
+{
+    uint64_t decisionCount = 0;
+    uint64_t totalDecisionSamples = 0;
+
+    DecisionQualityBucketCounts counts;
+
+    std::vector<float> decisionDeltaAbsErrValues;
+    std::vector<float> decisionDeltaAPEValues;
+    std::vector<float> decisionDeltaAbsErrPercentValues;
+
+    double sumDecisionHessianAbsErr = 0.0;
+    double sumDecisionResidualAbsErr = 0.0;
+    double sumDecisionDeltaAbsErr = 0.0;
+
+    double sumDecisionHessianMAPE = 0.0;
+    double sumDecisionResidualMAPE = 0.0;
+    double sumDecisionDeltaMAPE = 0.0;
+
+    for (const auto& kv : decisionStats)
+    {
+        const DecisionRegionErrorStats& s = kv.second;
+
+        if (s.sampleCount == 0)
+            continue;
+
+        double meanHessianAbsErr =
+            s.sumHessianAbsErr / double(s.sampleCount);
+
+        double meanResidualAbsErr =
+            s.sumResidualAbsErr / double(s.sampleCount);
+
+        double meanDeltaAbsErr =
+            s.sumDeltaAbsErr / double(s.sampleCount);
+
+        double meanHessianMAPE =
+            s.sumHessianAPE / double(s.sampleCount);
+
+        double meanResidualMAPE =
+            s.sumResidualAPE / double(s.sampleCount);
+
+        double meanDeltaMAPE =
+            s.sumDeltaAPE / double(s.sampleCount);
+
+        double deltaAbsErrPercent =
+            computeDecisionDeltaAbsErrPercent(
+                meanHessianAbsErr,
+                meanResidualAbsErr,
+                absTol
+            );
+
+        DecisionQualityBucket bucket =
+            classifyDecisionBucket(deltaAbsErrPercent);
+
+        counts.add(bucket);
+
+        decisionCount++;
+        totalDecisionSamples += s.sampleCount;
+
+        sumDecisionHessianAbsErr += meanHessianAbsErr;
+        sumDecisionResidualAbsErr += meanResidualAbsErr;
+        sumDecisionDeltaAbsErr += meanDeltaAbsErr;
+
+        sumDecisionHessianMAPE += meanHessianMAPE;
+        sumDecisionResidualMAPE += meanResidualMAPE;
+        sumDecisionDeltaMAPE += meanDeltaMAPE;
+
+        decisionDeltaAbsErrValues.push_back(float(meanDeltaAbsErr));
+        decisionDeltaAPEValues.push_back(float(meanDeltaMAPE));
+        decisionDeltaAbsErrPercentValues.push_back(float(deltaAbsErrPercent));
+    }
+
+    uint64_t residualBetterDecisionCount =
+        counts.betterGt20 +
+        counts.better10To20 +
+        counts.better5To10;
+
+    uint64_t withinToleranceDecisionCount =
+        counts.within5;
+
+    uint64_t residualWorseDecisionCount =
+        counts.worse5To10 +
+        counts.worse10To20 +
+        counts.worseGt20;
+
+    uint64_t favorableDecisionCount = 0;
+    uint64_t neutralDecisionCount = 0;
+    uint64_t unfavorableDecisionCount = 0;
+
+    if (decisionType == "prune")
+    {
+        favorableDecisionCount =
+            residualBetterDecisionCount +
+            withinToleranceDecisionCount;
+
+        neutralDecisionCount = 0;
+
+        unfavorableDecisionCount =
+            residualWorseDecisionCount;
+    }
+    else
+    {
+        favorableDecisionCount =
+            residualBetterDecisionCount;
+
+        neutralDecisionCount =
+            withinToleranceDecisionCount;
+
+        unfavorableDecisionCount =
+            residualWorseDecisionCount;
+    }
+
+    double sampleSharePercent =
+        totalNormalSamples > 0
+        ? 100.0 * double(totalDecisionSamples) / double(totalNormalSamples)
+        : 0.0;
+
+    double meanSamplesPerDecision =
+        decisionCount > 0
+        ? double(totalDecisionSamples) / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionHessianAbsErr =
+        decisionCount > 0
+        ? sumDecisionHessianAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionResidualAbsErr =
+        decisionCount > 0
+        ? sumDecisionResidualAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionDeltaAbsErr =
+        decisionCount > 0
+        ? sumDecisionDeltaAbsErr / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionHessianMAPE =
+        decisionCount > 0
+        ? sumDecisionHessianMAPE / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionResidualMAPE =
+        decisionCount > 0
+        ? sumDecisionResidualMAPE / double(decisionCount)
+        : 0.0;
+
+    double meanDecisionDeltaMAPE =
+        decisionCount > 0
+        ? sumDecisionDeltaMAPE / double(decisionCount)
+        : 0.0;
+
+    out << "============================================================\n";
+    out << " DECISION QUALITY: " << decisionType << "\n";
+    out << "============================================================\n";
+
+    out << " Decision count:                  "
+        << decisionCount << "\n";
+
+    out << " Total decision samples:           "
+        << totalDecisionSamples << "\n";
+
+    out << " Sample share:                     "
+        << sampleSharePercent << "%\n";
+
+    out << " Mean samples per decision:        "
+        << meanSamplesPerDecision << "\n";
+
+    out << "\n";
+
+    out << " Favorable decisions:              "
+        << favorableDecisionCount
+        << " (" << safePercentU64(favorableDecisionCount, decisionCount) << "%)\n";
+
+    out << " Neutral decisions:                "
+        << neutralDecisionCount
+        << " (" << safePercentU64(neutralDecisionCount, decisionCount) << "%)\n";
+
+    out << " Unfavorable decisions:            "
+        << unfavorableDecisionCount
+        << " (" << safePercentU64(unfavorableDecisionCount, decisionCount) << "%)\n";
+
+    out << "\n";
+
+    out << " Bucket counts:\n";
+
+    out << "   Residual better >20%:           "
+        << counts.betterGt20
+        << " (" << safePercentU64(counts.betterGt20, decisionCount) << "%)\n";
+
+    out << "   Residual better 10-20%:         "
+        << counts.better10To20
+        << " (" << safePercentU64(counts.better10To20, decisionCount) << "%)\n";
+
+    out << "   Residual better 5-10%:          "
+        << counts.better5To10
+        << " (" << safePercentU64(counts.better5To10, decisionCount) << "%)\n";
+
+    out << "   Within +/-5%:                   "
+        << counts.within5
+        << " (" << safePercentU64(counts.within5, decisionCount) << "%)\n";
+
+    out << "   Residual worse 5-10%:           "
+        << counts.worse5To10
+        << " (" << safePercentU64(counts.worse5To10, decisionCount) << "%)\n";
+
+    out << "   Residual worse 10-20%:          "
+        << counts.worse10To20
+        << " (" << safePercentU64(counts.worse10To20, decisionCount) << "%)\n";
+
+    out << "   Residual worse >20%:            "
+        << counts.worseGt20
+        << " (" << safePercentU64(counts.worseGt20, decisionCount) << "%)\n";
+
+    out << "\n";
+
+    out << " Decision-weighted error:\n";
+
+    out << "   Mean Hessian MAPE:              "
+        << meanDecisionHessianMAPE << "\n";
+
+    out << "   Mean Residual MAPE:             "
+        << meanDecisionResidualMAPE << "\n";
+
+    out << "   Mean Delta MAPE:                "
+        << meanDecisionDeltaMAPE << "\n";
+
+    out << "   Median Delta MAPE:              "
+        << percentileVector(decisionDeltaAPEValues, 50.0) << "\n";
+
+    out << "   P05 Delta MAPE:                 "
+        << percentileVector(decisionDeltaAPEValues, 5.0) << "\n";
+
+    out << "   P95 Delta MAPE:                 "
+        << percentileVector(decisionDeltaAPEValues, 95.0) << "\n";
+
+    out << "\n";
+
+    out << "   Mean Hessian abs error:         "
+        << meanDecisionHessianAbsErr << "\n";
+
+    out << "   Mean Residual abs error:        "
+        << meanDecisionResidualAbsErr << "\n";
+
+    out << "   Mean Delta abs error:           "
+        << meanDecisionDeltaAbsErr << "\n";
+
+    out << "   Median Delta abs error:         "
+        << percentileVector(decisionDeltaAbsErrValues, 50.0) << "\n";
+
+    out << "   P05 Delta abs error:            "
+        << percentileVector(decisionDeltaAbsErrValues, 5.0) << "\n";
+
+    out << "   P95 Delta abs error:            "
+        << percentileVector(decisionDeltaAbsErrValues, 95.0) << "\n";
+
+    out << "\n";
+
+    out << "   Mean Delta abs error percent:   "
+        << meanFloatVectorForDecisionStats(decisionDeltaAbsErrPercentValues) << "%\n";
+
+    out << "   Median Delta abs error percent: "
+        << percentileVector(decisionDeltaAbsErrPercentValues, 50.0) << "%\n";
+
+    out << "   P05 Delta abs error percent:    "
+        << percentileVector(decisionDeltaAbsErrPercentValues, 5.0) << "%\n";
+
+    out << "   P95 Delta abs error percent:    "
+        << percentileVector(decisionDeltaAbsErrPercentValues, 95.0) << "%\n";
+
+    out << "\n";
+}
+
+static bool writeResidualTopologyMainStatsText(
+    const std::string& outTxtFile,
+    const std::string& referenceFile,
+    const std::string& hessianFile,
+    const std::string& residualFile,
+    uint32_t queryRes,
+    uint64_t totalNormalSamples,
+    uint64_t failedTopologyLookup,
+    const PairwiseRegionErrorStats& allStats,
+    const PairwiseRegionErrorStats& sameLevelStats,
+    const PairwiseRegionErrorStats& prunedStats,
+    const PairwiseRegionErrorStats& addedStats,
+    const std::unordered_map<int, DecisionRegionErrorStats>& pruneDecisionStats,
+    const std::unordered_map<int, DecisionRegionErrorStats>& refineDecisionStats,
+    float decisionAbsTol
+)
+{
+    std::ofstream out(outTxtFile);
+
+    if (!out)
+        return false;
+
+    out << std::fixed << std::setprecision(8);
+
+    out << "============================================================\n";
+    out << " RESIDUAL TOPOLOGY MAIN STATISTICS\n";
+    out << "============================================================\n";
+
+    out << " Reference file:                  " << referenceFile << "\n";
+    out << " Hessian file:                    " << hessianFile << "\n";
+    out << " Residual file:                   " << residualFile << "\n";
+    out << " Query resolution:                " << queryRes << "^3\n";
+    out << " Total normal samples:            " << totalNormalSamples << "\n";
+    out << " Failed topology lookups:         " << failedTopologyLookup << "\n";
+    out << " Decision percent abs tolerance:  " << decisionAbsTol << "\n";
+
+    out << "\n";
+
+    out << "============================================================\n";
+    out << " SAMPLE-WEIGHTED REGION QUALITY\n";
+    out << "============================================================\n\n";
+
+    writeRegionTextSummary(
+        out,
+        "all",
+        allStats,
+        totalNormalSamples
+    );
+
+    writeRegionTextSummary(
+        out,
+        "same_level",
+        sameLevelStats,
+        totalNormalSamples
+    );
+
+    writeRegionTextSummary(
+        out,
+        "pruned_residual_coarser",
+        prunedStats,
+        totalNormalSamples
+    );
+
+    writeRegionTextSummary(
+        out,
+        "added_residual_finer",
+        addedStats,
+        totalNormalSamples
+    );
+
+    writeDecisionQualityTextSummary(
+        out,
+        "prune",
+        pruneDecisionStats,
+        totalNormalSamples,
+        decisionAbsTol
+    );
+
+    writeDecisionQualityTextSummary(
+        out,
+        "refine",
+        refineDecisionStats,
+        totalNormalSamples,
+        decisionAbsTol
+    );
+
+    out << "============================================================\n";
+    out << " INTERPRETATION NOTES\n";
+    out << "============================================================\n";
+
+    out << " Delta = Hessian error - Residual error.\n";
+    out << " Positive delta means residual is better.\n";
+    out << " Negative delta means residual is worse.\n\n";
+
+    out << " For prune decisions:\n";
+    out << "   Favorable = residual better OR within +/-5%.\n";
+    out << "   This is because pruning saves memory, so small loss is acceptable.\n\n";
+
+    out << " For refine decisions:\n";
+    out << "   Favorable = residual better by at least 5%.\n";
+    out << "   Neutral = within +/-5%.\n";
+    out << "   This is because refinement spends memory and should improve quality.\n\n";
+
+    out << " Bucket thresholds are based on decision-level mean absolute error change.\n";
+
+    return true;
+}
+
+void PrecomputeSHCoefficients::exportResidualTopologyRegionErrorComparison()
 {
     // ============================================================
     // Files
     // ============================================================
 
-    // Change this later to U128DataScene.txt when ready.
-    const std::string referenceFile = "U128DataScene.txt";
-    //const std::string referenceFile = "U64DataScene.txt";
+    const std::string referenceFile =
+        "U64DataScene.txt";
 
-    const std::string uniform32File = "U32DataScene.txt";
-    const std::string adaptiveFile = "DirectAbsErr8p5N6DataScene.txt";
+    // Original Hessian grid: same threshold, residual disabled.
+    const std::string hessianFile =
+        "DirectAbsErr5DataSceneAvg.txt";
 
-    const std::string summaryCsvFile = "IrradianceFieldErrorSummary_U128Reference.csv";
-    const std::string sampleCsvFile = "IrradianceFieldErrorSamples_U128Reference.csv";
-    const std::string deltaCsvFile = "IrradianceFieldErrorDeltaByAdaptiveLevel_U128Reference.csv";
+    // Residual-calibrated grid: same threshold, residual enabled.
+    //const std::string residualFile =
+    //    "DirectAbsErr5ResidualScaleMetric.txt";
+    const std::string residualFile =
+        "DirectAbsErr5ResidualScaleV2Metric.txt";
 
-    uint64_t adaptiveFailedLookup = 0;
+    const std::string outRegionCsvFile =
+        "ResidualTopologyRegionError_DirectAbsErr5.csv";
 
+    const std::string outDecisionSummaryCsvFile =
+        "ResidualTopologyDecisionQuality_DirectAbsErr5.csv";
+
+    const std::string outDecisionDetailsCsvFile =
+        "ResidualTopologyDecisionDetails_DirectAbsErr5.csv";
+    const std::string outMainStatsTxtFile =
+        "ResidualTopologyMainStats_DirectAbsErr5.txt";
     // ============================================================
     // Test settings
     // ============================================================
 
     const uint32_t queryRes = 64;
-    const std::vector<float3> normalDirs = makeSixAxisNormalsWorld();
+
+    const std::vector<float3> normalDirs =
+        makeSixAxisNormalsWorld();
 
     const float relEpsilon = 1e-4f;
-    const uint32_t sampleCsvStride = 1;
+
+    // Used only to stabilize percentage ratios when Hessian abs error is tiny.
+    // This is not the 5/10/20 bucket threshold.
+    const float decisionAbsTol = 1e-4f;
 
     // ============================================================
     // Load grids
     // ============================================================
 
-    logInfo("Loading irradiance field error test grids...");
+    logInfo("Loading residual topology region error comparison grids.");
+    logInfo("  Reference = " + referenceFile);
+    logInfo("  Hessian   = " + hessianFile);
+    logInfo("  Residual  = " + residualFile);
 
-    ref<UniformProbeVolume> reference = UniformProbeVolume::create(mpDevice);
+    ref<UniformProbeVolume> reference =
+        UniformProbeVolume::create(mpDevice);
+
     reference->loadFromFile(referenceFile);
 
-    ref<UniformProbeVolume> testU32 = UniformProbeVolume::create(mpDevice);
-    testU32->loadFromFile(uniform32File);
+    ref<AdaptiveProbeVolume> hessianGrid =
+        AdaptiveProbeVolume::create(mpDevice);
 
-    ref<AdaptiveProbeVolume> testAdaptive = AdaptiveProbeVolume::create(mpDevice);
-    testAdaptive->loadFromFile(adaptiveFile);
+    hessianGrid->loadFromFile(hessianFile);
 
-    // Query domain: loaded reference bounds, with half-cell margin.
-    float3 evalMin = reference->getMinPoint();
-    float3 evalMax = reference->getMaxPoint();
+    ref<AdaptiveProbeVolume> residualGrid =
+        AdaptiveProbeVolume::create(mpDevice);
 
-    float3 refCellSize = reference->getCellSize();
-    float3 margin = 0.5f * refCellSize;
+    residualGrid->loadFromFile(residualFile);
+
+    // Query domain.
+    float3 evalMin =
+        reference->getMinPoint();
+
+    float3 evalMax =
+        reference->getMaxPoint();
+
+    float3 refCellSize =
+        reference->getCellSize();
+
+    float3 margin =
+        0.5f * refCellSize;
 
     evalMin += margin;
     evalMax -= margin;
 
-    float3 evalExtent = evalMax - evalMin;
-
-    logInfo("Irradiance field error test:");
-    logInfo("  Reference = " + referenceFile);
-    logInfo("  Uniform   = " + uniform32File);
-    logInfo("  Adaptive  = " + adaptiveFile);
-    logInfo("  queryRes  = " + std::to_string(queryRes));
-    logInfo("  normals   = " + std::to_string(normalDirs.size()));
+    float3 evalExtent =
+        evalMax - evalMin;
 
     // ============================================================
-    // Accumulate normal error stats
+    // Region stats: sample-weighted quality impact
     // ============================================================
 
-    IrradianceFieldErrorStats u32Stats;
-    IrradianceFieldErrorStats adaptiveStats;
+    PairwiseRegionErrorStats allStats;
+    PairwiseRegionErrorStats sameLevelStats;
+    PairwiseRegionErrorStats prunedStats;
+    PairwiseRegionErrorStats addedStats;
 
     // ============================================================
-    // Accumulate delta/improvement stats
-    // Delta = U32 error - Adaptive error
-    // Positive means adaptive is better.
+    // Decision stats: decision-weighted topology correctness
     // ============================================================
 
-    DeltaErrorStats deltaAll;
-    DeltaErrorStats deltaL6;
-    DeltaErrorStats deltaL5;
-    DeltaErrorStats deltaCoarse;
+    std::unordered_map<int, DecisionRegionErrorStats> pruneDecisionStats;
+    std::unordered_map<int, DecisionRegionErrorStats> refineDecisionStats;
 
-    uint64_t processedPositions = 0;
+    uint64_t totalNormalSamples = 0;
+    uint64_t failedTopologyLookup = 0;
+
+    // ============================================================
+    // Evaluate field
+    // ============================================================
 
     for (uint32_t z = 0; z < queryRes; ++z)
     {
@@ -1802,176 +3203,409 @@ void PrecomputeSHCoefficients::exportIrradianceFieldErrorComparison()
         {
             for (uint32_t x = 0; x < queryRes; ++x)
             {
-                float3 u = float3(
+                float3 uvw = float3(
                     (float(x) + 0.5f) / float(queryRes),
                     (float(y) + 0.5f) / float(queryRes),
                     (float(z) + 0.5f) / float(queryRes)
                 );
 
-                float3 posW = evalMin + u * evalExtent;
+                float3 posW =
+                    evalMin + uvw * evalExtent;
 
-                int adaptiveProbeIdx = testAdaptive->traverseOctreeCPU(posW);
-                if (adaptiveProbeIdx < 0)
+                int hessianLeafIdx =
+                    hessianGrid->findLeafProbeIndexCPU(posW);
+
+                int residualLeafIdx =
+                    residualGrid->findLeafProbeIndexCPU(posW);
+
+                if (hessianLeafIdx < 0 ||
+                    residualLeafIdx < 0)
                 {
-                    adaptiveFailedLookup++;
-                    processedPositions++;
+                    failedTopologyLookup++;
                     continue;
                 }
 
-                int adaptiveLevel = testAdaptive->getProbeLevelCPU(adaptiveProbeIdx);
+                int hessianLevel =
+                    hessianGrid->getProbeLevelCPU(hessianLeafIdx);
 
-                for (const float3& nWorld : normalDirs)
+                int residualLevel =
+                    residualGrid->getProbeLevelCPU(residualLeafIdx);
+
+                enum class RegionKind
                 {
-                    float3 refIrr = reference->evaluateIrradianceHermiteCPU(posW, nWorld);
-                    float3 u32Irr = testU32->evaluateIrradianceHermiteCPU(posW, nWorld);
-                    float3 adaptiveIrr = testAdaptive->evaluateIrradianceHermiteCPU(posW, nWorld);
+                    SameLevel,
+                    Pruned,
+                    Added
+                };
 
-                    // Existing global method-vs-reference stats.
-                    addIrradianceErrorSample(u32Stats, u32Irr, refIrr, relEpsilon);
-                    addIrradianceErrorSample(adaptiveStats, adaptiveIrr, refIrr, relEpsilon);
+                RegionKind regionKind =
+                    RegionKind::SameLevel;
 
-                    // New direct U32-vs-adaptive improvement stats.
-                    addDeltaErrorSample(deltaAll, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                if (residualLevel < hessianLevel)
+                {
+                    // Residual hierarchy is coarser.
+                    regionKind = RegionKind::Pruned;
+                }
+                else if (residualLevel > hessianLevel)
+                {
+                    // Residual hierarchy is finer.
+                    regionKind = RegionKind::Added;
+                }
 
-                    if (adaptiveLevel == 6)
+                for (const float3& normalW : normalDirs)
+                {
+                    float3 refIrr =
+                        reference->evaluateIrradianceHermiteCPU(
+                            posW,
+                            normalW
+                        );
+
+                    float3 hessianIrr =
+                        hessianGrid->evaluateIrradianceHermiteCPU(
+                            posW,
+                            normalW
+                        );
+
+                    float3 residualIrr =
+                        residualGrid->evaluateIrradianceHermiteCPU(
+                            posW,
+                            normalW
+                        );
+
+                    addPairwiseRegionErrorSample(
+                        allStats,
+                        hessianIrr,
+                        residualIrr,
+                        refIrr,
+                        relEpsilon
+                    );
+
+                    if (regionKind == RegionKind::Pruned)
                     {
-                        addDeltaErrorSample(deltaL6, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                        addPairwiseRegionErrorSample(
+                            prunedStats,
+                            hessianIrr,
+                            residualIrr,
+                            refIrr,
+                            relEpsilon
+                        );
+
+                        // One residual coarse leaf represents the prune decision.
+                        addDecisionRegionErrorSample(
+                            pruneDecisionStats[residualLeafIdx],
+                            hessianIrr,
+                            residualIrr,
+                            refIrr,
+                            relEpsilon,
+                            hessianLevel,
+                            residualLevel
+                        );
                     }
-                    else if (adaptiveLevel == 5)
+                    else if (regionKind == RegionKind::Added)
                     {
-                        addDeltaErrorSample(deltaL5, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                        addPairwiseRegionErrorSample(
+                            addedStats,
+                            hessianIrr,
+                            residualIrr,
+                            refIrr,
+                            relEpsilon
+                        );
+
+                        // One original Hessian leaf represents the region where
+                        // residual added refinement.
+                        addDecisionRegionErrorSample(
+                            refineDecisionStats[hessianLeafIdx],
+                            hessianIrr,
+                            residualIrr,
+                            refIrr,
+                            relEpsilon,
+                            hessianLevel,
+                            residualLevel
+                        );
                     }
                     else
                     {
-                        addDeltaErrorSample(deltaCoarse, u32Irr, adaptiveIrr, refIrr, relEpsilon);
+                        addPairwiseRegionErrorSample(
+                            sameLevelStats,
+                            hessianIrr,
+                            residualIrr,
+                            refIrr,
+                            relEpsilon
+                        );
                     }
-                }
 
-                processedPositions++;
+                    totalNormalSamples++;
+                }
             }
         }
+    }
 
-        if ((z % 4) == 0)
+    // ============================================================
+    // Write sample-level region CSV
+    // ============================================================
+
+    {
+        std::ofstream csv(outRegionCsvFile);
+
+        if (!csv)
         {
-            logInfo(
-                "Irradiance field error progress: z = " +
-                std::to_string(z) + " / " + std::to_string(queryRes)
+            logError(
+                "Failed to open residual topology region error CSV: " +
+                outRegionCsvFile
             );
-        }
-    }
-
-    logInfo("Finished sampling irradiance field error positions: " + std::to_string(processedPositions));
-    logInfo("Adaptive failed lookup count = " + std::to_string(adaptiveFailedLookup));
-
-    // ============================================================
-    // Write summary CSV
-    // ============================================================
-
-    {
-        std::ofstream csv(summaryCsvFile);
-        if (!csv)
-        {
-            logError("Failed to open summary CSV: " + summaryCsvFile);
             return;
         }
 
         csv << std::fixed << std::setprecision(8);
 
         csv
-            << "Method,"
-            << "File,"
-            << "MaxDepth,"
-            << "Threshold,"
-            << "SampleCount,"
-            << "MAPE_percent,"
-            << "P50_MAPE_percent,"
-            << "P95_MAPE_percent,"
-            << "P99_MAPE_percent,"
-            << "MAE,"
-            << "RMSE,"
-            << "MeanRefLuminance,"
-            << "MeanTestLuminance"
+            << "region,"
+            << "sampleCount,"
+            << "sampleSharePercent,"
+
+            << "hessianMAPE,"
+            << "residualMAPE,"
+            << "deltaMAPE_HessianMinusResidual,"
+            << "medianDeltaMAPE,"
+            << "p05DeltaMAPE,"
+            << "p95DeltaMAPE,"
+
+            << "hessianMeanAbsErr,"
+            << "residualMeanAbsErr,"
+            << "deltaMeanAbsErr_HessianMinusResidual,"
+
+            << "residualBetterRatePercent,"
+            << "residualWorseRatePercent,"
+            << "residualEqualRatePercent,"
+
+            << "meanDeltaAPE_WhenResidualBetter,"
+            << "meanDeltaAPE_WhenResidualWorse,"
+            << "meanDeltaAbsErr_WhenResidualBetter,"
+            << "meanDeltaAbsErr_WhenResidualWorse"
             << "\n";
 
-        writeFieldErrorSummaryRow(
+        writePairwiseRegionErrorRow(
             csv,
-            "Uniform U32",
-            uniform32File,
-            5,
-            "-",
-            u32Stats
+            "all",
+            allStats,
+            totalNormalSamples
         );
 
-        writeFieldErrorSummaryRow(
+        writePairwiseRegionErrorRow(
             csv,
-            "Adaptive N6",
-            adaptiveFile,
-            6,
-            "8.5",
-            adaptiveStats
+            "same_level",
+            sameLevelStats,
+            totalNormalSamples
         );
 
-        csv.close();
+        writePairwiseRegionErrorRow(
+            csv,
+            "pruned_residual_coarser",
+            prunedStats,
+            totalNormalSamples
+        );
+
+        writePairwiseRegionErrorRow(
+            csv,
+            "added_residual_finer",
+            addedStats,
+            totalNormalSamples
+        );
     }
 
     // ============================================================
-    // Write raw sample CSV for Python CDF
+    // Write decision-level summary CSV
     // ============================================================
 
     {
-        std::ofstream csv(sampleCsvFile);
+        std::ofstream csv(outDecisionSummaryCsvFile);
+
         if (!csv)
         {
-            logError("Failed to open sample CSV: " + sampleCsvFile);
-            return;
-        }
-
-        csv << std::fixed << std::setprecision(8);
-        csv << "Method,APE_percent\n";
-
-        writeFieldErrorSamples(csv, "Uniform U32", u32Stats, sampleCsvStride);
-        writeFieldErrorSamples(csv, "Adaptive N6 Error Threshold 8.5", adaptiveStats, sampleCsvStride);
-
-        csv.close();
-    }
-
-    // ============================================================
-    // Write delta/improvement CSV grouped by adaptive leaf level
-    // ============================================================
-
-    {
-        std::ofstream csv(deltaCsvFile);
-        if (!csv)
-        {
-            logError("Failed to open delta CSV: " + deltaCsvFile);
+            logError(
+                "Failed to open residual topology decision summary CSV: " +
+                outDecisionSummaryCsvFile
+            );
             return;
         }
 
         csv << std::fixed << std::setprecision(8);
 
         csv
-            << "Region,"
-            << "SampleCount,"
-            << "SampleShare_percent,"
-            << "MeanDeltaMAPE,"
-            << "MedianDeltaMAPE,"
-            << "P05DeltaMAPE,"
-            << "P95DeltaMAPE,"
-            << "MeanDeltaAbsErr,"
-            << "AdaptiveBetterRate_percent"
+            << "decisionType,"
+            << "decisionCount,"
+            << "totalDecisionSamples,"
+            << "sampleSharePercent,"
+            << "meanSamplesPerDecision,"
+
+            << "favorableDecisionCount,"
+            << "neutralDecisionCount,"
+            << "unfavorableDecisionCount,"
+
+            << "favorableDecisionRatePercent,"
+            << "neutralDecisionRatePercent,"
+            << "unfavorableDecisionRatePercent,"
+
+            << "residualBetterGt20Count,"
+            << "residualBetter10To20Count,"
+            << "residualBetter5To10Count,"
+            << "within5PercentCount,"
+            << "residualWorse5To10Count,"
+            << "residualWorse10To20Count,"
+            << "residualWorseGt20Count,"
+
+            << "residualBetterGt20RatePercent,"
+            << "residualBetter10To20RatePercent,"
+            << "residualBetter5To10RatePercent,"
+            << "within5PercentRatePercent,"
+            << "residualWorse5To10RatePercent,"
+            << "residualWorse10To20RatePercent,"
+            << "residualWorseGt20RatePercent,"
+
+            << "meanDecisionHessianMAPE,"
+            << "meanDecisionResidualMAPE,"
+            << "meanDecisionDeltaMAPE,"
+            << "medianDecisionDeltaMAPE,"
+            << "p05DecisionDeltaMAPE,"
+            << "p95DecisionDeltaMAPE,"
+
+            << "meanDecisionHessianAbsErr,"
+            << "meanDecisionResidualAbsErr,"
+            << "meanDecisionDeltaAbsErr,"
+            << "medianDecisionDeltaAbsErr,"
+            << "p05DecisionDeltaAbsErr,"
+            << "p95DecisionDeltaAbsErr,"
+
+            << "meanDecisionDeltaAbsErrPercent,"
+            << "medianDecisionDeltaAbsErrPercent,"
+            << "p05DecisionDeltaAbsErrPercent,"
+            << "p95DecisionDeltaAbsErrPercent"
             << "\n";
 
-        const uint64_t totalDeltaSamples = deltaAll.sampleCount;
+        writeDecisionQualitySummaryRow(
+            csv,
+            "prune",
+            pruneDecisionStats,
+            totalNormalSamples,
+            decisionAbsTol
+        );
 
-        writeDeltaErrorRow(csv, "All", deltaAll, totalDeltaSamples);
-        writeDeltaErrorRow(csv, "Adaptive_L6", deltaL6, totalDeltaSamples);
-        writeDeltaErrorRow(csv, "Adaptive_L5", deltaL5, totalDeltaSamples);
-        writeDeltaErrorRow(csv, "Adaptive_L0_L4", deltaCoarse, totalDeltaSamples);
-
-        csv.close();
+        writeDecisionQualitySummaryRow(
+            csv,
+            "refine",
+            refineDecisionStats,
+            totalNormalSamples,
+            decisionAbsTol
+        );
     }
 
-    logInfo("Wrote irradiance field error summary CSV: " + summaryCsvFile);
-    logInfo("Wrote irradiance field error sample CSV: " + sampleCsvFile);
-    logInfo("Wrote irradiance field delta CSV: " + deltaCsvFile);
+    // ============================================================
+    // Write decision-level details CSV
+    // ============================================================
+
+    {
+        std::ofstream csv(outDecisionDetailsCsvFile);
+
+        if (!csv)
+        {
+            logError(
+                "Failed to open residual topology decision details CSV: " +
+                outDecisionDetailsCsvFile
+            );
+            return;
+        }
+
+        csv << std::fixed << std::setprecision(8);
+
+        csv
+            << "decisionType,"
+            << "decisionKey,"
+            << "decisionClass,"
+            << "sampleCount,"
+
+            << "minHessianLevel,"
+            << "maxHessianLevel,"
+            << "minResidualLevel,"
+            << "maxResidualLevel,"
+            << "meanHessianLevel,"
+            << "meanResidualLevel,"
+            << "meanLevelDeltaResidualMinusHessian,"
+
+            << "meanHessianAbsErr,"
+            << "meanResidualAbsErr,"
+            << "meanDeltaAbsErr,"
+            << "deltaAbsErrPercent,"
+
+            << "meanHessianMAPE,"
+            << "meanResidualMAPE,"
+            << "meanDeltaMAPE"
+            << "\n";
+
+        writeDecisionDetailsRows(
+            csv,
+            "prune",
+            pruneDecisionStats,
+            decisionAbsTol
+        );
+
+        writeDecisionDetailsRows(
+            csv,
+            "refine",
+            refineDecisionStats,
+            decisionAbsTol
+        );
+    }
+
+    logInfo(
+        "Wrote residual topology region error comparison: " +
+        outRegionCsvFile
+    );
+
+    logInfo(
+        "Wrote residual topology decision quality summary: " +
+        outDecisionSummaryCsvFile
+    );
+
+    logInfo(
+        "Wrote residual topology decision details: " +
+        outDecisionDetailsCsvFile
+    );
+
+    logInfo(
+        "Failed topology lookup count: " +
+        std::to_string(failedTopologyLookup)
+    );
+
+    bool wroteMainStatsText =
+        writeResidualTopologyMainStatsText(
+            outMainStatsTxtFile,
+            referenceFile,
+            hessianFile,
+            residualFile,
+            queryRes,
+            totalNormalSamples,
+            failedTopologyLookup,
+            allStats,
+            sameLevelStats,
+            prunedStats,
+            addedStats,
+            pruneDecisionStats,
+            refineDecisionStats,
+            decisionAbsTol
+        );
+
+    if (!wroteMainStatsText)
+    {
+        logError(
+            "Failed to open residual topology main stats text file: " +
+            outMainStatsTxtFile
+        );
+    }
+    else
+    {
+        logInfo(
+            "Wrote residual topology main stats text file: " +
+            outMainStatsTxtFile
+        );
+    }
 }

@@ -121,4 +121,5 @@ private:
     void SinglePassBuild(RenderContext* pRenderContext);
     void ProgressiveRefineBuild(RenderContext* pRenderContext);
     void exportIrradianceFieldErrorComparison();
+    void exportResidualTopologyRegionErrorComparison();
 };

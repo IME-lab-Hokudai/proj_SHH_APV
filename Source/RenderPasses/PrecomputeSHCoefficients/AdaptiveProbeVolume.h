@@ -93,6 +93,17 @@ public:
         PaperScalarStats predictedParentError;
         PaperScalarStats residualRatio;
         PaperScalarStats correctionScale;
+        uint64_t overEstimateSignal = 0;      // rho < 1
+        uint64_t underEstimateSignal = 0;     // rho > 1
+        uint64_t nearConsistentSignal = 0;    // rho approximately 1
+
+        uint64_t lowConfidenceSamples = 0;
+        uint64_t highConfidenceSamples = 0;
+
+        PaperScalarStats logRatioAbs;
+        PaperScalarStats disagreementConfidence;
+        PaperScalarStats signalConfidence;
+        PaperScalarStats residualConfidence;
 
         void reset()
         {
@@ -115,6 +126,18 @@ public:
             predictedParentError.reset();
             residualRatio.reset();
             correctionScale.reset();
+
+            overEstimateSignal = 0;
+            underEstimateSignal = 0;
+            nearConsistentSignal = 0;
+
+            lowConfidenceSamples = 0;
+            highConfidenceSamples = 0;
+
+            logRatioAbs.reset();
+            disagreementConfidence.reset();
+            signalConfidence.reset();
+            residualConfidence.reset();
         }
     };
 
@@ -200,7 +223,7 @@ public:
         const std::string& filename
     ) const;
 
-
+    int findLeafProbeIndexCPU(float3 posW) const;
 public:
     struct Probe
     {
@@ -228,10 +251,10 @@ public:
         // Physics Data (Full bands)
         std::vector<float3> shCoeffs;
         std::vector<GradSHCoeff> shGradients;
-
+        std::vector<float3x3> shHessians;
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
-
+        bool residualCorrectionValid = false;
          // ------------------------------------------------------------
         // Residual-corrected Hessian scale
         // ------------------------------------------------------------
@@ -320,15 +343,26 @@ public:
 
     void setResidualCorrection(
         bool enabled,
-        float eta = 1.0f,
-        float minScale = 0.5f,
-        float maxScale = 2.0f
+        float pruneStrength = 0.20f,
+        float refineStrength = 0.50f,
+        float minScale = 0.80f,
+        float maxScale = 1.50f,
+        float confidenceTau0 = 1.25f,
+        float confidenceTau1 = 2.0f,
+        float confidenceEps = 1e-3f
     )
     {
         mUseResidualCorrection = enabled;
-        mResidualCorrectionEta = eta;
+
+        mResidualPruneStrength = pruneStrength;
+        mResidualRefineStrength = refineStrength;
+
         mResidualCorrectionMinScale = minScale;
         mResidualCorrectionMaxScale = maxScale;
+
+        mResidualConfidenceTau0 = confidenceTau0;
+        mResidualConfidenceTau1 = confidenceTau1;
+        mResidualConfidenceEps = confidenceEps;
     }
 
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);
@@ -501,11 +535,20 @@ private:
     uint3 mSeedResolution = uint3(0);
     std::vector<int> mSeedProbeIndices; // size = rx * ry * rz
 
-    bool mUseResidualCorrection = true;
-    float mResidualCorrectionEta = 1.0f;
-    float mResidualCorrectionMinScale = 0.5f;
-    float mResidualCorrectionMaxScale = 2.0f;
+    bool mUseResidualCorrection = false;
+
+    float mResidualPruneStrength = 0.20f;
+    float mResidualRefineStrength = 0.50f;
+
+    float mResidualCorrectionMinScale = 0.80f;
+    float mResidualCorrectionMaxScale = 1.50f;
+
+    float mResidualConfidenceTau0 = 1.25f;
+    float mResidualConfidenceTau1 = 2.0f;
+    float mResidualConfidenceEps = 1e-3f;
+
     float mResidualCorrectionEps = 1e-6f;
+
     float computeParentPointHessianPrediction(
         int parentProbeIdx,
         const float3& position
@@ -521,7 +564,11 @@ private:
             float observedResidual,
             float predictedParentError,
             float rho,
-            float scale
+            float scale,
+            float logRatioAbs,
+            float disagreementConfidence,
+            float signalConfidence,
+            float residualConfidence
         );
 
         void recordResidualDecisionForPaper(

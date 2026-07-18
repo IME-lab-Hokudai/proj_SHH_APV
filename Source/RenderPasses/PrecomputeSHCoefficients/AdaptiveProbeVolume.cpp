@@ -442,6 +442,15 @@ void AdaptiveProbeVolume::constrainHangingNodesHermite()
         }
     }
 }
+static float smoothstep01(float edge0, float edge1, float x)
+{
+    float denom = std::max(edge1 - edge0, 1e-8f);
+    float t = (x - edge0) / denom;
+
+    t = std::max(0.0f, std::min(1.0f, t));
+
+    return t * t * (3.0f - 2.0f * t);
+}
 
 static std::string replaceExtensionOrAppend(
     const std::string& baseName,
@@ -770,31 +779,31 @@ void AdaptiveProbeVolume::setCornerData(
     const std::vector<float3>& coeffs,
     const std::vector<GradSHCoeff>& grads,
     const std::vector<float3x3>& hessians
-    //const std::vector<float>& distMeans,
-    //const std::vector<float>& distMeanSqs
+    // const std::vector<float>& distMeans,
+    // const std::vector<float>& distMeanSqs
 )
 {
-    // 1. Locate Probe
+    // 1. Locate corner.
     if (batchIndex >= mPendingNewCorners.size()) return;
 
     int cornerIdx = mPendingNewCorners[batchIndex];
     Corner& c = mCorners[cornerIdx];
 
     // -----------------------------------------------------------
-    // PART A: RUNTIME DATA (Store RGB)
+    // PART A: Runtime data
     // -----------------------------------------------------------
-    c.shCoeffs = coeffs;       // Full RGB for color rendering
-    c.shGradients = grads;     // Full RGB for color interpolation
-
+    c.shCoeffs = coeffs;
+    c.shGradients = grads;
+    c.shHessians = hessians;
     c.maxLambdaVecL2 = computeLambdaVecL2_SHSpace(hessians);
 
     // -----------------------------------------------------------
-// Residual scale correction + paper statistics
-// -----------------------------------------------------------
+    // Residual scale correction + paper statistics
+    // -----------------------------------------------------------
     c.residualObservedError = 0.0f;
     c.residualRatio = 1.0f;
     c.residualCorrectionScale = 1.0f;
-
+    c.residualCorrectionValid = false;
     bool hasResidualParent =
         c.residualParentProbeIdx >= 0 &&
         c.residualParentProbeIdx < int(mProbes.size());
@@ -815,6 +824,16 @@ void AdaptiveProbeVolume::setCornerData(
     {
         parentLevel = mProbes[c.residualParentProbeIdx].level;
     }
+
+    float logRatioAbs = 0.0f;
+
+    // For statistics:
+    // disagreementConfidence = raw ratio gain before signal damping.
+    // signalConfidence       = confidence that observed/predicted signal is not tiny.
+    // residualConfidence     = final gain used in scale.
+    float disagreementConfidence = 0.0f;
+    float signalConfidence = 0.0f;
+    float residualConfidence = 0.0f;
 
     if (mUseResidualCorrection && hasResidualParent && predictedIsValid)
     {
@@ -841,29 +860,156 @@ void AdaptiveProbeVolume::setCornerData(
 
             rho = observed / predicted;
 
-            scale =
-                (1.0f - mResidualCorrectionEta) +
-                mResidualCorrectionEta * rho;
+            float safeRho = std::max(rho, 1e-6f);
 
-            //float scale =
-            //    1.0f + mResidualCorrectionEta * (rho - 1.0f);
+            // Symmetric disagreement measure.
+            // rho = 0.5 and rho = 2.0 both mean factor-2 disagreement.
+            logRatioAbs = std::abs(std::log(safeRho));
 
+            // ------------------------------------------------------------
+            // Dead-zone bounds.
+            //
+            // rho inside [rhoIgnoreMin, rhoIgnoreMax]:
+            //     scale = 1
+            //
+            // rho < rhoIgnoreMin:
+            //     Hessian prediction is larger than measured residual.
+            //     Prune/reduce Hessian score.
+            //
+            // rho > rhoIgnoreMax:
+            //     Hessian prediction is smaller than measured residual.
+            //     Refine/increase Hessian score.
+            // ------------------------------------------------------------
+            float rhoIgnoreMin = std::min(
+                mResidualConfidenceTau0,
+                mResidualConfidenceTau1
+            );
+
+            float rhoIgnoreMax = std::max(
+                mResidualConfidenceTau0,
+                mResidualConfidenceTau1
+            );
+
+            rhoIgnoreMin = std::max(rhoIgnoreMin, 1e-6f);
+            rhoIgnoreMax = std::max(rhoIgnoreMax, rhoIgnoreMin + 1e-6f);
+
+            // Suppress only the extra gain above 1 when signal is tiny.
+            // Base correction strength is still applied outside the dead zone.
+            float signal = std::max(observed, predicted);
+
+            signalConfidence =
+                signal / (signal + mResidualConfidenceEps);
+
+            // ------------------------------------------------------------
+            // Gain limits derived from scale limits.
+            //
+            // scale = 1 - pruneStrength  * gain
+            // scale = 1 + refineStrength * gain
+            //
+            // Therefore:
+            // maxPruneGain  = (1 - minScale) / pruneStrength
+            // maxRefineGain = (maxScale - 1) / refineStrength
+            //
+            // This removes the need for a separate hard-coded gainMax.
+            // ------------------------------------------------------------
+            const float eps = 1e-6f;
+
+            float maxPruneGain =
+                (1.0f - mResidualCorrectionMinScale) /
+                std::max(mResidualPruneStrength, eps);
+
+            float maxRefineGain =
+                (mResidualCorrectionMaxScale - 1.0f) /
+                std::max(mResidualRefineStrength, eps);
+
+            // Ensure the gain cap does not break the rule:
+            // outside dead zone, gain should be at least 1.
+            maxPruneGain = std::max(1.0f, maxPruneGain);
+            maxRefineGain = std::max(1.0f, maxRefineGain);
+
+            float rawGain = 0.0f;
+            float correctionGain = 0.0f;
+
+            scale = 1.0f;
+
+            if (rho < rhoIgnoreMin)
+            {
+                // Hessian overestimates the measured residual.
+                //
+                // rawGain >= 1 outside the dead zone.
+                rawGain =
+                    rhoIgnoreMin / std::max(rho, 1e-6f);
+
+                rawGain =
+                    std::min(rawGain, maxPruneGain);
+
+                // Important:
+                // Do not multiply the whole gain by signalConfidence.
+                // Only damp the extra part above 1.
+                //
+                // Therefore correctionGain >= 1 outside the dead zone.
+                correctionGain =
+                    1.0f + signalConfidence * (rawGain - 1.0f);
+
+                correctionGain =
+                    std::max(1.0f, correctionGain);
+
+                scale =
+                    1.0f -
+                    mResidualPruneStrength * correctionGain;
+            }
+            else if (rho > rhoIgnoreMax)
+            {
+                // Hessian underestimates the measured residual.
+                //
+                // rawGain >= 1 outside the dead zone.
+                rawGain =
+                    rho / std::max(rhoIgnoreMax, 1e-6f);
+
+                rawGain =
+                    std::min(rawGain, maxRefineGain);
+
+                // Same rule:
+                // base refine strength is always applied outside dead zone.
+                correctionGain =
+                    1.0f + signalConfidence * (rawGain - 1.0f);
+
+                correctionGain =
+                    std::max(1.0f, correctionGain);
+
+                scale =
+                    1.0f +
+                    mResidualRefineStrength * correctionGain;
+            }
+            else
+            {
+                // Inside dead zone.
+                rawGain = 0.0f;
+                correctionGain = 0.0f;
+                scale = 1.0f;
+            }
+
+            disagreementConfidence = rawGain;
+            residualConfidence = correctionGain;
+
+            // Final safety clamp.
+            // With derived gain limits this should normally not be active,
+            // except for numerical safety or inconsistent parameter settings.
             scale = std::max(
                 mResidualCorrectionMinScale,
                 std::min(mResidualCorrectionMaxScale, scale)
             );
-
 
             c.residualObservedError = observed;
             c.residualRatio = rho;
             c.residualCorrectionScale = scale;
 
             validResidual = true;
+            c.residualCorrectionValid = true;
         }
     }
 
     // Record directly during construction.
-    // This gives paper-useful statistics without scanning corners afterward.
     recordResidualSampleForPaper(
         parentLevel,
         hasResidualParent,
@@ -871,7 +1017,11 @@ void AdaptiveProbeVolume::setCornerData(
         observed,
         predicted,
         rho,
-        scale
+        scale,
+        logRatioAbs,
+        disagreementConfidence,
+        signalConfidence,
+        residualConfidence
     );
 }
 
@@ -1014,8 +1164,47 @@ void AdaptiveProbeVolume::finishBatch()
         //}
         //float avgProbeError = 0.0f;
         //avgProbeError = totalError / 8.0f;
-        float totalCorrectedError = 0.0f;
+        //float totalCorrectedError = 0.0f;
+        //float totalHessianPredictedError = 0.0f;
+
+        //for (int k = 0; k < 8; ++k)
+        //{
+        //    int cIdx = mProbes[probeIdx].corners[k];
+        //    const Corner& c = mCorners[cIdx];
+
+        //    // Original Hessian prediction:
+        //    // E_abs = 0.5 * ||lambda|| * ||Delta x||^2
+        //    float hessianError = 0.5f * c.maxLambdaVecL2 * distSq;
+
+        //    // Store the uncorrected prediction separately.
+        //    // This is used as parent predicted error for newly created child points.
+        //    totalHessianPredictedError += hessianError;
+
+        //    float correctedError = hessianError;
+
+        //    if (mUseResidualCorrection)
+        //    {
+        //        correctedError *= c.residualCorrectionScale;
+        //    }
+
+        //    //if (mUseRelativeError)
+        //    //{
+        //    //    float norm = std::max(c.coeffVecL2, 1e-5f);
+        //    //    correctedError /= norm;
+        //    //}
+
+        //    totalCorrectedError += correctedError;
+        //}
+
+        //float avgProbeError = totalCorrectedError / 8.0f;
+
+        //// This is the parent Hessian prediction before residual scaling.
+        //// New child points will use this as residualPredictedError.
+        //float avgHessianPredictedError = totalHessianPredictedError / 8.0f;
         float totalHessianPredictedError = 0.0f;
+
+        float maxResidualScale = 0.0f;
+        bool hasValidResidualScale = false;
 
         for (int k = 0; k < 8; ++k)
         {
@@ -1024,34 +1213,41 @@ void AdaptiveProbeVolume::finishBatch()
 
             // Original Hessian prediction:
             // E_abs = 0.5 * ||lambda|| * ||Delta x||^2
-            float hessianError = 0.5f * c.maxLambdaVecL2 * distSq;
+            float hessianError =
+                0.5f *
+                c.maxLambdaVecL2 *
+                distSq;
 
-            // Store the uncorrected prediction separately.
-            // This is used as parent predicted error for newly created child points.
-            totalHessianPredictedError += hessianError;
+            totalHessianPredictedError +=
+                hessianError;
 
-            float correctedError = hessianError;
-
-            if (mUseResidualCorrection)
+            // Use only spawned/evaluated residual corners.
+            // Inherited/root corners may have scale = 1 only because they have
+            // no residual observation, not because they are actually neutral.
+            if (mUseResidualCorrection &&
+                c.residualCorrectionValid)
             {
-                correctedError *= c.residualCorrectionScale;
+                maxResidualScale =
+                    std::max(
+                        maxResidualScale,
+                        c.residualCorrectionScale
+                    );
+
+                hasValidResidualScale = true;
             }
-
-            //if (mUseRelativeError)
-            //{
-            //    float norm = std::max(c.coeffVecL2, 1e-5f);
-            //    correctedError /= norm;
-            //}
-
-            totalCorrectedError += correctedError;
         }
 
-        float avgProbeError = totalCorrectedError / 8.0f;
+        float avgHessianPredictedError =
+            totalHessianPredictedError / 8.0f;
 
-        // This is the parent Hessian prediction before residual scaling.
-        // New child points will use this as residualPredictedError.
-        float avgHessianPredictedError = totalHessianPredictedError / 8.0f;
+        float cellResidualScale =
+            hasValidResidualScale
+            ? maxResidualScale
+            : 1.0f;
 
+        float avgProbeError =
+            avgHessianPredictedError *
+            cellResidualScale;
         recordResidualDecisionForPaper(
             mProbes[probeIdx].level,
             avgHessianPredictedError,
@@ -2513,7 +2709,11 @@ void AdaptiveProbeVolume::recordResidualSampleForPaper(
     float observedResidual,
     float predictedParentError,
     float rho,
-    float scale
+    float scale,
+    float logRatioAbs,
+    float disagreementConfidence,
+    float signalConfidence,
+    float residualConfidence
 )
 {
     auto recordOne = [&](ResidualSamplePaperStats& s)
@@ -2541,20 +2741,95 @@ void AdaptiveProbeVolume::recordResidualSampleForPaper(
             s.residualRatio.add(rho);
             s.correctionScale.add(scale);
 
-            const float eps = 1e-5f;
+            const float scaleOneEps = 1e-5f;
 
-            if (scale < 1.0f - eps)
+            // Tolerance for "near min/max scale" statistics.
+            // 1e-3 means 0.500228 counts as near 0.5.
+            const float scaleLimitEps = 1e-3f;
+
+            if (scale < 1.0f - scaleOneEps)
                 s.scaleBelowOne++;
-            else if (scale > 1.0f + eps)
+            else if (scale > 1.0f + scaleOneEps)
                 s.scaleAboveOne++;
             else
                 s.scaleEqualOne++;
 
-            if (std::abs(scale - mResidualCorrectionMinScale) <= eps)
+            // Count values that are effectively at the min/max scale limit.
+            // This is better interpreted as "near min/max limit", not necessarily
+            // "the final clamp operation was exactly triggered".
+            if (scale <= mResidualCorrectionMinScale + scaleLimitEps)
                 s.scaleAtMinClamp++;
 
-            if (std::abs(scale - mResidualCorrectionMaxScale) <= eps)
+            if (scale >= mResidualCorrectionMaxScale - scaleLimitEps)
                 s.scaleAtMaxClamp++;
+            s.logRatioAbs.add(logRatioAbs);
+            s.disagreementConfidence.add(disagreementConfidence);
+            s.signalConfidence.add(signalConfidence);
+            s.residualConfidence.add(residualConfidence);
+
+            // ------------------------------------------------------------
+ // Dead-zone residual statistics.
+ //
+ // In the new formulation:
+ //     mResidualConfidenceTau0 and mResidualConfidenceTau1
+ //     are rho ignore-range bounds, e.g. 0.9 and 1.1.
+ //
+ // rho < rhoIgnoreMin:
+ //     Hessian overestimates residual -> pruning side
+ //
+ // rho inside [rhoIgnoreMin, rhoIgnoreMax]:
+ //     residual correction ignored
+ //
+ // rho > rhoIgnoreMax:
+ //     Hessian underestimates residual -> refinement side
+ // ------------------------------------------------------------
+
+            float rhoIgnoreMin = std::min(
+                mResidualConfidenceTau0,
+                mResidualConfidenceTau1
+            );
+
+            float rhoIgnoreMax = std::max(
+                mResidualConfidenceTau0,
+                mResidualConfidenceTau1
+            );
+
+            rhoIgnoreMin = std::max(rhoIgnoreMin, 1e-6f);
+            rhoIgnoreMax = std::max(rhoIgnoreMax, rhoIgnoreMin + 1e-6f);
+
+            if (rho < rhoIgnoreMin)
+            {
+                // Prune-side correction.
+                s.overEstimateSignal++;
+            }
+            else if (rho > rhoIgnoreMax)
+            {
+                // Refine-side correction.
+                s.underEstimateSignal++;
+            }
+            else
+            {
+                // Inside dead zone.
+                // No residual correction should be applied.
+                s.nearConsistentSignal++;
+            }
+
+            // Reinterpret these existing counters:
+            //
+            // lowConfidenceSamples:
+            //     correction gain is effectively zero.
+            //     Usually inside the ignore range, or suppressed by weak signal.
+            //
+            // highConfidenceSamples:
+            //     correction gain reaches at least the base strength.
+            //     That means residualConfidence >= 1.
+            const float gainEps = 1e-5f;
+
+            if (residualConfidence <= gainEps)
+                s.lowConfidenceSamples++;
+
+            if (residualConfidence >= 1.0f - gainEps)
+                s.highConfidenceSamples++;
         };
 
     recordOne(mResidualPaperStats.allSamples);
@@ -2642,7 +2917,7 @@ void AdaptiveProbeVolume::printResidualPaperStats(std::ostream& out) const
             out << " Scale > 1:                   " << s.scaleAboveOne
                 << " (" << percentForPaper(s.scaleAboveOne, s.validResidualCorners) << "%)\n";
 
-            out << " Scale at min clamp:          " << s.scaleAtMinClamp
+            out << " Scale near min limit:          " << s.scaleAtMinClamp
                 << " (" << percentForPaper(s.scaleAtMinClamp, s.validResidualCorners) << "%)\n";
             out << " Scale at max clamp:          " << s.scaleAtMaxClamp
                 << " (" << percentForPaper(s.scaleAtMaxClamp, s.validResidualCorners) << "%)\n";
@@ -2651,6 +2926,31 @@ void AdaptiveProbeVolume::printResidualPaperStats(std::ostream& out) const
             printScalar("Predicted parent error E_pred", s.predictedParentError);
             printScalar("Residual ratio rho", s.residualRatio);
             printScalar("Correction scale s", s.correctionScale);
+
+            out << " Prune-side signal rho < rhoIgnoreMin: "
+                << s.overEstimateSignal
+                << " (" << percentForPaper(s.overEstimateSignal, s.validResidualCorners) << "%)\n";
+
+            out << " Refine-side signal rho > rhoIgnoreMax: "
+                << s.underEstimateSignal
+                << " (" << percentForPaper(s.underEstimateSignal, s.validResidualCorners) << "%)\n";
+
+            out << " Ignored dead-zone samples: "
+                << s.nearConsistentSignal
+                << " (" << percentForPaper(s.nearConsistentSignal, s.validResidualCorners) << "%)\n";
+
+            out << " Zero/ignored correction samples: "
+                << s.lowConfidenceSamples
+                << " (" << percentForPaper(s.lowConfidenceSamples, s.validResidualCorners) << "%)\n";
+
+            out << " Base-or-stronger correction samples: "
+                << s.highConfidenceSamples
+                << " (" << percentForPaper(s.highConfidenceSamples, s.validResidualCorners) << "%)\n";
+
+            printScalar("Abs log ratio", s.logRatioAbs);
+            printScalar("Correction confidence/gain", s.disagreementConfidence);
+            printScalar("Signal confidence", s.signalConfidence);
+            printScalar("Final correction gain", s.residualConfidence);
         };
 
     auto printDecision = [&](const char* title, const ResidualDecisionPaperStats& d)
@@ -2703,7 +3003,7 @@ void AdaptiveProbeVolume::printResidualPaperStats(std::ostream& out) const
 
     out << " Threshold:                   " << mCurrentThreshold << "\n";
     out << " Residual correction enabled: " << (mUseResidualCorrection ? "Yes" : "No") << "\n";
-    out << " Eta:                         " << mResidualCorrectionEta << "\n";
+    //out << " Eta:                         " << mResidualCorrectionEta << "\n";
     out << " Scale min / max:             "
         << mResidualCorrectionMinScale << " / "
         << mResidualCorrectionMaxScale << "\n";
@@ -2794,8 +3094,17 @@ void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
                 << percentForPaper(s.scaleBelowOne, s.validResidualCorners) << ","
                 << percentForPaper(s.scaleAboveOne, s.validResidualCorners) << ","
                 << percentForPaper(s.scaleAtMinClamp, s.validResidualCorners) << ","
-                << percentForPaper(s.scaleAtMaxClamp, s.validResidualCorners) << ",";
-
+                << percentForPaper(s.scaleAtMaxClamp, s.validResidualCorners) << ","
+                << s.overEstimateSignal << ","
+                << s.underEstimateSignal << ","
+                << s.nearConsistentSignal << ","
+                << s.lowConfidenceSamples << ","
+                << s.highConfidenceSamples << ","
+                << percentForPaper(s.overEstimateSignal, s.validResidualCorners) << ","
+                << percentForPaper(s.underEstimateSignal, s.validResidualCorners) << ","
+                << percentForPaper(s.nearConsistentSignal, s.validResidualCorners) << ","
+                << percentForPaper(s.lowConfidenceSamples, s.validResidualCorners) << ","
+                << percentForPaper(s.highConfidenceSamples, s.validResidualCorners) << ",";
             writeScalarColumns(csv, s.observedResidual);
             csv << ",";
             writeScalarColumns(csv, s.predictedParentError);
@@ -2856,7 +3165,11 @@ void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
             csv
                 << "threshold,"
                 << "residualEnabled,"
-                << "eta,"
+                << "pruneStrength,"
+                << "refineStrength,"
+                << "rhoIgnoreMin,"
+                << "rhoIgnoreMax,"
+                << "signalConfidenceEps,"
                 << "scaleMin,"
                 << "scaleMax,"
                 << "maxLevel,"
@@ -2882,6 +3195,16 @@ void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
                 << "sample_scaleAboveOnePercent,"
                 << "sample_scaleAtMinClampPercent,"
                 << "sample_scaleAtMaxClampPercent,"
+                << "sample_pruneSideSignal,"
+                << "sample_refineSideSignal,"
+                << "sample_ignoredDeadZone,"
+                << "sample_zeroIgnoredCorrection,"
+                << "sample_baseOrStrongerCorrection,"
+                << "sample_pruneSideSignalPercent,"
+                << "sample_refineSideSignalPercent,"
+                << "sample_ignoredDeadZonePercent,"
+                << "sample_zeroIgnoredCorrectionPercent,"
+                << "sample_baseOrStrongerCorrectionPercent,"
                 << "observed_count,observed_mean,observed_std,observed_median,observed_p05,observed_p95,observed_min,observed_max,"
                 << "predicted_count,predicted_mean,predicted_std,predicted_median,predicted_p05,predicted_p95,predicted_min,predicted_max,"
                 << "rho_count,rho_mean,rho_std,rho_median,rho_p05,rho_p95,rho_min,rho_max,"
@@ -2905,7 +3228,11 @@ void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
             csv
                 << mCurrentThreshold << ","
                 << (mUseResidualCorrection ? 1 : 0) << ","
-                << mResidualCorrectionEta << ","
+                << mResidualPruneStrength << ","
+                << mResidualRefineStrength << ","
+                << mResidualConfidenceTau0 << ","
+                << mResidualConfidenceTau1 << ","
+                << mResidualConfidenceEps << ","
                 << mResidualCorrectionMinScale << ","
                 << mResidualCorrectionMaxScale << ","
                 << mMaxLevel << ","
@@ -2952,6 +3279,16 @@ void AdaptiveProbeVolume::exportResidualPaperStatsCSV(
                 << "scaleAboveOnePercent,"
                 << "scaleAtMinClampPercent,"
                 << "scaleAtMaxClampPercent,"
+                << "sample_pruneSideSignal,"
+                << "sample_refineSideSignal,"
+                << "sample_ignoredDeadZone,"
+                << "sample_zeroIgnoredCorrection,"
+                << "sample_baseOrStrongerCorrection,"
+                << "sample_pruneSideSignalPercent,"
+                << "sample_refineSideSignalPercent,"
+                << "sample_ignoredDeadZonePercent,"
+                << "sample_zeroIgnoredCorrectionPercent,"
+                << "sample_baseOrStrongerCorrectionPercent,"
                 << "observed_count,observed_mean,observed_std,observed_median,observed_p05,observed_p95,observed_min,observed_max,"
                 << "predicted_count,predicted_mean,predicted_std,predicted_median,predicted_p05,predicted_p95,predicted_min,predicted_max,"
                 << "rho_count,rho_mean,rho_std,rho_median,rho_p05,rho_p95,rho_min,rho_max,"
@@ -3056,7 +3393,16 @@ void AdaptiveProbeVolume::printResidualMainStats(std::ostream& out) const
 
     out << " Threshold:                         " << mCurrentThreshold << "\n";
     out << " Residual correction enabled:       " << (mUseResidualCorrection ? "Yes" : "No") << "\n";
-    out << " Eta:                               " << mResidualCorrectionEta << "\n";
+    out << " Prune strength:                    " << mResidualPruneStrength << "\n";
+    out << " Refine strength:                   " << mResidualRefineStrength << "\n";
+    out << " Rho ignore range min / max:        "
+        << std::min(mResidualConfidenceTau0, mResidualConfidenceTau1)
+        << " / "
+        << std::max(mResidualConfidenceTau0, mResidualConfidenceTau1)
+        << "\n";
+
+    out << " Signal confidence epsilon:         "
+        << mResidualConfidenceEps << "\n";
     out << " Scale min / max:                   "
         << mResidualCorrectionMinScale << " / "
         << mResidualCorrectionMaxScale << "\n";
@@ -3084,11 +3430,11 @@ void AdaptiveProbeVolume::printResidualMainStats(std::ostream& out) const
         << s.scaleAboveOne
         << " (" << scaleAboveOnePercent << "%)\n";
 
-    out << " Scale at min clamp:                "
+    out << " Scale near min limit:                "
         << s.scaleAtMinClamp
         << " (" << minClampPercent << "%)\n";
 
-    out << " Scale at max clamp:                "
+    out << " Scale near max limit:                "
         << s.scaleAtMaxClamp
         << " (" << maxClampPercent << "%)\n";
 
@@ -3135,6 +3481,31 @@ void AdaptiveProbeVolume::printResidualMainStats(std::ostream& out) const
     out << " Median corrected/original error:   "
         << percentileForPaper(d.correctedOverOriginalRatio.values, 50.0) << "\n";
 
+    out << " Prune-side signal rho < rhoIgnoreMin: "
+        << s.overEstimateSignal
+        << " (" << percent(s.overEstimateSignal, s.validResidualCorners) << "%)\n";
+
+    out << " Refine-side signal rho > rhoIgnoreMax: "
+        << s.underEstimateSignal
+        << " (" << percent(s.underEstimateSignal, s.validResidualCorners) << "%)\n";
+
+    out << " Ignored dead-zone samples:          "
+        << s.nearConsistentSignal
+        << " (" << percent(s.nearConsistentSignal, s.validResidualCorners) << "%)\n";
+
+    out << " Zero/ignored correction samples:    "
+        << s.lowConfidenceSamples
+        << " (" << percent(s.lowConfidenceSamples, s.validResidualCorners) << "%)\n";
+
+    out << " Base-or-stronger correction samples:"
+        << s.highConfidenceSamples
+        << " (" << percent(s.highConfidenceSamples, s.validResidualCorners) << "%)\n";
+
+    out << " Mean correction gain:               "
+        << s.residualConfidence.mean() << "\n";
+
+    out << " Median correction gain:             "
+        << percentileForPaper(s.residualConfidence.values, 50.0) << "\n";
     out << "================================================================================\n";
 }
 
@@ -3190,7 +3561,11 @@ void AdaptiveProbeVolume::exportResidualMainStatsCSV(
     csv
         << "threshold,"
         << "residualEnabled,"
-        << "eta,"
+        << "pruneStrength,"
+        << "refineStrength,"
+        << "rhoIgnoreMin,"
+        << "rhoIgnoreMax,"
+        << "signalConfidenceEps,"
         << "scaleMin,"
         << "scaleMax,"
         << "totalProbes,"
@@ -3226,7 +3601,11 @@ void AdaptiveProbeVolume::exportResidualMainStatsCSV(
     csv
         << mCurrentThreshold << ","
         << (mUseResidualCorrection ? 1 : 0) << ","
-        << mResidualCorrectionEta << ","
+        << mResidualPruneStrength << ","
+        << mResidualRefineStrength << ","
+        << std::min(mResidualConfidenceTau0, mResidualConfidenceTau1) << ","
+        << std::max(mResidualConfidenceTau0, mResidualConfidenceTau1) << ","
+        << mResidualConfidenceEps << ","
         << mResidualCorrectionMinScale << ","
         << mResidualCorrectionMaxScale << ","
         << mProbes.size() << ","
@@ -3260,22 +3639,181 @@ void AdaptiveProbeVolume::exportResidualMainStatsCSV(
         << "\n";
 }
 
+static float quadraticForm3x3(
+    const float3x3& H,
+    const float3& d
+)
+{
+    float3 Hd;
+
+    Hd.x =
+        H[0][0] * d.x +
+        H[0][1] * d.y +
+        H[0][2] * d.z;
+
+    Hd.y =
+        H[1][0] * d.x +
+        H[1][1] * d.y +
+        H[1][2] * d.z;
+
+    Hd.z =
+        H[2][0] * d.x +
+        H[2][1] * d.y +
+        H[2][2] * d.z;
+
+    return dot(d, Hd);
+}
+
+static float3 worldDisplacementToHessianSpace(
+    const float3& dWorld
+)
+{
+    // Hessians are computed in your polar/swizzled coordinate order.
+    //
+    // x_hessian = world Z
+    // y_hessian = world X
+    // z_hessian = world Y
+    return float3(
+        dWorld.z,
+        dWorld.x,
+        dWorld.y
+    );
+}
+
+static float computeDirectionalHessianResidualPredictionSHSpace(
+    const std::vector<float3x3>& hessians,
+    const float3& dWorld
+)
+{
+    if (hessians.empty())
+        return 0.0f;
+
+    float3 d =
+        worldDisplacementToHessianSpace(dWorld);
+
+    const size_t basisCount =
+        std::min<size_t>(hessians.size(), 9);
+
+    float sumSq = 0.0f;
+
+    for (size_t basisIdx = 0; basisIdx < basisCount; ++basisIdx)
+    {
+        // Direction-aware second-order prediction for this SH coefficient:
+        //
+        //     0.5 * d^T H_lm d
+        //
+        // We square per coefficient and then take the L2 norm.
+        // This avoids cancellation across SH coefficients.
+        float q =
+            0.5f *
+            quadraticForm3x3(
+                hessians[basisIdx],
+                d
+            );
+
+        sumSq += q * q;
+    }
+
+    return std::sqrt(sumSq);
+}
+
+//float AdaptiveProbeVolume::computeParentPointHessianPrediction(
+//    int parentProbeIdx,
+//    const float3& position
+//) const
+//{
+//    if (parentProbeIdx < 0 || parentProbeIdx >= int(mProbes.size()))
+//        return 0.0f;
+//
+//    const Probe& p = mProbes[parentProbeIdx];
+//
+//    float3 pMin = mCorners[p.corners[0]].position;
+//    float3 pMax = pMin;
+//
+//    for (int k = 1; k < 8; ++k)
+//    {
+//        const float3& cPos = mCorners[p.corners[k]].position;
+//
+//        pMin.x = std::min(pMin.x, cPos.x);
+//        pMin.y = std::min(pMin.y, cPos.y);
+//        pMin.z = std::min(pMin.z, cPos.z);
+//
+//        pMax.x = std::max(pMax.x, cPos.x);
+//        pMax.y = std::max(pMax.y, cPos.y);
+//        pMax.z = std::max(pMax.z, cPos.z);
+//    }
+//
+//    float3 extent = pMax - pMin;
+//
+//    const float eps = 1e-8f;
+//
+//    float tx = extent.x > eps
+//        ? (position.x - pMin.x) / extent.x
+//        : 0.5f;
+//
+//    float ty = extent.y > eps
+//        ? (position.y - pMin.y) / extent.y
+//        : 0.5f;
+//
+//    float tz = extent.z > eps
+//        ? (position.z - pMin.z) / extent.z
+//        : 0.5f;
+//
+//    tx = std::max(0.0f, std::min(1.0f, tx));
+//    ty = std::max(0.0f, std::min(1.0f, ty));
+//    tz = std::max(0.0f, std::min(1.0f, tz));
+//
+//    float3 center = 0.5f * (pMin + pMax);
+//
+//    float predictedPointResidual = 0.0f;
+//
+//    for (int k = 0; k < 8; ++k)
+//    {
+//        const Corner& c = mCorners[p.corners[k]];
+//        const float3& cPos = c.position;
+//
+//        float wx = cPos.x >= center.x ? tx : (1.0f - tx);
+//        float wy = cPos.y >= center.y ? ty : (1.0f - ty);
+//        float wz = cPos.z >= center.z ? tz : (1.0f - tz);
+//
+//        float w = wx * wy * wz;
+//
+//        float3 dx = position - cPos;
+//        float distSq = dot(dx, dx);
+//
+//        float cornerPred =
+//            0.5f * c.maxLambdaVecL2 * distSq;
+//
+//        predictedPointResidual += w * cornerPred;
+//    }
+//
+//    return predictedPointResidual;
+//}
+
 float AdaptiveProbeVolume::computeParentPointHessianPrediction(
     int parentProbeIdx,
     const float3& position
 ) const
 {
-    if (parentProbeIdx < 0 || parentProbeIdx >= int(mProbes.size()))
+    if (parentProbeIdx < 0 ||
+        parentProbeIdx >= int(mProbes.size()))
+    {
         return 0.0f;
+    }
 
-    const Probe& p = mProbes[parentProbeIdx];
+    const Probe& p =
+        mProbes[parentProbeIdx];
 
-    float3 pMin = mCorners[p.corners[0]].position;
-    float3 pMax = pMin;
+    float3 pMin =
+        mCorners[p.corners[0]].position;
+
+    float3 pMax =
+        pMin;
 
     for (int k = 1; k < 8; ++k)
     {
-        const float3& cPos = mCorners[p.corners[k]].position;
+        const float3& cPos =
+            mCorners[p.corners[k]].position;
 
         pMin.x = std::min(pMin.x, cPos.x);
         pMin.y = std::min(pMin.y, cPos.y);
@@ -3286,19 +3824,24 @@ float AdaptiveProbeVolume::computeParentPointHessianPrediction(
         pMax.z = std::max(pMax.z, cPos.z);
     }
 
-    float3 extent = pMax - pMin;
+    float3 extent =
+        pMax - pMin;
 
-    const float eps = 1e-8f;
+    const float eps =
+        1e-8f;
 
-    float tx = extent.x > eps
+    float tx =
+        extent.x > eps
         ? (position.x - pMin.x) / extent.x
         : 0.5f;
 
-    float ty = extent.y > eps
+    float ty =
+        extent.y > eps
         ? (position.y - pMin.y) / extent.y
         : 0.5f;
 
-    float tz = extent.z > eps
+    float tz =
+        extent.z > eps
         ? (position.z - pMin.z) / extent.z
         : 0.5f;
 
@@ -3306,29 +3849,146 @@ float AdaptiveProbeVolume::computeParentPointHessianPrediction(
     ty = std::max(0.0f, std::min(1.0f, ty));
     tz = std::max(0.0f, std::min(1.0f, tz));
 
-    float3 center = 0.5f * (pMin + pMax);
+    float3 center =
+        0.5f * (pMin + pMax);
 
-    float predictedPointResidual = 0.0f;
+    // Signed predicted SH residual vector.
+    //
+    // We accumulate signed quadratic predictions per SH coefficient,
+    // then take the L2 norm only after all parent-corner contributions
+    // have been blended.
+    float predictedResidualSH[9] =
+    {
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.0f
+    };
+
+    float worstCaseFallback =
+        0.0f;
+
+    bool hasDirectionalHessian =
+        false;
 
     for (int k = 0; k < 8; ++k)
     {
-        const Corner& c = mCorners[p.corners[k]];
-        const float3& cPos = c.position;
+        int cornerIdx =
+            p.corners[k];
 
-        float wx = cPos.x >= center.x ? tx : (1.0f - tx);
-        float wy = cPos.y >= center.y ? ty : (1.0f - ty);
-        float wz = cPos.z >= center.z ? tz : (1.0f - tz);
+        if (cornerIdx < 0 ||
+            cornerIdx >= int(mCorners.size()))
+        {
+            continue;
+        }
 
-        float w = wx * wy * wz;
+        const Corner& c =
+            mCorners[cornerIdx];
 
-        float3 dx = position - cPos;
-        float distSq = dot(dx, dx);
+        const float3& cPos =
+            c.position;
 
-        float cornerPred =
-            0.5f * c.maxLambdaVecL2 * distSq;
+        float wx =
+            cPos.x >= center.x
+            ? tx
+            : (1.0f - tx);
 
-        predictedPointResidual += w * cornerPred;
+        float wy =
+            cPos.y >= center.y
+            ? ty
+            : (1.0f - ty);
+
+        float wz =
+            cPos.z >= center.z
+            ? tz
+            : (1.0f - tz);
+
+        float w =
+            wx * wy * wz;
+
+        float3 dWorld =
+            position - cPos;
+
+        float distSq =
+            dot(dWorld, dWorld);
+
+        // Old conservative scalar prediction.
+        // Used only as fallback if Hessians are unavailable.
+        worstCaseFallback +=
+            w *
+            0.5f *
+            c.maxLambdaVecL2 *
+            distSq;
+
+        if (c.shHessians.empty())
+            continue;
+
+        hasDirectionalHessian = true;
+
+        float3 d =
+            worldDisplacementToHessianSpace(dWorld);
+
+        const size_t basisCount =
+            std::min<size_t>(c.shHessians.size(), 9);
+
+        for (size_t basisIdx = 0; basisIdx < basisCount; ++basisIdx)
+        {
+            float q =
+                0.5f *
+                quadraticForm3x3(
+                    c.shHessians[basisIdx],
+                    d
+                );
+
+            // Important:
+            // Do NOT take abs(q) here.
+            // Do NOT square here.
+            // Keep the sign and blend in SH-vector space.
+            predictedResidualSH[basisIdx] +=
+                w * q;
+        }
     }
 
-    return predictedPointResidual;
+    if (!hasDirectionalHessian)
+        return worstCaseFallback;
+
+    float sumSq =
+        0.0f;
+
+    for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+    {
+        sumSq +=
+            predictedResidualSH[basisIdx] *
+            predictedResidualSH[basisIdx];
+    }
+
+    float signedVectorPrediction =
+        std::sqrt(sumSq);
+
+    if (!std::isfinite(signedVectorPrediction) ||
+        signedVectorPrediction <= 0.0f)
+    {
+        return worstCaseFallback;
+    }
+
+    // Test control.
+    //
+    // 0.0 = old worst-case denominator
+    // 1.0 = signed SH-vector directional denominator
+    //
+    // Try 1.0 first. If it over-refines too much, try 0.5.
+    const float signedDirectionalBlend =
+        1.0f;
+
+    float prediction =
+        (1.0f - signedDirectionalBlend) *
+        worstCaseFallback +
+        signedDirectionalBlend *
+        signedVectorPrediction;
+
+    return prediction;
+}
+
+int AdaptiveProbeVolume::findLeafProbeIndexCPU(float3 posW) const
+{
+    return traverseOctreeCPU(posW);
 }
