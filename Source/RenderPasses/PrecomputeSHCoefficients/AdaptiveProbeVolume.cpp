@@ -692,7 +692,229 @@ static float computeLambdaVecL2_IrradianceSpace(const std::vector<float3x3>& hes
 
     return std::sqrt(sumLambdaSq / float(normals.size()));
 }
+static float luminance709Local(const float3& c)
+{
+    return dot(c, float3(0.2126f, 0.7152f, 0.0722f));
+}
 
+static float3 luminanceGradientWorld(const GradSHCoeff& g)
+{
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    // g.r, g.g, g.b are RGB gradients.
+    // First convert RGB gradient to one scalar luminance gradient.
+    float3 stored =
+        g.r * kLuma.x +
+        g.g * kLuma.y +
+        g.b * kLuma.z;
+
+    // Stored gradient convention in your code:
+    // stored.x = d/d world Z
+    // stored.y = d/d world X
+    // stored.z = d/d world Y
+    //
+    // Return normal world order:
+    // x = d/d world X
+    // y = d/d world Y
+    // z = d/d world Z
+    return float3(stored.y, stored.z, stored.x);
+}
+
+float AdaptiveProbeVolume::computeEdgeGradientConsistencyScale(
+    int probeIdx
+) const
+{
+    if (probeIdx < 0 || probeIdx >= int(mProbes.size()))
+        return 1.0f;
+
+    const Probe& p = mProbes[probeIdx];
+
+    // Corner order used by your adaptive volume:
+    // 0 = (0,0,0)
+    // 1 = (0,0,1)
+    // 2 = (0,1,0)
+    // 3 = (0,1,1)
+    // 4 = (1,0,0)
+    // 5 = (1,0,1)
+    // 6 = (1,1,0)
+    // 7 = (1,1,1)
+    static const int kEdges[12][2] =
+    {
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}, // world X edges
+        {0, 2}, {1, 3}, {4, 6}, {5, 7}, // world Y edges
+        {0, 1}, {2, 3}, {4, 5}, {6, 7}  // world Z edges
+    };
+
+    // Ratio thresholds.
+    // ratio < 0.5: analytic gradient predicts much more variation than observed.
+    // ratio > 2.0: observed variation is much larger than analytic-gradient prediction.
+    const float edgePruneTau = 0.75f;
+    const float edgeRefineTau = 2.0f;
+    const float pruneRequiredLowEdgeFraction = 0.60f;
+
+    const float ratioEps =
+        std::max(mResidualCorrectionEps, 1e-6f);
+
+    const float signalEps =
+        std::max(mResidualConfidenceEps, 1e-6f);
+
+    float maxEdgeRatio = 0.0f;
+    float sumLogRatio = 0.0f;
+
+    int validEdgeCount = 0;
+    int lowRatioEdgeCount = 0;
+
+    for (int e = 0; e < 12; ++e)
+    {
+        const int localA = kEdges[e][0];
+        const int localB = kEdges[e][1];
+
+        const int cornerAIdx = p.corners[localA];
+        const int cornerBIdx = p.corners[localB];
+
+        if (cornerAIdx < 0 || cornerBIdx < 0)
+            continue;
+
+        if (cornerAIdx >= int(mCorners.size()) ||
+            cornerBIdx >= int(mCorners.size()))
+            continue;
+
+        const Corner& ca = mCorners[cornerAIdx];
+        const Corner& cb = mCorners[cornerBIdx];
+
+        size_t basisCount = 9;
+        basisCount = std::min(basisCount, ca.shCoeffs.size());
+        basisCount = std::min(basisCount, cb.shCoeffs.size());
+        basisCount = std::min(basisCount, ca.shGradients.size());
+        basisCount = std::min(basisCount, cb.shGradients.size());
+
+        if (basisCount == 0)
+            continue;
+
+        const float3 dWorld =
+            cb.position - ca.position;
+
+        float actualSq = 0.0f;
+        float predictedSq = 0.0f;
+
+        for (size_t basisIdx = 0; basisIdx < basisCount; ++basisIdx)
+        {
+            // Actual sampled SH coefficient change on this edge.
+            float actualDelta =
+                luminance709Local(cb.shCoeffs[basisIdx]) -
+                luminance709Local(ca.shCoeffs[basisIdx]);
+
+            // Analytic-gradient-predicted edge change:
+            //
+            // f(b) - f(a) ~= 0.5 * (grad_a + grad_b) dot (b - a)
+            float3 gradA =
+                luminanceGradientWorld(ca.shGradients[basisIdx]);
+
+            float3 gradB =
+                luminanceGradientWorld(cb.shGradients[basisIdx]);
+
+            float3 gradAvg =
+                0.5f * (gradA + gradB);
+
+            float predictedDelta =
+                dot(gradAvg, dWorld);
+
+            actualSq += actualDelta * actualDelta;
+            predictedSq += predictedDelta * predictedDelta;
+        }
+
+        const float actualNorm =
+            std::sqrt(actualSq);
+
+        const float predictedNorm =
+            std::sqrt(predictedSq);
+
+        // Raw consistency ratio.
+        // actual / predicted > 1 means real sampled variation is larger.
+        // actual / predicted < 1 means analytic gradient predicts more variation.
+        float rawRatio =
+            (actualNorm + ratioEps) /
+            (predictedNorm + ratioEps);
+
+        rawRatio =
+            std::max(rawRatio, 1e-6f);
+
+        // Confidence damping.
+        // If both actual and predicted edge signals are tiny, pull ratio toward 1.
+        const float signal =
+            std::max(actualNorm, predictedNorm);
+
+        const float signalConfidence =
+            signal / (signal + signalEps);
+
+        float dampedRatio =
+            std::exp(signalConfidence * std::log(rawRatio));
+
+        dampedRatio =
+            std::max(dampedRatio, 1e-6f);
+
+        maxEdgeRatio =
+            std::max(maxEdgeRatio, dampedRatio);
+
+        sumLogRatio +=
+            std::log(dampedRatio);
+
+        validEdgeCount++;
+
+        if (dampedRatio < edgePruneTau)
+            lowRatioEdgeCount++;
+    }
+
+    if (validEdgeCount == 0)
+        return 1.0f;
+
+    const float geoMeanRatio =
+        std::exp(sumLogRatio / float(validEdgeCount));
+
+    const float lowRatioFraction =
+        float(lowRatioEdgeCount) / float(validEdgeCount);
+
+    float scale = 1.0f;
+
+    // Refinement priority:
+    // If any edge strongly indicates underestimated variation,
+    // do not allow pruning for this cell.
+    if (maxEdgeRatio > edgeRefineTau)
+    {
+        const float rawGain =
+            maxEdgeRatio / edgeRefineTau;
+
+        const float extraGain =
+            std::max(0.0f, rawGain - 1.0f);
+
+        scale =
+            1.0f +
+            mResidualRefineStrength * extraGain;
+    }
+    else if (
+        geoMeanRatio < edgePruneTau &&
+        lowRatioFraction >= pruneRequiredLowEdgeFraction
+        )
+    {
+        const float rawGain =
+            edgePruneTau / std::max(geoMeanRatio, 1e-6f);
+
+        const float extraGain =
+            std::max(0.0f, rawGain - 1.0f);
+
+        scale =
+            1.0f -
+            mResidualPruneStrength * extraGain;
+    }
+
+    scale =
+        std::max(
+            mResidualCorrectionMinScale,
+            std::min(mResidualCorrectionMaxScale, scale)
+        );
+
+    return scale;
+}
 // ------------------------------------------------------------------
 // Lifecycle
 // ------------------------------------------------------------------
@@ -1203,16 +1425,11 @@ void AdaptiveProbeVolume::finishBatch()
         //float avgHessianPredictedError = totalHessianPredictedError / 8.0f;
         float totalHessianPredictedError = 0.0f;
 
-        float maxResidualScale = 0.0f;
-        bool hasValidResidualScale = false;
-
         for (int k = 0; k < 8; ++k)
         {
             int cIdx = mProbes[probeIdx].corners[k];
             const Corner& c = mCorners[cIdx];
 
-            // Original Hessian prediction:
-            // E_abs = 0.5 * ||lambda|| * ||Delta x||^2
             float hessianError =
                 0.5f *
                 c.maxLambdaVecL2 *
@@ -1220,34 +1437,53 @@ void AdaptiveProbeVolume::finishBatch()
 
             totalHessianPredictedError +=
                 hessianError;
-
-            // Use only spawned/evaluated residual corners.
-            // Inherited/root corners may have scale = 1 only because they have
-            // no residual observation, not because they are actually neutral.
-            if (mUseResidualCorrection &&
-                c.residualCorrectionValid)
-            {
-                maxResidualScale =
-                    std::max(
-                        maxResidualScale,
-                        c.residualCorrectionScale
-                    );
-
-                hasValidResidualScale = true;
-            }
         }
 
         float avgHessianPredictedError =
             totalHessianPredictedError / 8.0f;
 
         float cellResidualScale =
-            hasValidResidualScale
-            ? maxResidualScale
+            mUseResidualCorrection
+            ? computeEdgeGradientConsistencyScale(probeIdx)
             : 1.0f;
 
         float avgProbeError =
             avgHessianPredictedError *
             cellResidualScale;
+
+        bool originalSubdivide =
+            avgHessianPredictedError > mCurrentThreshold;
+
+        bool correctedSubdivide =
+            avgProbeError > mCurrentThreshold;
+
+        if (originalSubdivide != correctedSubdivide)
+        {
+            DecisionDebugVoxel debugVoxel;
+
+            debugVoxel.minPoint = mProbes[probeIdx].minPoint;
+            debugVoxel.maxPoint = mProbes[probeIdx].maxPoint;
+            debugVoxel.level = uint32_t(mProbes[probeIdx].level);
+
+            debugVoxel.originalError = avgHessianPredictedError;
+            debugVoxel.correctedError = avgProbeError;
+
+            debugVoxel.correctionScale =
+                avgHessianPredictedError > 1e-8f
+                ? avgProbeError / avgHessianPredictedError
+                : 1.0f;
+
+            if (originalSubdivide && !correctedSubdivide)
+            {
+                debugVoxel.kind = DecisionDebugKind::Pruned;
+            }
+            else if (!originalSubdivide && correctedSubdivide)
+            {
+                debugVoxel.kind = DecisionDebugKind::Added;
+            }
+
+            mDecisionDebugVoxels.push_back(debugVoxel);
+        }
         recordResidualDecisionForPaper(
             mProbes[probeIdx].level,
             avgHessianPredictedError,
@@ -2203,6 +2439,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
 )
 {
     resetResidualPaperStats();
+    mDecisionDebugVoxels.clear();
     uint32_t cellsPerAxis = 1u << mMaxLevel;
     uint64_t maxNodes = 0;
     uint64_t levelCount = 1;

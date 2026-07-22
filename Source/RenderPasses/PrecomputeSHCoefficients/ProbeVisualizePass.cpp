@@ -184,3 +184,71 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
     mpState->setVao(pVao);
 }
+
+void ProbeVisualizePass::setDecisionDebugData(
+    const std::vector<AdaptiveProbeVolume::DecisionDebugVoxel>& debugVoxels,
+    bool showPruned,
+    bool showAdded
+)
+{
+    mVertices.clear();
+
+    for (const auto& v : debugVoxels)
+    {
+        float3 color;
+
+        switch (v.kind)
+        {
+        case AdaptiveProbeVolume::DecisionDebugKind::Pruned:
+            if (!showPruned) continue;
+            color = float3(1.0f, 0.15f, 0.0f); // red/orange
+            break;
+
+        case AdaptiveProbeVolume::DecisionDebugKind::Added:
+            if (!showAdded) continue;
+            color = float3(0.0f, 0.65f, 1.0f); // blue/cyan
+            break;
+
+        default:
+            continue;
+        }
+
+        float3 size = v.maxPoint - v.minPoint;
+        float3 inflate = 0.01f * size;
+
+        generateProbeCube(
+            v.minPoint - inflate,
+            v.maxPoint + inflate,
+            color,
+            int(v.level),
+            true,
+            mVertices
+        );
+    }
+
+    if (mVertices.empty()) return;
+
+    const uint32_t vbSize =
+        uint32_t(sizeof(ProbeVertex) * mVertices.size());
+
+    pVertexBuffer = mpDevice->createBuffer(
+        vbSize,
+        ResourceBindFlags::Vertex,
+        MemoryType::Upload,
+        mVertices.data()
+    );
+
+    ref<VertexLayout> pLayout = VertexLayout::create();
+    ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
+
+    pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0);
+
+    pLayout->addBufferLayout(0, pBufLayout);
+
+    Vao::BufferVec buffers{ pVertexBuffer };
+    pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
+    mpState->setVao(pVao);
+}

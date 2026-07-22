@@ -122,4 +122,9 @@ private:
     void ProgressiveRefineBuild(RenderContext* pRenderContext);
     void exportIrradianceFieldErrorComparison();
     void exportResidualTopologyRegionErrorComparison();
+
+    bool mbShowDecisionDebugGrid = false;
+    ref<ProbeVisualizePass> mpDecisionDebugVisualizePass;
+    bool mbShowDecisionDebugPruned = true;
+    bool mbShowDecisionDebugAdded = true;
 };

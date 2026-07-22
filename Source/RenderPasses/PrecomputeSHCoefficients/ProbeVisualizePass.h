@@ -32,7 +32,11 @@ public:
 
     // New Setter
     void setDrawLeafOnly(bool enable) { mDrawLeafOnly = enable; }
-
+    void setDecisionDebugData(
+        const std::vector<AdaptiveProbeVolume::DecisionDebugVoxel>& debugVoxels,
+        bool showPruned,
+        bool showAdded
+    );
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
