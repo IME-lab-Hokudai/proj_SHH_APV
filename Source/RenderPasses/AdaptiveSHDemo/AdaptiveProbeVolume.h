@@ -13,7 +13,7 @@ public:
     {
         bool isLeaf = true;
         int level = 0;
-
+        bool addedByEdgeAware = false;
         float3 minPoint;
         float3 maxPoint;
 
@@ -60,7 +60,6 @@ public:
 
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
 
-    void constrainHangingNodes();
     void constrainHangingNodesHermite();
 
     static ref<AdaptiveProbeVolume> create(ref<Device> pDevice);

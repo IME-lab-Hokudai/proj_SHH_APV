@@ -45,7 +45,7 @@
 //const std::string loadFromFileName = "DirectAbsErr5DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr10DataSceneAvg.txt";
 //const std::string loadFromFileName = "DirectAbsErr5DataSceneAvg.txt";
-const std::string loadFromFileName = "DirectAbsErr2DataSceneAvg.txt";
+//const std::string loadFromFileName = "DirectAbsErr2DataSceneAvg.txt";
 //const std::string loadFromFileName = "DirectAbsErr10ResidualScaleMetric.txt";
 //const std::string loadFromFileName = "DirectAbsErr5ResidualScaleMetric.txt";
 //const std::string loadFromFileName = "DirectAbsErr2ResidualScaleMetric.txt";
@@ -54,11 +54,15 @@ const std::string loadFromFileName = "DirectAbsErr2DataSceneAvg.txt";
 //const std::string loadFromFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
 //const std::string loadFromFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
 
+const std::string loadFromFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
+//const std::string loadFromFileName = "DirectAbsErr2CornellThinSlab.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
 //const std::string loadFromFileName = "U32DataScene.txt";
-const std::string loadFromFileName = "U32DataScene_4096spp_4spt.txt";
+//const std::string loadFromFileName = "U32DataScene_4096spp_4spt.txt";
+//const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
+const std::string loadFromFileName = "U32CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U64DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
@@ -230,22 +234,65 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     // Level Visibility Controls
     if (mbShowAdaptiveGrid)
     {
-        // NEW Checkbox
-        if (widget.checkbox("Draw Leaf Only", mbDrawLeafOnly))
+        if (widget.checkbox(
+            "Show Normal Voxels",
+            mShowNormalVoxels
+        ))
         {
             if (mpProbeVisualizePass)
-                mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+            {
+                mpProbeVisualizePass->setShowNormal(
+                    mShowNormalVoxels
+                );
+            }
         }
 
-        if (auto g = widget.group("Octree Levels", true))
+        if (widget.checkbox(
+            "Show Edge-Added Voxels",
+            mbShowEdgeAddedVoxels
+        ))
+        {
+            if (mpProbeVisualizePass)
+            {
+                mpProbeVisualizePass->setShowEdgeAdded(
+                    mbShowEdgeAddedVoxels
+                );
+            }
+        }
+
+        if (widget.checkbox(
+            "Draw Leaf Only",
+            mbDrawLeafOnly
+        ))
+        {
+            if (mpProbeVisualizePass)
+            {
+                mpProbeVisualizePass->setDrawLeafOnly(
+                    mbDrawLeafOnly
+                );
+            }
+        }
+
+        if (auto g =
+            widget.group("Octree Levels", true))
         {
             for (int i = 0; i < 8; ++i)
             {
-                std::string label = "Level " + std::to_string(i);
-                if (g.checkbox(label.c_str(), mVisLevels[i]))
+                std::string label =
+                    "Level " + std::to_string(i);
+
+                if (g.checkbox(
+                    label.c_str(),
+                    mVisLevels[i]
+                ))
                 {
                     if (mpProbeVisualizePass)
-                        mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+                    {
+                        mpProbeVisualizePass->toggleLevel(
+                            i,
+                            mVisLevels[i]
+                        );
+                    }
                 }
             }
         }
@@ -317,6 +364,19 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         setupCornellBakeTargets();
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+        //Re-apply the visibility masks from our member variables
+        for (int i = 0; i < 8; ++i)
+        {
+            mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+        }
+        // Restore Leaf Only
+        mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+        mpProbeVisualizePass->setShowEdgeAdded(
+            mbShowEdgeAddedVoxels
+        );
+        mpProbeVisualizePass->setShowNormal(
+            mShowNormalVoxels
+        );
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 

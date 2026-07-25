@@ -123,8 +123,5 @@ private:
     void exportIrradianceFieldErrorComparison();
     void exportResidualTopologyRegionErrorComparison();
 
-    bool mbShowDecisionDebugGrid = false;
-    ref<ProbeVisualizePass> mpDecisionDebugVisualizePass;
-    bool mbShowDecisionDebugPruned = true;
-    bool mbShowDecisionDebugAdded = true;
+    bool mbShowEdgeAddedVoxels = true;
 };

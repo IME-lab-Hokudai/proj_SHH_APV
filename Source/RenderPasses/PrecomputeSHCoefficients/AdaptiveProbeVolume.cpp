@@ -1457,33 +1457,11 @@ void AdaptiveProbeVolume::finishBatch()
         bool correctedSubdivide =
             avgProbeError > mCurrentThreshold;
 
-        if (originalSubdivide != correctedSubdivide)
-        {
-            DecisionDebugVoxel debugVoxel;
+        // This particular subdivision exists only because of the
+        // edge-gradient consistency correction.
+        const bool subdivisionAddedByEdgeAware =
+            !originalSubdivide && correctedSubdivide;
 
-            debugVoxel.minPoint = mProbes[probeIdx].minPoint;
-            debugVoxel.maxPoint = mProbes[probeIdx].maxPoint;
-            debugVoxel.level = uint32_t(mProbes[probeIdx].level);
-
-            debugVoxel.originalError = avgHessianPredictedError;
-            debugVoxel.correctedError = avgProbeError;
-
-            debugVoxel.correctionScale =
-                avgHessianPredictedError > 1e-8f
-                ? avgProbeError / avgHessianPredictedError
-                : 1.0f;
-
-            if (originalSubdivide && !correctedSubdivide)
-            {
-                debugVoxel.kind = DecisionDebugKind::Pruned;
-            }
-            else if (!originalSubdivide && correctedSubdivide)
-            {
-                debugVoxel.kind = DecisionDebugKind::Added;
-            }
-
-            mDecisionDebugVoxels.push_back(debugVoxel);
-        }
         recordResidualDecisionForPaper(
             mProbes[probeIdx].level,
             avgHessianPredictedError,
@@ -1620,7 +1598,9 @@ void AdaptiveProbeVolume::finishBatch()
             {
                 Probe child;
                 child.level = mProbes[probeIdx].level + 1;
-
+                child.addedByEdgeAware =
+                    mProbes[probeIdx].addedByEdgeAware ||
+                    subdivisionAddedByEdgeAware;
                 float3 childSize = (maxP - minP) * 0.5f;
                 float3 offset = float3((k & 4) ? childSize.x : 0, (k & 2) ? childSize.y : 0, (k & 1) ? childSize.z : 0);
                 child.minPoint = minP + offset;
@@ -2034,7 +2014,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     // ------------------------------------------------------------------
     // Header
     // ------------------------------------------------------------------
-    out << "ADAPTIVE_GRID_V5_SEEDED\n";
+    out << "ADAPTIVE_GRID_V6_EDGE_ADDED\n";
 
     // ------------------------------------------------------------------
     // Build settings
@@ -2138,6 +2118,7 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
     for (const auto& p : mProbes)
     {
         out << (p.isLeaf ? 1 : 0) << " "
+            << (p.addedByEdgeAware ? 1 : 0) << " "
             << p.level << "\n";
 
         out << p.minPoint.x << " "
@@ -2169,7 +2150,10 @@ void AdaptiveProbeVolume::saveToFile(const std::string& filename) const
 
     out.close();
 
-    logInfo("Successfully saved AdaptiveProbeVolume (V5 seeded) to " + filename);
+    logInfo(
+        "Successfully saved AdaptiveProbeVolume "
+        "(V6 edge-added flags) to " + filename
+    );
 }
 
 void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
@@ -2196,9 +2180,18 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V5_SEEDED")
+    const bool isV5 =
+        header == "ADAPTIVE_GRID_V5_SEEDED";
+
+    const bool isV6 =
+        header == "ADAPTIVE_GRID_V6_EDGE_ADDED";
+
+    if (!isV5 && !isV6)
     {
-        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
+        logError(
+            "Invalid AdaptiveProbeVolume file format: " +
+            filename
+        );
         return;
     }
 
@@ -2398,8 +2391,28 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         Probe& p = mProbes[i];
 
         int isLeafInt = 0;
-        in >> isLeafInt >> p.level;
-        p.isLeaf = (isLeafInt != 0);
+        int addedByEdgeAwareInt = 0;
+
+        if (isV6)
+        {
+            in >> isLeafInt
+                >> addedByEdgeAwareInt
+                >> p.level;
+        }
+        else
+        {
+            // Old V5 files contain no edge-added classification.
+            in >> isLeafInt
+                >> p.level;
+
+            addedByEdgeAwareInt = 0;
+        }
+
+        p.isLeaf =
+            isLeafInt != 0;
+
+        p.addedByEdgeAware =
+            addedByEdgeAwareInt != 0;
 
         in >> p.minPoint.x
             >> p.minPoint.y
@@ -2427,7 +2440,10 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
     in.close();
 
-    logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
+    logInfo(
+        "Successfully loaded AdaptiveProbeVolume from " +
+        filename
+    );
 }
 
 
@@ -2439,7 +2455,6 @@ void AdaptiveProbeVolume::startBuildSeeded(
 )
 {
     resetResidualPaperStats();
-    mDecisionDebugVoxels.clear();
     uint32_t cellsPerAxis = 1u << mMaxLevel;
     uint64_t maxNodes = 0;
     uint64_t levelCount = 1;

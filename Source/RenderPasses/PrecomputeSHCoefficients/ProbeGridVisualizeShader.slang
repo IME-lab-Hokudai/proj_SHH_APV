@@ -1,50 +1,74 @@
-struct VSIn {
+struct VSIn
+{
     float3 posW : WORLD_POSITION;
     float3 color : COLOR;
+
     uint level : LEVEL_ID;
-    uint isLeaf : IS_LEAF; // New Attribute
+    uint isLeaf : IS_LEAF;
+    uint edgeAdded : EDGE_ADDED;
 };
 
-struct VSOut {
+struct VSOut
+{
     float4 posH : SV_POSITION;
     float3 color : COLOR;
+
+    nointerpolation uint level : LEVEL_ID;
+    nointerpolation uint isLeaf : IS_LEAF;
+    nointerpolation uint edgeAdded : EDGE_ADDED;
 };
 
-cbuffer PerFrameBuffer {
+cbuffer PerFrameBuffer
+{
     float4x4 viewProjMat;
+
     uint32_t numSamplePerProbe;
-    uint visibleLevelMask; 
-    uint drawLeafOnly; 
-}
+    uint visibleLevelMask;
+    uint drawLeafOnly;
+    uint showNormal;
+    uint showEdgeAdded;
+};
 
 VSOut vsMain(VSIn vIn)
 {
     VSOut vOut;
-    
-    // 1. Level Mask Check
-    uint mask = 1u << vIn.level;
-    if ((visibleLevelMask & mask) == 0)
-    {
-        vOut.posH = float4(-1, -1, -1, -1); // Discard
-        vOut.color = float3(0,0,0);
-        return vOut;
-    }
 
-    // 2. Leaf Only Check
-    // If "Draw Leaf Only" is ON, and this node is NOT a leaf, discard it.
-    if (drawLeafOnly != 0 && vIn.isLeaf == 0)
-    {
-        vOut.posH = float4(-1, -1, -1, -1); // Discard
-        vOut.color = float3(0,0,0);
-        return vOut;
-    }
-
-    vOut.posH = mul(viewProjMat, float4(vIn.posW, 1.f));
+    // Always initialize all output fields.
+    vOut.posH = mul(viewProjMat, float4(vIn.posW, 1.0f));
     vOut.color = vIn.color;
+
+    vOut.level = vIn.level;
+    vOut.isLeaf = vIn.isLeaf;
+    vOut.edgeAdded = vIn.edgeAdded;
+
     return vOut;
 }
 
-float4 psMain(VSOut vsOut) : SV_TARGET
+float4 psMain(VSOut vIn) : SV_TARGET
 {
-    return float4(vsOut.color, 1.0);
+    // Hide levels disabled by the UI.
+    uint levelBit = 1u << min(vIn.level, 31u);
+
+    if ((visibleLevelMask & levelBit) == 0u)
+    {
+        discard;
+    }
+
+    // Hide non-leaf probes when "Draw Leaf Only" is enabled.
+    if (drawLeafOnly != 0u && vIn.isLeaf == 0u)
+    {
+        discard;
+    }
+
+    if (vIn.edgeAdded != 0)
+    {
+        if (showEdgeAdded == 0)
+            discard;
+    }
+    else
+    {
+        if (showNormal == 0)
+            discard;
+    }
+    return float4(vIn.color, 1.0f);
 }

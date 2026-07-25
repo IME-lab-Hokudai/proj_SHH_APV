@@ -33,9 +33,17 @@ void ProbeVisualizePass::execute(RenderContext* pRenderContext, const ref<Fbo>& 
 {
     if (mVertices.empty()) return;
 
-    auto var = mpVars->getRootVar()["PerFrameBuffer"];
-    var["visibleLevelMask"] = mVisibleLevelMask;
-    var["drawLeafOnly"] = mDrawLeafOnly ? 1u : 0u; // Send to GPU
+    auto var =
+        mpVars->getRootVar()["PerFrameBuffer"];
+
+    var["visibleLevelMask"] =
+        mVisibleLevelMask;
+
+    var["drawLeafOnly"] =
+        mDrawLeafOnly ? 1u : 0u;
+    var["showNormal"] = mShowNormal ? 1u : 0u;
+    var["showEdgeAdded"] =
+        mShowEdgeAdded ? 1u : 0u;
 
     mpState->setFbo(pFbo, autoSetVpSc);
     pRenderContext->draw(mpState.get(), mpVars.get(), (uint32_t)mVertices.size(), 0);
@@ -55,7 +63,15 @@ void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Pr
     {
         int lvl = std::min(probe.level, 7);
         // Pass probe.isLeaf to the generator
-        generateProbeCube(probe.minPoint, probe.maxPoint, kLevelColors[lvl], probe.level, probe.isLeaf, mVertices);
+        generateProbeCube(
+            probe.minPoint,
+            probe.maxPoint,
+            kLevelColors[lvl],
+            probe.level,
+            probe.isLeaf,
+            probe.addedByEdgeAware,
+            mVertices
+        );
     }
 
     if (mVertices.empty()) return;
@@ -72,7 +88,7 @@ void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Pr
     pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
     pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
     pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0); // New Attribute
-
+    pBufLayout->addElement("EDGE_ADDED", 32, ResourceFormat::R32Uint, 1, 0);
     pLayout->addBufferLayout(0, pBufLayout);
 
     Vao::BufferVec buffers{ pVertexBuffer };
@@ -85,7 +101,15 @@ void ProbeVisualizePass::setCameraData(const float4x4& viewProjMat)
     mpVars->getRootVar()["PerFrameBuffer"]["viewProjMat"] = viewProjMat;
 }
 
-void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& maxP, const float3& color, int level, bool isLeaf, std::vector<ProbeVertex>& outVerts)
+void ProbeVisualizePass::generateProbeCube(
+    const float3& minP,
+    const float3& maxP,
+    const float3& color,
+    int level,
+    bool isLeaf,
+    bool addedByEdgeAware,
+    std::vector<ProbeVertex>& outVerts
+)
 {
     // ... setup corners and edges ...
     float3 p0(minP.x, minP.y, minP.z); float3 p1(maxP.x, minP.y, minP.z);
@@ -101,6 +125,8 @@ void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& max
     float thickness = 0.001f;
     uint32_t leafFlag = isLeaf ? 1 : 0; // Convert to uint
 
+    uint32_t edgeAddedFlag =
+        addedByEdgeAware ? 1u : 0u;
     for (int i = 0; i < 12; ++i)
     {
         // ... build box vertices v0-v7 ...
@@ -118,12 +144,12 @@ void ProbeVisualizePass::generateProbeCube(const float3& minP, const float3& max
 
         auto pushQuad = [&](float3 a, float3 b, float3 c, float3 d) {
             // Push vertex with leafFlag
-            outVerts.push_back({ a, color, (uint32_t)level, leafFlag });
-            outVerts.push_back({ b, color, (uint32_t)level, leafFlag });
-            outVerts.push_back({ c, color, (uint32_t)level, leafFlag });
-            outVerts.push_back({ a, color, (uint32_t)level, leafFlag });
-            outVerts.push_back({ c, color, (uint32_t)level, leafFlag });
-            outVerts.push_back({ d, color, (uint32_t)level, leafFlag });
+            outVerts.push_back({ a, color, (uint32_t)level, leafFlag,edgeAddedFlag });
+            outVerts.push_back({ b, color, (uint32_t)level, leafFlag,edgeAddedFlag });
+            outVerts.push_back({ c, color, (uint32_t)level, leafFlag,edgeAddedFlag });
+            outVerts.push_back({ a, color, (uint32_t)level, leafFlag,edgeAddedFlag });
+            outVerts.push_back({ c, color, (uint32_t)level, leafFlag,edgeAddedFlag });
+            outVerts.push_back({ d, color, (uint32_t)level, leafFlag,edgeAddedFlag });
             };
 
         pushQuad(v0, v1, v5, v4);
@@ -155,7 +181,7 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
                 float3 currentMax = currentMin + cellSize;
 
                 // Generate the wireframe cube
-                generateProbeCube(currentMin, currentMax, color, level, isLeaf, mVertices);
+                generateProbeCube(currentMin, currentMax, color, level, isLeaf, false, mVertices);
             }
         }
     }
@@ -177,7 +203,7 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
     pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
     pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0);
-
+    pBufLayout->addElement("EDGE_ADDED", 32, ResourceFormat::R32Uint, 1, 0);
     pLayout->addBufferLayout(0, pBufLayout);
 
     Vao::BufferVec buffers{ pVertexBuffer };

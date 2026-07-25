@@ -229,7 +229,7 @@ public:
     {
         bool isLeaf = true;
         int level = 0;
-
+        bool addedByEdgeAware = false;
         float3 minPoint;
         float3 maxPoint;
 
@@ -244,35 +244,6 @@ public:
         float lastError = 0.0f;
         bool needsRecheck = false;
     };
-
-    enum class DecisionDebugKind : uint32_t
-    {
-        None = 0,
-        Pruned = 1,        // original subdivide, corrected leaf
-        Added = 2,         // original leaf, corrected subdivide
-        BothSubdivide = 3, // optional
-        BothLeaf = 4       // optional
-    };
-
-    struct DecisionDebugVoxel
-    {
-        float3 minPoint;
-        float3 maxPoint;
-
-        uint32_t level = 0;
-        DecisionDebugKind kind = DecisionDebugKind::None;
-
-        float originalError = 0.0f;
-        float correctedError = 0.0f;
-        float correctionScale = 1.0f;
-    };
-
-    std::vector<DecisionDebugVoxel> mDecisionDebugVoxels;
-
-    const std::vector<DecisionDebugVoxel>& getDecisionDebugVoxels() const
-    {
-        return mDecisionDebugVoxels;
-    }
 
     struct Corner
     {

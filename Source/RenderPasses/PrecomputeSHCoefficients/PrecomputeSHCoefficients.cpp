@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -42,8 +42,9 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 1024;
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 1024;
+//const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 
 //const int numSamplesPerProbe = 1;
@@ -68,6 +69,7 @@ const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
 const bool useResidualCorrection = true;
+//const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -81,9 +83,9 @@ const float residualConfidenceEps = 1e-3f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-//const uint3 unifromGridSize = uint3(32, 32, 32);
+const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-const uint3 unifromGridSize = uint3(64, 64, 64);
+//const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 
@@ -152,10 +154,13 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr10ResidualScaleV2Metric.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2Metric.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2MetricCornellThinSlab.txt";
+//const std::string saveToFileName = "DirectAbsErr2CornellThinSlab.txt";
+const std::string saveToFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
 
-const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
+//const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
+//const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -168,7 +173,7 @@ const char kEnvMapShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/EnvMapSh
 const char kProbeSamplingFile[] = "RenderPasses/PrecomputeSHCoefficients/ProbeSampling.rt.slang";
 const char kShowReconstructedEnvMap[] = "Show environment map";
 const char kShowSHGrid[] = "Show SH grid";
-const char kShowDecisionDebugGrid[] = "Show decision debug grid";
+const char kShowEdgeAddedVoxels[] ="Show edge-added voxels";
 } // namespace
 
 namespace
@@ -601,8 +606,8 @@ PrecomputeSHCoefficients::PrecomputeSHCoefficients(ref<Device> pDevice, const Pr
             mbShowReconstructedEnvMap = value;
         if (key == kShowSHGrid)
             mbShowAdaptiveGrid = value;
-        if (key == kShowDecisionDebugGrid)
-            mbShowDecisionDebugGrid = value;
+        if (key == kShowEdgeAddedVoxels)
+            mbShowEdgeAddedVoxels = value;
     }
 
     mpFbo = Fbo::create(mpDevice);
@@ -618,7 +623,7 @@ Properties PrecomputeSHCoefficients::getProperties() const
     Properties props;
     props[kShowReconstructedEnvMap] = mbShowReconstructedEnvMap;
     props[kShowSHGrid] = mbShowAdaptiveGrid;
-    props[kShowDecisionDebugGrid] = mbShowDecisionDebugGrid;
+    props[kShowEdgeAddedVoxels] = mbShowEdgeAddedVoxels;
     return props;
 }
 
@@ -1000,14 +1005,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mAdaptiveProbeVolume->saveToFile(saveToFileName);
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
-            if (mpDecisionDebugVisualizePass)
-            {
-                mpDecisionDebugVisualizePass->setDecisionDebugData(
-                    mAdaptiveProbeVolume->getDecisionDebugVoxels(),
-                    mbShowDecisionDebugPruned,
-                    mbShowDecisionDebugAdded
-                );
-            }
+
         }
 #endif
 #pragma endregion
@@ -1143,12 +1141,6 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
              {
                  mpProbeVisualizePass->setCameraData(viewProj);
                  mpProbeVisualizePass->execute(pRenderContext, mpFbo);
-             }
-
-             if (mbShowDecisionDebugGrid && mpDecisionDebugVisualizePass)
-             {
-                 mpDecisionDebugVisualizePass->setCameraData(viewProj);
-                 mpDecisionDebugVisualizePass->execute(pRenderContext, mpFbo);
              }
         //}
     }
@@ -1536,63 +1528,77 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
     }
 }
 
-void PrecomputeSHCoefficients::renderUI(Gui::Widgets& widget)
+void PrecomputeSHCoefficients::renderUI(
+    Gui::Widgets& widget
+)
 {
-    if (widget.checkbox("Show Reconstructed Env Map", mbShowReconstructedEnvMap))
-        requestRecompile();
-    if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
-        requestRecompile();
-    if (widget.checkbox("Show Decision Debug Voxels", mbShowDecisionDebugGrid))
+    if (widget.checkbox(
+        "Show Reconstructed Env Map",
+        mbShowReconstructedEnvMap
+    ))
     {
         requestRecompile();
     }
-    // Level Visibility Controls
+
+    if (widget.checkbox(
+        "Show SH Grid",
+        mbShowAdaptiveGrid
+    ))
+    {
+        requestRecompile();
+    }
+
     if (mbShowAdaptiveGrid)
     {
-        // NEW Checkbox
-        if (widget.checkbox("Draw Leaf Only", mbDrawLeafOnly))
+        if (widget.checkbox(
+            "Show Edge-Added Voxels",
+            mbShowEdgeAddedVoxels
+        ))
         {
             if (mpProbeVisualizePass)
-                mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
+            {
+                mpProbeVisualizePass->setShowEdgeAdded(
+                    mbShowEdgeAddedVoxels
+                );
+            }
         }
 
-        if (auto g = widget.group("Octree Levels", true))
+        if (widget.checkbox(
+            "Draw Leaf Only",
+            mbDrawLeafOnly
+        ))
+        {
+            if (mpProbeVisualizePass)
+            {
+                mpProbeVisualizePass->setDrawLeafOnly(
+                    mbDrawLeafOnly
+                );
+            }
+        }
+
+        if (auto g =
+            widget.group("Octree Levels", true))
         {
             for (int i = 0; i < 8; ++i)
             {
-                std::string label = "Level " + std::to_string(i);
-                if (g.checkbox(label.c_str(), mVisLevels[i]))
+                std::string label =
+                    "Level " + std::to_string(i);
+
+                if (g.checkbox(
+                    label.c_str(),
+                    mVisLevels[i]
+                ))
                 {
                     if (mpProbeVisualizePass)
-                        mpProbeVisualizePass->toggleLevel(i, mVisLevels[i]);
+                    {
+                        mpProbeVisualizePass->toggleLevel(
+                            i,
+                            mVisLevels[i]
+                        );
+                    }
                 }
             }
         }
-    }
-
-    bool decisionDebugVizDirty = false;
-    if (mbShowDecisionDebugGrid)
-    {
-        if (widget.checkbox("Show Pruned Voxels", mbShowDecisionDebugPruned))
-        {
-            decisionDebugVizDirty = true;
-        }
-
-        if (widget.checkbox("Show Refined Voxels", mbShowDecisionDebugAdded))
-        {
-            decisionDebugVizDirty = true;
-        }
-    }
-
-    if (decisionDebugVizDirty &&
-        mpDecisionDebugVisualizePass &&
-        mAdaptiveProbeVolume)
-    {
-        mpDecisionDebugVisualizePass->setDecisionDebugData(
-            mAdaptiveProbeVolume->getDecisionDebugVoxels(),
-            mbShowDecisionDebugPruned,
-            mbShowDecisionDebugAdded
-        );
     }
 }
 
@@ -1651,15 +1657,9 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            }
            // Restore Leaf Only
            mpProbeVisualizePass->setDrawLeafOnly(mbDrawLeafOnly);
-           mpDecisionDebugVisualizePass =
-               ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
-
-           for (int i = 0; i < 8; ++i)
-           {
-               mpDecisionDebugVisualizePass->toggleLevel(i, true);
-           }
-
-           mpDecisionDebugVisualizePass->setDrawLeafOnly(false);
+           mpProbeVisualizePass->setShowEdgeAdded(
+               mbShowEdgeAddedVoxels
+           );
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
            if (!mNeedRebuildProbeVolume) {

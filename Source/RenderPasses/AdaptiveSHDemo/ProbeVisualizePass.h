@@ -14,6 +14,7 @@ public:
         float3 color;
         uint32_t level;
         uint32_t isLeaf; // New member
+        uint32_t addedByEdgeAware;
     };
 
     static ref<ProbeVisualizePass> create(const ref<Device>& pDevice, const DefineList& defines = DefineList());
@@ -33,12 +34,27 @@ public:
     // New Setter
     void setDrawLeafOnly(bool enable) { mDrawLeafOnly = enable; }
 
+    void setShowEdgeAdded(bool show)
+    {
+        mShowEdgeAdded = show;
+    }
+    void setShowNormal(bool b)
+    {
+        mShowNormal = b;
+    }
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
 private:
-    // Updated signature to take isLeaf
-    void generateProbeCube(const float3& minP, const float3& maxP, const float3& color, int level, bool isLeaf, std::vector<ProbeVertex>& outVerts);
+    void generateProbeCube(
+        const float3& minP,
+        const float3& maxP,
+        const float3& color,
+        int level,
+        bool isLeaf,
+        bool addedByEdgeAware,
+        std::vector<ProbeVertex>& outVerts
+    );
 
     ref<RasterizerState> mpRasterState;
     ref<Buffer> pVertexBuffer;
@@ -47,4 +63,6 @@ private:
     std::vector<ProbeVertex> mVertices;
     uint32_t mVisibleLevelMask = 0xFFFFFFFF;
     bool mDrawLeafOnly = false; // New State
+    bool mShowEdgeAdded = true;
+    bool mShowNormal = true;
 };

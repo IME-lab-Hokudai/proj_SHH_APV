@@ -473,9 +473,18 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
     std::string header;
     in >> header;
 
-    if (header != "ADAPTIVE_GRID_V5_SEEDED")
+    const bool isV5 =
+        header == "ADAPTIVE_GRID_V5_SEEDED";
+
+    const bool isV6 =
+        header == "ADAPTIVE_GRID_V6_EDGE_ADDED";
+
+    if (!isV5 && !isV6)
     {
-        logError("Invalid file format or version mismatch (Expected V5 seeded): " + filename);
+        logError(
+            "Invalid AdaptiveProbeVolume file format: " +
+            filename
+        );
         return;
     }
 
@@ -675,8 +684,28 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         Probe& p = mProbes[i];
 
         int isLeafInt = 0;
-        in >> isLeafInt >> p.level;
-        p.isLeaf = (isLeafInt != 0);
+        int addedByEdgeAwareInt = 0;
+
+        if (isV6)
+        {
+            in >> isLeafInt
+                >> addedByEdgeAwareInt
+                >> p.level;
+        }
+        else
+        {
+            // Old V5 files contain no edge-added classification.
+            in >> isLeafInt
+                >> p.level;
+
+            addedByEdgeAwareInt = 0;
+        }
+
+        p.isLeaf =
+            isLeafInt != 0;
+
+        p.addedByEdgeAware =
+            addedByEdgeAwareInt != 0;
 
         in >> p.minPoint.x
             >> p.minPoint.y
@@ -704,5 +733,8 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
 
     in.close();
 
-    logInfo("Successfully loaded AdaptiveProbeVolume (V5 seeded) from " + filename);
+    logInfo(
+        "Successfully loaded AdaptiveProbeVolume from " +
+        filename
+    );
 }

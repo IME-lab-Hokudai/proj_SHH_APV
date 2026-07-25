@@ -159,6 +159,8 @@ private:
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
     bool mbDrawLeafOnly = false;
+    bool mbShowEdgeAddedVoxels = true;
+    bool mShowNormalVoxels = true;
 
     ref<Texture> mpDataFloorLightmap;
     ref<Texture> mpDataCeilingLightmap;
