@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -54,7 +54,7 @@ const float verificationExtent = 0.25f;
 
 //const float ErrorThreshold = 100000000.0f;
 //const float ErrorThreshold = 20.0f;
-const float ErrorThreshold = 10.0f;
+//const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 8.5f;
 //const float ErrorThreshold = 8.0f;
 //const float ErrorThreshold = 7.95f;
@@ -64,13 +64,13 @@ const float ErrorThreshold = 10.0f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-//const float ErrorThreshold =2.0f;//threshold for Erel
+const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
 const bool useResidualCorrection = true;
 
-const float residualPruneStrength = 0.10f;
-const float residualRefineStrength = 0.10f;
+const float residualPruneStrength = 0.00f;
+const float residualRefineStrength = 0.50f;
 
 const float residualCorrectionMinScale = 0.5f;
 const float residualCorrectionMaxScale = 2.0f;
@@ -149,10 +149,13 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr2DataSceneAvg.txt";
 
 //const std::string saveToFileName = "DirectAbsErr10ResidualScaleMetric.txt";
-const std::string saveToFileName = "DirectAbsErr10ResidualScaleV2Metric.txt";
+//const std::string saveToFileName = "DirectAbsErr10ResidualScaleV2Metric.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2Metric.txt";
+//const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2MetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
+
+const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 namespace
 {
 //const char kShaderFile[] = "RenderPasses/PrecomputeSHCoefficients/SHShader.slang";
@@ -1611,7 +1614,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
             //exportIrradianceFieldErrorComparison();
             //exportAnalyticErrorVsDistanceTest();
-            exportResidualTopologyRegionErrorComparison();
+            //exportResidualTopologyRegionErrorComparison();
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());

@@ -61,6 +61,10 @@ public:
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
+    // Cornell box
+    void setupCornellBakeTargets();
+    void loadCornellLightmaps();
+    void bindCornellData(ShaderVar var);
 private:
     enum class BakeTargetType
     {
@@ -112,8 +116,9 @@ private:
     bool mNeedsPreparation = true;
     uint32_t mCurrentSample = 0;
     uint32_t mTotalSamples = 4096; // Set your target quality here
-    //bool mbloadLightMap = false;
-    bool mbloadLightMap = true;
+    //uint32_t mTotalSamples = 256; // Set your target quality here
+    bool mbloadLightMap = false;
+    //bool mbloadLightMap = true;
     ref<Sampler> mpLinearSampler;
 
     std::vector<BakeTarget> mBakeTargets;
@@ -163,4 +168,12 @@ private:
     ref<Texture> mpDataThinSlabFLightmap;
     ref<Texture> mpDataTallBoxJLightmap;
     ref<Texture> mpDataShortBoxLLightmap;
+
+    // Cornell box
+    ref<Texture> mpCornellFloorLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellCeilingLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellBackWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellLeftWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellRightWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellThinSlabLightmapShadowBoundaryTestScene;
 };

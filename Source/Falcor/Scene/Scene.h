@@ -248,7 +248,7 @@ namespace Falcor
             RenderSettings renderSettings;                          ///< Render settings.
             std::vector<ref<Camera>> cameras;                       ///< List of cameras.
             uint32_t selectedCamera = 0;                            ///< Index of selected camera.
-            float cameraSpeed = 10.f;                                ///< Camera speed.
+            float cameraSpeed = 1.f;                                ///< Camera speed.
             std::vector<ref<Light>> lights;                         ///< List of light sources.
             std::unique_ptr<MaterialSystem> pMaterials;             ///< Material system. This holds data and resources for all materials.
             std::vector<ref<GridVolume>> gridVolumes;               ///< List of grid volumes.

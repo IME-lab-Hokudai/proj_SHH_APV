@@ -57,9 +57,16 @@ public:
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+
+    //data scene
     void loadDataSceneLightmaps();
     void setupDataSceneBakeTargets();
     void bindDataSceneData(ShaderVar var);
+
+    // Cornell box
+    void setupCornellBakeTargets();
+    void loadCornellLightmaps();
+    void bindCornellData(ShaderVar var);
 private:
     enum class BakeTargetType
     {
@@ -168,4 +175,12 @@ private:
     ref<Texture> mpDataThinSlabFLightmap;
     ref<Texture> mpDataTallBoxJLightmap;
     ref<Texture> mpDataShortBoxLLightmap;
+
+    // Cornell box
+    ref<Texture> mpCornellFloorLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellCeilingLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellBackWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellLeftWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellRightWallLightmapShadowBoundaryTestScene;
+    ref<Texture> mpCornellThinSlabLightmapShadowBoundaryTestScene;
 };

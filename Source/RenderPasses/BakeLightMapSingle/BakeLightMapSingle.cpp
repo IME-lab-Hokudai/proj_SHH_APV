@@ -85,53 +85,8 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
     if (mpScene) {
         if (mbloadLightMap) {
             auto applyVar = mpVars->getRootVar();
-            //applyVar["gLinearSampler"] = mpLinearSampler; // Standard linear sampler
-            //applyVar["gFloorLightmap"] = mpFloorLightmap;
-            //applyVar["gLeftWallLightmap"] = mpLeftWallLightmap;
-            //applyVar["gRightWallLightmap"] = mpRightWallLightmap;
-            //applyVar["gRoofLeftLightmap"] = mpRoofLeftLightmap;
-            //applyVar["gRoofRightLightmap"] = mpRoofRightLightmap;
-            //applyVar["gPillar0Lightmap"] = mpPillar0Lightmap;
-            //applyVar["gPillar1Lightmap"] = mpPillar1Lightmap;
-            //applyVar["gPillar2Lightmap"] = mpPillar2Lightmap;
-            //applyVar["gPillar3Lightmap"] = mpPillar3Lightmap;
-            //applyVar["gPillar4Lightmap"] = mpPillar4Lightmap;
-            //applyVar["gPillar5Lightmap"] = mpPillar5Lightmap;
-            //applyVar["gPillar6Lightmap"] = mpPillar6Lightmap;
-            //applyVar["gPillar7Lightmap"] = mpPillar7Lightmap;
-
-            //applyVar["PerFrameCB"]["gFloorInstanceID"] = mFloorInstanceID;
-            //applyVar["PerFrameCB"]["gLeftWallInstanceID"] = mLeftWallInstanceID;
-            //applyVar["PerFrameCB"]["gRightWallInstanceID"] = mRightWallInstanceID;
-            //applyVar["PerFrameCB"]["gRoofLeftInstanceID"] = mRoofLeftInstanceID;
-            //applyVar["PerFrameCB"]["gRoofRightInstanceID"] = mRoofRightInstanceID;
-            //applyVar["PerFrameCB"]["gPillar0InstanceID"] = mPillar0InstanceID;
-            //applyVar["PerFrameCB"]["gPillar1InstanceID"] = mPillar1InstanceID;
-            //applyVar["PerFrameCB"]["gPillar2InstanceID"] = mPillar2InstanceID;
-            //applyVar["PerFrameCB"]["gPillar3InstanceID"] = mPillar3InstanceID;
-            //applyVar["PerFrameCB"]["gPillar4InstanceID"] = mPillar4InstanceID;
-            //applyVar["PerFrameCB"]["gPillar5InstanceID"] = mPillar5InstanceID;
-            //applyVar["PerFrameCB"]["gPillar6InstanceID"] = mPillar6InstanceID;
-            //applyVar["PerFrameCB"]["gPillar7InstanceID"] = mPillar7InstanceID;
-
-            //applyVar["PerFrameCB"]["gPillar0CenterW"] = float3(7.5f, 5.0f, 5.0f);
-            //applyVar["PerFrameCB"]["gPillar1CenterW"] = float3(-7.5f, 5.0f, 5.0f);
-            //applyVar["PerFrameCB"]["gPillar2CenterW"] = float3(7.5f, 5.0f, 15.0f);
-            //applyVar["PerFrameCB"]["gPillar3CenterW"] = float3(-7.5f, 5.0f, 15.0f);
-            //applyVar["PerFrameCB"]["gPillar4CenterW"] = float3(7.5f, 5.0f, 25.0f);
-            //applyVar["PerFrameCB"]["gPillar5CenterW"] = float3(-7.5f, 5.0f, 25.0f);
-            //applyVar["PerFrameCB"]["gPillar6CenterW"] = float3(7.5f, 5.0f, 35.0f);
-            //applyVar["PerFrameCB"]["gPillar7CenterW"] = float3(-7.5f, 5.0f, 35.0f);
-
-            //applyVar["PerFrameCB"]["gPillar0HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar1HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar2HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar3HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar4HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar5HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar6HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            //applyVar["PerFrameCB"]["gPillar7HalfExtentW"] = float3(0.75f, 5.0f, 0.75f);
-            bindDataSceneData(applyVar);
+            //bindDataSceneData(applyVar);
+            bindCornellData(applyVar);
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
         }
         else {
@@ -360,24 +315,8 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
     mpScene = pScene;
     if (mpScene)
     {
-        //mBakeTargets =
-        //{
-        //    { "Floor",     0, 1024, 1024, "BakedFloor.exr"     },
-        //    { "LeftWall",  1, 1024,  512, "BakedLeftWall.exr"  },
-        //    { "RightWall", 2, 1024,  512, "BakedRightWall.exr" },
-        //    { "RoofLeft", 11, 1024,  512, "BakedRoofLeft.exr"  },
-        //    { "RoofRight",12, 1024,  512, "BakedRoofRight.exr" },
-        //    { "Pillar0",  3, 512, 512, "BakedPillar0.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar1",  4, 512, 512, "BakedPillar1.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f,  5.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar2",  5, 512, 512, "BakedPillar2.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar3",  6, 512, 512, "BakedPillar3.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 15.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar4",  7, 512, 512, "BakedPillar4.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar5",  8, 512, 512, "BakedPillar5.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 25.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar6",  9, 512, 512, "BakedPillar6.exr", BakeTargetType::Pillar, float3(7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) },
-        //    { "Pillar7", 10, 512, 512, "BakedPillar7.exr", BakeTargetType::Pillar, float3(-7.5f, 5.0f, 35.0f), float3(0.75f, 5.0f, 0.75f) }
-        //};
-
-        setupDataSceneBakeTargets();
+        //setupDataSceneBakeTargets();
+        setupCornellBakeTargets();
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
             previewDesc.addShaderModules(mpScene->getShaderModules());
@@ -409,7 +348,8 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
             mpGraphicsState->setDepthStencilState(pDsState);
 
             //loadLightmaps();
-            loadDataSceneLightmaps();
+            //loadDataSceneLightmaps();
+            loadCornellLightmaps();
         }
         else {
             //logInfo("Geometry instance count = {}", mpScene->getGeometryInstanceCount());
@@ -815,4 +755,70 @@ void BakeLightMapSingle::loadDataSceneLightmaps()
     loadOne(11, mpDataThinSlabFLightmap, "DataThinSlabFLightmap");
     loadOne(12, mpDataTallBoxJLightmap, "DataTallBoxJLightmap");
     loadOne(13, mpDataShortBoxLLightmap, "DataShortBoxLLightmap");
+}
+
+void BakeLightMapSingle::setupCornellBakeTargets()
+{
+    mBakeTargets =
+    {
+        // Room shell targets (Quads)
+        { "Floor",     0, 1024, 1024, "BakedCornell_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedCornell_Ceiling.exr"   },
+        { "BackWall",  2, 1024, 1024, "BakedCornell_BackWall.exr"  },
+        { "LeftWall",  3, 1024, 1024, "BakedCornell_LeftWall.exr"  },
+        { "RightWall", 4, 1024, 1024, "BakedCornell_RightWall.exr" },
+
+        // Light is instance ID 5; we skip baking the emissive light source.
+
+        // Visibility-discontinuity test slab (Cube/Pillar)
+        { "VisibilitySlab", 6, 512, 512, "BakedCornell_VisibilitySlab.exr",
+            BakeTargetType::Pillar,
+            float3(0.12f, 0.28f, 0.00f),       // translation
+            float3(0.15f, 0.0175f, 0.11f),     // half extent (scaling * 0.5)
+            float3(0.0f, 0.0f, 0.0f)           // rotation
+        }
+    };
+}
+
+void BakeLightMapSingle::loadCornellLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size()) return;
+            const auto& target = mBakeTargets[idx];
+            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
+            if (dst) dst->setName(debugName);
+        };
+
+    loadOne(0, mpCornellFloorLightmapShadowBoundaryTestScene, "CornellFloorLightmap");
+    loadOne(1, mpCornellCeilingLightmapShadowBoundaryTestScene, "CornellCeilingLightmap");
+    loadOne(2, mpCornellBackWallLightmapShadowBoundaryTestScene, "CornellBackWallLightmap");
+    loadOne(3, mpCornellLeftWallLightmapShadowBoundaryTestScene, "CornellLeftWallLightmap");
+    loadOne(4, mpCornellRightWallLightmapShadowBoundaryTestScene, "CornellRightWallLightmap");
+    loadOne(5, mpCornellThinSlabLightmapShadowBoundaryTestScene, "CornellVisibilitySlabLightmap");
+}
+
+void BakeLightMapSingle::bindCornellData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    // Bind Textures
+    applyVar["gFloorLightmap"] = mpCornellFloorLightmapShadowBoundaryTestScene;
+    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapShadowBoundaryTestScene;
+    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapShadowBoundaryTestScene;
+    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapShadowBoundaryTestScene;
+    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapShadowBoundaryTestScene;
+    applyVar["gVisibilitySlabLightmap"] = mpCornellThinSlabLightmapShadowBoundaryTestScene;
+
+    // Bind Instance IDs
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
+
+    // Bind Pillar Data for Slab
+    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.12f, 0.28f, 0.00f);
+    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.15f, 0.0175f, 0.11f);
 }

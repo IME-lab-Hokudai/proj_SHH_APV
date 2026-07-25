@@ -139,8 +139,8 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        bindDataSceneData(applyVar);
-
+        //bindDataSceneData(applyVar);
+        bindCornellData(applyVar);
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
         applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
@@ -313,8 +313,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
 
-        setupDataSceneBakeTargets();
-
+        //setupDataSceneBakeTargets();
+        setupCornellBakeTargets();
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
@@ -444,7 +444,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpCompositeState->setVao(mpEmptyVao);
 
         //loadLightmaps();
-        loadDataSceneLightmaps();
+        //loadDataSceneLightmaps();
+        loadCornellLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
@@ -651,4 +652,70 @@ void AdaptiveSHDemo::setupDataSceneBakeTargets()
            float3(0.50f, 0.45f, 0.50f),
            float3(0.0f, 40.0f, 0.0f) },
     };
+}
+
+void AdaptiveSHDemo::setupCornellBakeTargets()
+{
+    mBakeTargets =
+    {
+        // Room shell targets (Quads)
+        { "Floor",     0, 1024, 1024, "BakedCornell_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedCornell_Ceiling.exr"   },
+        { "BackWall",  2, 1024, 1024, "BakedCornell_BackWall.exr"  },
+        { "LeftWall",  3, 1024, 1024, "BakedCornell_LeftWall.exr"  },
+        { "RightWall", 4, 1024, 1024, "BakedCornell_RightWall.exr" },
+
+        // Light is instance ID 5; we skip baking the emissive light source.
+
+        // Visibility-discontinuity test slab (Cube/Pillar)
+        { "VisibilitySlab", 6, 512, 512, "BakedCornell_VisibilitySlab.exr",
+            BakeTargetType::Pillar,
+            float3(0.12f, 0.28f, 0.00f),       // translation
+            float3(0.15f, 0.0175f, 0.11f),     // half extent (scaling * 0.5)
+            float3(0.0f, 0.0f, 0.0f)           // rotation
+        }
+    };
+}
+
+void AdaptiveSHDemo::loadCornellLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size()) return;
+            const auto& target = mBakeTargets[idx];
+            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
+            if (dst) dst->setName(debugName);
+        };
+
+    loadOne(0, mpCornellFloorLightmapShadowBoundaryTestScene, "CornellFloorLightmap");
+    loadOne(1, mpCornellCeilingLightmapShadowBoundaryTestScene, "CornellCeilingLightmap");
+    loadOne(2, mpCornellBackWallLightmapShadowBoundaryTestScene, "CornellBackWallLightmap");
+    loadOne(3, mpCornellLeftWallLightmapShadowBoundaryTestScene, "CornellLeftWallLightmap");
+    loadOne(4, mpCornellRightWallLightmapShadowBoundaryTestScene, "CornellRightWallLightmap");
+    loadOne(5, mpCornellThinSlabLightmapShadowBoundaryTestScene, "CornellVisibilitySlabLightmap");
+}
+
+void AdaptiveSHDemo::bindCornellData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    // Bind Textures
+    applyVar["gFloorLightmap"] = mpCornellFloorLightmapShadowBoundaryTestScene;
+    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapShadowBoundaryTestScene;
+    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapShadowBoundaryTestScene;
+    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapShadowBoundaryTestScene;
+    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapShadowBoundaryTestScene;
+    applyVar["gVisibilitySlabLightmap"] = mpCornellThinSlabLightmapShadowBoundaryTestScene;
+
+    // Bind Instance IDs
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
+
+    // Bind Pillar Data for Slab
+    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.12f, 0.28f, 0.00f);
+    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.15f, 0.0175f, 0.11f);
 }

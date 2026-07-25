@@ -1,61 +1,61 @@
-import Scene.Raster;
+//import Scene.Raster;
 
-SamplerState gLinearSampler;
+//SamplerState gLinearSampler;
 
-// Room shell lightmaps.
-Texture2D gFloorLightmap;
-Texture2D gCeilingLightmap;
-Texture2D gLeftWallLightmap;
-Texture2D gRightWallLightmap;
-Texture2D gBackWallLightmap;
-Texture2D gFrontWallLightmap;
+//// Room shell lightmaps.
+//Texture2D gFloorLightmap;
+//Texture2D gCeilingLightmap;
+//Texture2D gLeftWallLightmap;
+//Texture2D gRightWallLightmap;
+//Texture2D gBackWallLightmap;
+//Texture2D gFrontWallLightmap;
 
-// Box lightmaps.
-Texture2D gTallBoxALightmap;
-Texture2D gWideBoxBLightmap;
-Texture2D gBlockCLightmap;
-Texture2D gLowBoxDLightmap;
-Texture2D gThinSlabELightmap;
-Texture2D gThinSlabFLightmap;
-Texture2D gTallBoxJLightmap;
-Texture2D gShortBoxLLightmap;
+//// Box lightmaps.
+//Texture2D gTallBoxALightmap;
+//Texture2D gWideBoxBLightmap;
+//Texture2D gBlockCLightmap;
+//Texture2D gLowBoxDLightmap;
+//Texture2D gThinSlabELightmap;
+//Texture2D gThinSlabFLightmap;
+//Texture2D gTallBoxJLightmap;
+//Texture2D gShortBoxLLightmap;
 
-cbuffer PerFrameCB
-{
-    uint gFloorInstanceID;
-    uint gCeilingInstanceID;
-    uint gLeftWallInstanceID;
-    uint gRightWallInstanceID;
-    uint gBackWallInstanceID;
-    uint gFrontWallInstanceID;
+//cbuffer PerFrameCB
+//{
+//    uint gFloorInstanceID;
+//    uint gCeilingInstanceID;
+//    uint gLeftWallInstanceID;
+//    uint gRightWallInstanceID;
+//    uint gBackWallInstanceID;
+//    uint gFrontWallInstanceID;
 
-    uint gTallBoxAInstanceID;
-    uint gWideBoxBInstanceID;
-    uint gBlockCInstanceID;
-    uint gLowBoxDInstanceID;
-    uint gThinSlabEInstanceID;
-    uint gThinSlabFInstanceID;
-    uint gTallBoxJInstanceID;
-    uint gShortBoxLInstanceID;
+//    uint gTallBoxAInstanceID;
+//    uint gWideBoxBInstanceID;
+//    uint gBlockCInstanceID;
+//    uint gLowBoxDInstanceID;
+//    uint gThinSlabEInstanceID;
+//    uint gThinSlabFInstanceID;
+//    uint gTallBoxJInstanceID;
+//    uint gShortBoxLInstanceID;
 
-    float3 gTallBoxACenterW;
-    float3 gWideBoxBCenterW;
-    float3 gBlockCCenterW;
-    float3 gLowBoxDCenterW;
-    float3 gThinSlabECenterW;
-    float3 gThinSlabFCenterW;
-    float3 gTallBoxJCenterW;
-    float3 gShortBoxLCenterW;
+//    float3 gTallBoxACenterW;
+//    float3 gWideBoxBCenterW;
+//    float3 gBlockCCenterW;
+//    float3 gLowBoxDCenterW;
+//    float3 gThinSlabECenterW;
+//    float3 gThinSlabFCenterW;
+//    float3 gTallBoxJCenterW;
+//    float3 gShortBoxLCenterW;
 
-    float3 gTallBoxAHalfExtentW;
-    float3 gWideBoxBHalfExtentW;
-    float3 gBlockCHalfExtentW;
-    float3 gLowBoxDHalfExtentW;
-    float3 gThinSlabEHalfExtentW;
-    float3 gThinSlabFHalfExtentW;
-    float3 gTallBoxJHalfExtentW;
-    float3 gShortBoxLHalfExtentW;
-};
+//    float3 gTallBoxAHalfExtentW;
+//    float3 gWideBoxBHalfExtentW;
+//    float3 gBlockCHalfExtentW;
+//    float3 gLowBoxDHalfExtentW;
+//    float3 gThinSlabEHalfExtentW;
+//    float3 gThinSlabFHalfExtentW;
+//    float3 gTallBoxJHalfExtentW;
+//    float3 gShortBoxLHalfExtentW;
+//};
 
 VSOut vsMain(VSIn vIn)
 {
@@ -171,7 +171,144 @@ float3 shadeWithLightmap(float3 albedo, float3 irradiance)
     return albedo * irradiance / 3.14159265f;
 }
 
-float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
+//float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
+//{
+//    float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
+//    ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
+//    BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
+
+//    float4 baseColorSample = (float4)baseColorMat.baseColor;
+//    float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
+
+//    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture)
+//    {
+//        baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
+//    }
+
+//    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture)
+//    {
+//        emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
+//    }
+
+//    float3 albedo = baseColorSample.rgb;
+//    float3 litColor = albedo;
+
+//    float2 quadUV = vsOut.texC;
+//    quadUV.y = 1.0f - quadUV.y;
+
+//    uint instanceID = vsOut.instanceID.index;
+
+//    // Room shell.
+//    if (instanceID == gFloorInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gFloorLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+//    else if (instanceID == gCeilingInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gCeilingLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+//    else if (instanceID == gLeftWallInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+//    else if (instanceID == gRightWallInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+//    else if (instanceID == gBackWallInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gBackWallLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+//    else if (instanceID == gFrontWallInstanceID)
+//    {
+//        litColor = shadeWithLightmap(albedo, gFrontWallLightmap.Sample(gLinearSampler, quadUV).rgb);
+//    }
+
+//    // Box targets.
+//    else if (instanceID == gTallBoxAInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxACenterW, gTallBoxAHalfExtentW, float3(0.0f, 0.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gTallBoxALightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gWideBoxBInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gWideBoxBCenterW, gWideBoxBHalfExtentW, float3(0.0f, 0.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gWideBoxBLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gBlockCInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gBlockCCenterW, gBlockCHalfExtentW, float3(0.0f, 18.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gBlockCLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gLowBoxDInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gLowBoxDCenterW, gLowBoxDHalfExtentW, float3(0.0f, -22.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gLowBoxDLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gThinSlabEInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabECenterW, gThinSlabEHalfExtentW, float3(0.0f, 0.0f, 0.0f)
+//);
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gThinSlabELightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gThinSlabFInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabFCenterW, gThinSlabFHalfExtentW, float3(0.0f, 12.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gThinSlabFLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gTallBoxJInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxJCenterW, gTallBoxJHalfExtentW, float3(0.0f, -18.0f, 8.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gTallBoxJLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+//    else if (instanceID == gShortBoxLInstanceID)
+//    {
+//        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gShortBoxLCenterW, gShortBoxLHalfExtentW, float3(0.0f, 40.0f, 0.0f));
+//        uv.y = 1.0f - uv.y;
+//        litColor = shadeWithLightmap(albedo, gShortBoxLLightmap.Sample(gLinearSampler, uv).rgb);
+//    }
+
+//    litColor += emissiveSample.rgb;
+//    return float4(litColor, 1.0f);
+//}
+
+import Scene.Raster;
+
+SamplerState gLinearSampler;
+
+// Room shell lightmaps.
+Texture2D gFloorLightmap;
+Texture2D gCeilingLightmap;
+Texture2D gBackWallLightmap;
+Texture2D gLeftWallLightmap;
+Texture2D gRightWallLightmap;
+
+// Slab lightmap.
+Texture2D gVisibilitySlabLightmap;
+
+cbuffer PerFrameCB
+{
+    uint gFloorInstanceID;
+    uint gCeilingInstanceID;
+    uint gBackWallInstanceID;
+    uint gLeftWallInstanceID;
+    uint gRightWallInstanceID;
+    uint gVisibilitySlabInstanceID;
+
+    float3 gVisibilitySlabCenterW;
+    float3 gVisibilitySlabHalfExtentW;
+};
+
+// ... Include your existing vsMain, rotate, projectCubeFaceUV, and shadeWithLightmap functions here ...
+
+float4 psMain(VSOut vsOut, uint triangleIndex: SV_PrimitiveID) : SV_TARGET
 {
     float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
     ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
@@ -179,16 +316,6 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
     float4 baseColorSample = (float4)baseColorMat.baseColor;
     float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
-
-    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture)
-    {
-        baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
-    }
-
-    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture)
-    {
-        emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
-    }
 
     float3 albedo = baseColorSample.rgb;
     float3 litColor = albedo;
@@ -198,81 +325,26 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
     uint instanceID = vsOut.instanceID.index;
 
-    // Room shell.
-    if (instanceID == gFloorInstanceID)
-    {
+    // Apply specific lightmaps based on ID
+    if (instanceID == gFloorInstanceID) {
         litColor = shadeWithLightmap(albedo, gFloorLightmap.Sample(gLinearSampler, quadUV).rgb);
     }
-    else if (instanceID == gCeilingInstanceID)
-    {
+    else if (instanceID == gCeilingInstanceID) {
         litColor = shadeWithLightmap(albedo, gCeilingLightmap.Sample(gLinearSampler, quadUV).rgb);
     }
-    else if (instanceID == gLeftWallInstanceID)
-    {
-        litColor = shadeWithLightmap(albedo, gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb);
-    }
-    else if (instanceID == gRightWallInstanceID)
-    {
-        litColor = shadeWithLightmap(albedo, gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb);
-    }
-    else if (instanceID == gBackWallInstanceID)
-    {
+    else if (instanceID == gBackWallInstanceID) {
         litColor = shadeWithLightmap(albedo, gBackWallLightmap.Sample(gLinearSampler, quadUV).rgb);
     }
-    else if (instanceID == gFrontWallInstanceID)
-    {
-        litColor = shadeWithLightmap(albedo, gFrontWallLightmap.Sample(gLinearSampler, quadUV).rgb);
+    else if (instanceID == gLeftWallInstanceID) {
+        litColor = shadeWithLightmap(albedo, gLeftWallLightmap.Sample(gLinearSampler, quadUV).rgb);
     }
-
-    // Box targets.
-    else if (instanceID == gTallBoxAInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxACenterW, gTallBoxAHalfExtentW, float3(0.0f, 0.0f, 0.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gTallBoxALightmap.Sample(gLinearSampler, uv).rgb);
+    else if (instanceID == gRightWallInstanceID) {
+        litColor = shadeWithLightmap(albedo, gRightWallLightmap.Sample(gLinearSampler, quadUV).rgb);
     }
-    else if (instanceID == gWideBoxBInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gWideBoxBCenterW, gWideBoxBHalfExtentW, float3(0.0f, 0.0f, 0.0f));
+    else if (instanceID == gVisibilitySlabInstanceID) {
+        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gVisibilitySlabCenterW, gVisibilitySlabHalfExtentW, float3(0.0f, 0.0f, 0.0f));
         uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gWideBoxBLightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gBlockCInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gBlockCCenterW, gBlockCHalfExtentW, float3(0.0f, 18.0f, 0.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gBlockCLightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gLowBoxDInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gLowBoxDCenterW, gLowBoxDHalfExtentW, float3(0.0f, -22.0f, 0.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gLowBoxDLightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gThinSlabEInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabECenterW, gThinSlabEHalfExtentW, float3(0.0f, 0.0f, 0.0f)
-);
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gThinSlabELightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gThinSlabFInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gThinSlabFCenterW, gThinSlabFHalfExtentW, float3(0.0f, 12.0f, 0.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gThinSlabFLightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gTallBoxJInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gTallBoxJCenterW, gTallBoxJHalfExtentW, float3(0.0f, -18.0f, 8.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gTallBoxJLightmap.Sample(gLinearSampler, uv).rgb);
-    }
-    else if (instanceID == gShortBoxLInstanceID)
-    {
-        float2 uv = projectCubeFaceUV(vsOut.posW, vsOut.normalW, gShortBoxLCenterW, gShortBoxLHalfExtentW, float3(0.0f, 40.0f, 0.0f));
-        uv.y = 1.0f - uv.y;
-        litColor = shadeWithLightmap(albedo, gShortBoxLLightmap.Sample(gLinearSampler, uv).rgb);
+        litColor = shadeWithLightmap(albedo, gVisibilitySlabLightmap.Sample(gLinearSampler, uv).rgb);
     }
 
     litColor += emissiveSample.rgb;

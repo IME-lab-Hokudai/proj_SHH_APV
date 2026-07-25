@@ -192,26 +192,40 @@ void ProbeVisualizePass::setDecisionDebugData(
 )
 {
     mVertices.clear();
+    static const float3 kLevelColors[] =
+    {
+        float3(0.9f, 0.9f, 0.9f),
+        float3(1.0f, 0.0f, 0.0f),
+        float3(1.0f, 0.5f, 0.0f),
+        float3(1.0f, 1.0f, 0.0f),
+        float3(0.0f, 1.0f, 0.0f),
+        float3(0.0f, 1.0f, 1.0f),
+        float3(0.0f, 0.0f, 1.0f),
+        float3(1.0f, 0.0f, 1.0f)
+    };
 
     for (const auto& v : debugVoxels)
     {
-        float3 color;
-
-        switch (v.kind)
+        if (v.kind == AdaptiveProbeVolume::DecisionDebugKind::Pruned)
         {
-        case AdaptiveProbeVolume::DecisionDebugKind::Pruned:
             if (!showPruned) continue;
-            color = float3(1.0f, 0.15f, 0.0f); // red/orange
-            break;
-
-        case AdaptiveProbeVolume::DecisionDebugKind::Added:
+        }
+        else if (v.kind == AdaptiveProbeVolume::DecisionDebugKind::Added)
+        {
             if (!showAdded) continue;
-            color = float3(0.0f, 0.65f, 1.0f); // blue/cyan
-            break;
-
-        default:
+        }
+        else
+        {
             continue;
         }
+
+        uint32_t lvl = std::min<uint32_t>(v.level, 7);
+
+        float3 color = kLevelColors[lvl];
+
+        // Keep pruned voxels reddish if you want
+        if (v.kind == AdaptiveProbeVolume::DecisionDebugKind::Pruned)
+            color = lerp(color, float3(1.0f, 0.1f, 0.0f), 0.6f);
 
         float3 size = v.maxPoint - v.minPoint;
         float3 inflate = 0.01f * size;
