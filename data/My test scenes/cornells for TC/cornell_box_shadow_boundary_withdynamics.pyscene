@@ -137,25 +137,27 @@ sceneBuilder.addMeshInstance(
 )
 
 # near the visibility-slab shadow boundary on the floor.
-dynamicCubeMaterial = StandardMaterial('Dynamic Flat Cube')
+dynamicCubeMaterial = StandardMaterial('Dynamic Wall Cube')
 dynamicCubeMaterial.baseColor = float4(0.725, 0.71, 0.68, 1.0)
 dynamicCubeMaterial.roughness = 1.0
+dynamicCubeMaterial.metallic = 0.0
 
-dynamicCubeWidth = 0.05
-dynamicCubeHeight = 0.01
-dynamicCubeDepth = 0.08
+# The right wall is at x = 0.275.
+# Make the object thin along X so it fits inside the wall-adjacent voxels.
+dynamicCubeThickness = 0.02
+dynamicCubeHeight = 0.1
+dynamicCubeDepth = 0.05
 
-# Approximate floor shadow-boundary position.
-dynamicCubeX = -0.035
-dynamicCubeY = 0.02
-dynamicCubeZ = -0.01
+dynamicCubeX = 0.23
+dynamicCubeY = 0.155
+dynamicCubeZ = 0.17
 
 sceneBuilder.addMeshInstance(
     sceneBuilder.addNode(
-        'Dynamic Flat Cube',
+        'Dynamic Wall Cube',
         Transform(
             scaling=float3(
-                dynamicCubeWidth,
+                dynamicCubeThickness,
                 dynamicCubeHeight,
                 dynamicCubeDepth
             ),
@@ -175,8 +177,8 @@ sceneBuilder.addMeshInstance(
 
 # Create camera
 camera = Camera()
-camera.position = float3(-0.0340, 0.1559, 0.1559)
-camera.target = float3(-0.0265, -0.5038, -0.5956)
+camera.position = float3(0.06, 0.16, 0.16)
+camera.target = float3(1.0, 0.14, 0.16)
 camera.up = float3(0, 1, 0)
 camera.focalLength = 35.0
 sceneBuilder.addCamera(camera)

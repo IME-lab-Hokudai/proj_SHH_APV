@@ -68,8 +68,8 @@ const float verificationExtent = 0.25f;
 const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
-const bool useResidualCorrection = true;
-//const bool useResidualCorrection = false;
+//const bool useResidualCorrection = true;
+const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -155,9 +155,9 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2Metric.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleV2MetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr2CornellThinSlab.txt";
-const std::string saveToFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
+//const std::string saveToFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
-//const std::string saveToFileName = "DirectAbsErr2ResidualScaleMetric.txt";
+const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -1620,7 +1620,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
             //exportIrradianceFieldErrorComparison();
             //exportAnalyticErrorVsDistanceTest();
-            //exportResidualTopologyRegionErrorComparison();
+            exportResidualTopologyRegionErrorComparison();
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());

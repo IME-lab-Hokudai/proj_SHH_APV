@@ -55,14 +55,14 @@
 //const std::string loadFromFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
 
 const std::string loadFromFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
-//const std::string loadFromFileName = "DirectAbsErr2CornellThinSlab.txt";
+//const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
 //const std::string loadFromFileName = "U32DataScene.txt";
 //const std::string loadFromFileName = "U32DataScene_4096spp_4spt.txt";
-//const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
-const std::string loadFromFileName = "U32CornellShadowBoundaryScene.txt";
+const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
+//const std::string loadFromFileName = "U32CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U64DataScene.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
