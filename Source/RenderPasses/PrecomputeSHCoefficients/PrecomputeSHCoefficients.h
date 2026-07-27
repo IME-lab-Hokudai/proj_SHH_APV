@@ -120,8 +120,8 @@ private:
 
     void SinglePassBuild(RenderContext* pRenderContext);
     void ProgressiveRefineBuild(RenderContext* pRenderContext);
-    void exportIrradianceFieldErrorComparison();
     void exportResidualTopologyRegionErrorComparison();
 
     bool mbShowEdgeAddedVoxels = true;
+    bool mShowNormalVoxels = true;
 };

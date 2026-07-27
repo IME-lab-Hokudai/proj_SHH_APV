@@ -41,7 +41,7 @@ void ProbeVisualizePass::execute(RenderContext* pRenderContext, const ref<Fbo>& 
 
     var["drawLeafOnly"] =
         mDrawLeafOnly ? 1u : 0u;
-
+    var["showNormal"] = mShowNormal ? 1u : 0u;
     var["showEdgeAdded"] =
         mShowEdgeAdded ? 1u : 0u;
 
@@ -88,7 +88,7 @@ void ProbeVisualizePass::setVolumeData(const std::vector<AdaptiveProbeVolume::Pr
     pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
     pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
     pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0); // New Attribute
-    pBufLayout->addElement("EDGE_ADDED",32,ResourceFormat::R32Uint,1, 0);
+    pBufLayout->addElement("EDGE_ADDED", 32, ResourceFormat::R32Uint, 1, 0);
     pLayout->addBufferLayout(0, pBufLayout);
 
     Vao::BufferVec buffers{ pVertexBuffer };
@@ -165,7 +165,8 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     mVertices.clear();
 
     // Use a distinct color for Uniform Grid (e.g., Cyan) to distinguish it from Adaptive levels
-    float3 color = float3(0.0f, 1.0f, 1.0f);
+    //float3 color = float3(0.0f, 1.0f, 1.0f);
+    float3 color = float3(0.0f, 0.0f, 1.0f);
     uint32_t level = 0;
     bool isLeaf = true; // Uniform cells are always leaves
 

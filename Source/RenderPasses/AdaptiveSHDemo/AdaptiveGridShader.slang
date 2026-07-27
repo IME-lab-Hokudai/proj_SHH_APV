@@ -34,15 +34,13 @@ cbuffer SeedGridCB
 //Texture2D gPillar6Lightmap;
 //Texture2D gPillar7Lightmap;
 
-// Room shell lightmaps.
+// data scene lightmaps.
 //Texture2D gFloorLightmap;
 //Texture2D gCeilingLightmap;
 //Texture2D gLeftWallLightmap;
 //Texture2D gRightWallLightmap;
 //Texture2D gBackWallLightmap;
 //Texture2D gFrontWallLightmap;
-
-// Box lightmaps.
 //Texture2D gTallBoxALightmap;
 //Texture2D gWideBoxBLightmap;
 //Texture2D gBlockCLightmap;
@@ -58,9 +56,8 @@ Texture2D gCeilingLightmap;
 Texture2D gBackWallLightmap;
 Texture2D gLeftWallLightmap;
 Texture2D gRightWallLightmap;
-
-// Slab lightmap.
 Texture2D gVisibilitySlabLightmap;
+
 cbuffer PerFrameCB
 {
     //uint gFloorInstanceID;

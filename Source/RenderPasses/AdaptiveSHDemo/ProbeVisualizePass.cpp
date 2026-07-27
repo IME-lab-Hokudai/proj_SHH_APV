@@ -165,7 +165,8 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     mVertices.clear();
 
     // Use a distinct color for Uniform Grid (e.g., Cyan) to distinguish it from Adaptive levels
-    float3 color = float3(0.0f, 1.0f, 1.0f);
+    //float3 color = float3(0.0f, 1.0f, 1.0f);
+    float3 color = float3(0.0f, 0.0f, 1.0f);
     uint32_t level = 0;
     bool isLeaf = true; // Uniform cells are always leaves
 

@@ -68,8 +68,8 @@ const float verificationExtent = 0.25f;
 const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
-//const bool useResidualCorrection = true;
-const bool useResidualCorrection = false;
+const bool useResidualCorrection = true;
+//const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -87,7 +87,7 @@ const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
 //const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
+const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -157,7 +157,9 @@ const std::string loadFromFileName = "DirectAbsErr8p5N6IndirectDataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr2CornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
-const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
+//const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
+//const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
+const std::string saveToFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -377,7 +379,366 @@ namespace
             float3(0.0f,  0.0f, -1.0f),
         };
     }
+    struct LocalMethodErrorStats
+    {
+        double sumAPE = 0.0;
+        double sumAbsError = 0.0;
+        double sumSquaredError = 0.0;
 
+        uint64_t sampleCount = 0;
+
+        void add(float testLuminance, float referenceLuminance, float relEpsilon)
+        {
+            const float error =
+                testLuminance - referenceLuminance;
+
+            const float absError =
+                std::abs(error);
+
+            const float denominator =
+                std::max(std::abs(referenceLuminance), relEpsilon);
+
+            const float ape =
+                absError / denominator * 100.0f;
+
+            if (!std::isfinite(ape) ||
+                !std::isfinite(absError))
+            {
+                return;
+            }
+
+            sumAPE += double(ape);
+            sumAbsError += double(absError);
+            sumSquaredError +=
+                double(error) * double(error);
+
+            sampleCount++;
+        }
+
+        double getMAPE() const
+        {
+            return sampleCount > 0
+                ? sumAPE / double(sampleCount)
+                : 0.0;
+        }
+
+        double getMAE() const
+        {
+            return sampleCount > 0
+                ? sumAbsError / double(sampleCount)
+                : 0.0;
+        }
+
+        double getRMSE() const
+        {
+            return sampleCount > 0
+                ? std::sqrt(
+                    sumSquaredError /
+                    double(sampleCount)
+                )
+                : 0.0;
+        }
+
+        double getPSNR(float peakValue = 1.0f) const
+        {
+            const double rmse = getRMSE();
+
+            if (rmse <= 0.0)
+                return std::numeric_limits<double>::infinity();
+
+            return 20.0 * std::log10(
+                double(peakValue) / rmse
+            );
+        }
+    };
+
+
+    struct LocalEGCComparisonStats
+    {
+        LocalMethodErrorStats hessian;
+        LocalMethodErrorStats egc;
+
+        uint64_t egcBetterCount = 0;
+        uint64_t hessianBetterCount = 0;
+        uint64_t equalCount = 0;
+
+        void add(
+            float3 hessianIrradiance,
+            float3 egcIrradiance,
+            float3 referenceIrradiance,
+            float relEpsilon
+        )
+        {
+            const float referenceLuminance =
+                luminance709(referenceIrradiance);
+
+            const float hessianLuminance =
+                luminance709(hessianIrradiance);
+
+            const float egcLuminance =
+                luminance709(egcIrradiance);
+
+            const float hessianAbsError =
+                std::abs(
+                    hessianLuminance -
+                    referenceLuminance
+                );
+
+            const float egcAbsError =
+                std::abs(
+                    egcLuminance -
+                    referenceLuminance
+                );
+
+            hessian.add(
+                hessianLuminance,
+                referenceLuminance,
+                relEpsilon
+            );
+
+            egc.add(
+                egcLuminance,
+                referenceLuminance,
+                relEpsilon
+            );
+
+            constexpr float equalEpsilon = 1e-8f;
+
+            if (egcAbsError + equalEpsilon < hessianAbsError)
+            {
+                egcBetterCount++;
+            }
+            else if (
+                hessianAbsError + equalEpsilon <
+                egcAbsError
+                )
+            {
+                hessianBetterCount++;
+            }
+            else
+            {
+                equalCount++;
+            }
+        }
+
+        uint64_t getComparisonCount() const
+        {
+            return
+                egcBetterCount +
+                hessianBetterCount +
+                equalCount;
+        }
+
+        double getEGCBetterRate() const
+        {
+            const uint64_t count =
+                getComparisonCount();
+
+            return count > 0
+                ? 100.0 *
+                double(egcBetterCount) /
+                double(count)
+                : 0.0;
+        }
+    };
+
+    struct SampleGainLossStats
+    {
+        // EGC produces lower absolute error than Hessian.
+        uint64_t improvedCount = 0;
+
+        // EGC produces higher absolute error than Hessian.
+        uint64_t worsenedCount = 0;
+
+        // Difference is within the numerical tolerance.
+        uint64_t comparableCount = 0;
+
+        uint64_t invalidCount = 0;
+
+        // Positive magnitudes only.
+        double totalGain = 0.0;
+        double totalLoss = 0.0;
+
+        std::vector<float> gainValues;
+        std::vector<float> lossValues;
+
+        void add(
+            float hessianAbsError,
+            float egcAbsError
+        )
+        {
+            constexpr float kComparisonEps = 1e-6f;
+
+            if (!std::isfinite(hessianAbsError) ||
+                !std::isfinite(egcAbsError))
+            {
+                invalidCount++;
+                return;
+            }
+
+            // Positive means EGC removed error.
+            // Negative means EGC introduced error.
+            const float errorReduction =
+                hessianAbsError - egcAbsError;
+
+            if (errorReduction > kComparisonEps)
+            {
+                improvedCount++;
+
+                totalGain += double(errorReduction);
+
+                gainValues.push_back(
+                    errorReduction
+                );
+            }
+            else if (errorReduction < -kComparisonEps)
+            {
+                const float loss =
+                    -errorReduction;
+
+                worsenedCount++;
+
+                totalLoss += double(loss);
+
+                lossValues.push_back(
+                    loss
+                );
+            }
+            else
+            {
+                comparableCount++;
+            }
+        }
+
+        uint64_t getValidSampleCount() const
+        {
+            return
+                improvedCount +
+                worsenedCount +
+                comparableCount;
+        }
+
+        double percent(uint64_t count) const
+        {
+            const uint64_t validCount =
+                getValidSampleCount();
+
+            return validCount > 0
+                ? 100.0 *
+                double(count) /
+                double(validCount)
+                : 0.0;
+        }
+
+        double getMeanGain() const
+        {
+            return improvedCount > 0
+                ? totalGain /
+                double(improvedCount)
+                : 0.0;
+        }
+
+        double getMedianGain() const
+        {
+            return percentileVector(
+                gainValues,
+                50.0
+            );
+        }
+
+        double getMeanLoss() const
+        {
+            return worsenedCount > 0
+                ? totalLoss /
+                double(worsenedCount)
+                : 0.0;
+        }
+
+        double getMedianLoss() const
+        {
+            return percentileVector(
+                lossValues,
+                50.0
+            );
+        }
+
+        double getNetGain() const
+        {
+            return totalGain - totalLoss;
+        }
+
+        double getNetMeanErrorReduction() const
+        {
+            const uint64_t validCount =
+                getValidSampleCount();
+
+            return validCount > 0
+                ? getNetGain() /
+                double(validCount)
+                : 0.0;
+        }
+
+        double getGainLossRatio() const
+        {
+            if (totalLoss > 0.0)
+                return totalGain / totalLoss;
+
+            if (totalGain > 0.0)
+                return std::numeric_limits<double>::infinity();
+
+            return 0.0;
+        }
+    };
+
+    static void writeLocalEGCComparisonRow(
+        std::ofstream& csv,
+        const std::string& regionName,
+        int probeIndex,
+        int probeLevel,
+        float3 minPoint,
+        float3 maxPoint,
+        const LocalEGCComparisonStats& stats
+    )
+    {
+        csv << std::fixed << std::setprecision(8);
+
+        csv
+            << regionName << ","
+            << probeIndex << ","
+            << probeLevel << ","
+
+            << minPoint.x << ","
+            << minPoint.y << ","
+            << minPoint.z << ","
+
+            << maxPoint.x << ","
+            << maxPoint.y << ","
+            << maxPoint.z << ","
+
+            << stats.hessian.sampleCount << ","
+
+            << stats.hessian.getMAPE() << ","
+            << stats.egc.getMAPE() << ","
+            << stats.hessian.getMAPE() -
+            stats.egc.getMAPE() << ","
+
+            << stats.hessian.getMAE() << ","
+            << stats.egc.getMAE() << ","
+            << stats.hessian.getMAE() -
+            stats.egc.getMAE() << ","
+
+            << stats.hessian.getRMSE() << ","
+            << stats.egc.getRMSE() << ","
+
+            << stats.hessian.getPSNR() << ","
+            << stats.egc.getPSNR() << ","
+
+            << stats.egcBetterCount << ","
+            << stats.hessianBetterCount << ","
+            << stats.equalCount << ","
+            << stats.getEGCBetterRate()
+            << "\n";
+    }
     static void writeFieldErrorSummaryRow(
         std::ofstream& csv,
         const std::string& method,
@@ -1551,6 +1912,18 @@ void PrecomputeSHCoefficients::renderUI(
     if (mbShowAdaptiveGrid)
     {
         if (widget.checkbox(
+            "Show Normal Voxels",
+            mShowNormalVoxels
+        ))
+        {
+            if (mpProbeVisualizePass)
+            {
+                mpProbeVisualizePass->setShowNormal(
+                    mShowNormalVoxels
+                );
+            }
+        }
+        if (widget.checkbox(
             "Show Edge-Added Voxels",
             mbShowEdgeAddedVoxels
         ))
@@ -1620,7 +1993,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
             //exportIrradianceFieldErrorComparison();
             //exportAnalyticErrorVsDistanceTest();
-            exportResidualTopologyRegionErrorComparison();
+            //exportResidualTopologyRegionErrorComparison();
            // program
            ProgramDesc desc;
            desc.addShaderModules(mpScene->getShaderModules());
@@ -1660,6 +2033,10 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
            mpProbeVisualizePass->setShowEdgeAdded(
                mbShowEdgeAddedVoxels
            );
+           mpProbeVisualizePass->setShowNormal(
+               mShowNormalVoxels
+           );
+
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
            if (!mNeedRebuildProbeVolume) {
@@ -3147,55 +3524,54 @@ static bool writeResidualTopologyMainStatsText(
 void PrecomputeSHCoefficients::exportResidualTopologyRegionErrorComparison()
 {
     // ============================================================
-    // Files
+    // Input files
     // ============================================================
 
-    const std::string referenceFile =
-        "U64DataScene.txt";
+    //const std::string referenceFile =
+    //    "U64CornellShadowBoundaryScene.txt";
 
-    // Original Hessian grid: same threshold, residual disabled.
-    //const std::string hessianFile ="DirectAbsErr5DataSceneAvg.txt";
-    const std::string hessianFile ="DirectAbsErr10DataSceneAvg.txt";
+    //const std::string hessianFile =
+    //    "DirectAbsErr2HessianMetricCornellThinSlab.txt";
 
-    // Residual-calibrated grid: same threshold, residual enabled.
-    //const std::string residualFile =
-    //    "DirectAbsErr5ResidualScaleMetric.txt";
-    //const std::string residualFile =   "DirectAbsErr5ResidualScaleV2Metric.txt";
-    const std::string residualFile =   "DirectAbsErr10ResidualScaleV2Metric.txt";
+    //const std::string egcFile =
+    //    "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
+    //const std::string summaryCsvFile =
+    //    "CornellSceneEGCAddedRegionErrorSummary.csv";
 
-    const std::string outRegionCsvFile =
-        "ResidualTopologyRegionError_DirectAbsErr5.csv";
-
-    const std::string outDecisionSummaryCsvFile =
-        "ResidualTopologyDecisionQuality_DirectAbsErr5.csv";
-
-    const std::string outDecisionDetailsCsvFile =
-        "ResidualTopologyDecisionDetails_DirectAbsErr5.csv";
-    const std::string outMainStatsTxtFile =
-        "ResidualTopologyMainStats_DirectAbsErr5.txt";
+    const std::string referenceFile =  "U64DataScene_4096spp.txt";
+    const std::string hessianFile =  "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+    const std::string egcFile =  "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
+    const std::string summaryCsvFile = "DataSceneEGCAddedRegionErrorSummary.csv";
     // ============================================================
-    // Test settings
+    // Output files
     // ============================================================
 
-    const uint32_t queryRes = 64;
 
-    const std::vector<float3> normalDirs =
+
+    // ============================================================
+    // Evaluation settings
+    // ============================================================
+
+    // Fixed number of spatial samples along each axis of every
+    // EGC-added leaf node.
+    constexpr uint32_t samplesPerAxis = 4;
+
+
+    const std::vector<float3> normalDirections =
         makeSixAxisNormalsWorld();
 
-    const float relEpsilon = 1e-4f;
-
-    // Used only to stabilize percentage ratios when Hessian abs error is tiny.
-    // This is not the 5/10/20 bucket threshold.
-    const float decisionAbsTol = 1e-4f;
-
+    SampleGainLossStats gainLossStats;
     // ============================================================
-    // Load grids
+    // Load volumes
     // ============================================================
 
-    logInfo("Loading residual topology region error comparison grids.");
+    logInfo(
+        "Loading local EGC-added-region evaluation volumes."
+    );
+
     logInfo("  Reference = " + referenceFile);
     logInfo("  Hessian   = " + hessianFile);
-    logInfo("  Residual  = " + residualFile);
+    logInfo("  EGC       = " + egcFile);
 
     ref<UniformProbeVolume> reference =
         UniformProbeVolume::create(mpDevice);
@@ -3207,462 +3583,268 @@ void PrecomputeSHCoefficients::exportResidualTopologyRegionErrorComparison()
 
     hessianGrid->loadFromFile(hessianFile);
 
-    ref<AdaptiveProbeVolume> residualGrid =
+    ref<AdaptiveProbeVolume> egcGrid =
         AdaptiveProbeVolume::create(mpDevice);
 
-    residualGrid->loadFromFile(residualFile);
-
-    // Query domain.
-    float3 evalMin =
-        reference->getMinPoint();
-
-    float3 evalMax =
-        reference->getMaxPoint();
-
-    float3 refCellSize =
-        reference->getCellSize();
-
-    float3 margin =
-        0.5f * refCellSize;
-
-    evalMin += margin;
-    evalMax -= margin;
-
-    float3 evalExtent =
-        evalMax - evalMin;
-
+    egcGrid->loadFromFile(egcFile);
+ 
     // ============================================================
-    // Region stats: sample-weighted quality impact
+    // Evaluate EGC-added leaf nodes
     // ============================================================
 
-    PairwiseRegionErrorStats allStats;
-    PairwiseRegionErrorStats sameLevelStats;
-    PairwiseRegionErrorStats prunedStats;
-    PairwiseRegionErrorStats addedStats;
+    uint64_t egcAddedLeafCount = 0;
+    uint64_t failedReferenceQueries = 0;
+    uint64_t failedHessianQueries = 0;
+    uint64_t failedEGCQueries = 0;
 
-    // ============================================================
-    // Decision stats: decision-weighted topology correctness
-    // ============================================================
+    const auto& egcProbes =
+        egcGrid->getProbes();
 
-    std::unordered_map<int, DecisionRegionErrorStats> pruneDecisionStats;
-    std::unordered_map<int, DecisionRegionErrorStats> refineDecisionStats;
-
-    uint64_t totalNormalSamples = 0;
-    uint64_t failedTopologyLookup = 0;
-
-    // ============================================================
-    // Evaluate field
-    // ============================================================
-
-    for (uint32_t z = 0; z < queryRes; ++z)
+    for (
+        int egcProbeIndex = 0;
+        egcProbeIndex < int(egcProbes.size());
+        ++egcProbeIndex
+        )
     {
-        for (uint32_t y = 0; y < queryRes; ++y)
+        const auto& probe =
+            egcProbes[egcProbeIndex];
+
+        // Evaluate only final leaves to avoid sampling overlapping
+        // parent and child regions.
+        if (!probe.isLeaf)
+            continue;
+
+        // addedByEdgeAware is propagated to descendants, so this
+        // selects the final EGC-added topology.
+        if (!probe.addedByEdgeAware)
+            continue;
+
+        egcAddedLeafCount++;
+
+        const float3 nodeMin =
+            probe.minPoint;
+
+        const float3 nodeMax =
+            probe.maxPoint;
+
+        const float3 nodeExtent =
+            nodeMax - nodeMin;
+
+        for (
+            uint32_t z = 0;
+            z < samplesPerAxis;
+            ++z
+            )
         {
-            for (uint32_t x = 0; x < queryRes; ++x)
+            for (
+                uint32_t y = 0;
+                y < samplesPerAxis;
+                ++y
+                )
             {
-                float3 uvw = float3(
-                    (float(x) + 0.5f) / float(queryRes),
-                    (float(y) + 0.5f) / float(queryRes),
-                    (float(z) + 0.5f) / float(queryRes)
-                );
-
-                float3 posW =
-                    evalMin + uvw * evalExtent;
-
-                int hessianLeafIdx =
-                    hessianGrid->findLeafProbeIndexCPU(posW);
-
-                int residualLeafIdx =
-                    residualGrid->findLeafProbeIndexCPU(posW);
-
-                if (hessianLeafIdx < 0 ||
-                    residualLeafIdx < 0)
+                for (
+                    uint32_t x = 0;
+                    x < samplesPerAxis;
+                    ++x
+                    )
                 {
-                    failedTopologyLookup++;
-                    continue;
-                }
+                    // Cell-centered local coordinates.
+                    // For samplesPerAxis = 4:
+                    // 0.125, 0.375, 0.625, 0.875.
+                    const float3 localUVW =
+                        float3(
+                            (float(x) + 0.5f) /
+                            float(samplesPerAxis),
 
-                int hessianLevel =
-                    hessianGrid->getProbeLevelCPU(hessianLeafIdx);
+                            (float(y) + 0.5f) /
+                            float(samplesPerAxis),
 
-                int residualLevel =
-                    residualGrid->getProbeLevelCPU(residualLeafIdx);
-
-                enum class RegionKind
-                {
-                    SameLevel,
-                    Pruned,
-                    Added
-                };
-
-                RegionKind regionKind =
-                    RegionKind::SameLevel;
-
-                if (residualLevel < hessianLevel)
-                {
-                    // Residual hierarchy is coarser.
-                    regionKind = RegionKind::Pruned;
-                }
-                else if (residualLevel > hessianLevel)
-                {
-                    // Residual hierarchy is finer.
-                    regionKind = RegionKind::Added;
-                }
-
-                for (const float3& normalW : normalDirs)
-                {
-                    float3 refIrr =
-                        reference->evaluateIrradianceHermiteCPU(
-                            posW,
-                            normalW
+                            (float(z) + 0.5f) /
+                            float(samplesPerAxis)
                         );
 
-                    float3 hessianIrr =
-                        hessianGrid->evaluateIrradianceHermiteCPU(
-                            posW,
-                            normalW
+                    const float3 positionWorld =
+                        nodeMin +
+                        localUVW * nodeExtent;
+
+                    // Validate that all three volumes contain the
+                    // position before evaluating irradiance.
+                    const int hessianLeafIndex =
+                        hessianGrid->
+                        findLeafProbeIndexCPU(
+                            positionWorld
                         );
 
-                    float3 residualIrr =
-                        residualGrid->evaluateIrradianceHermiteCPU(
-                            posW,
-                            normalW
-                        );
-
-                    addPairwiseRegionErrorSample(
-                        allStats,
-                        hessianIrr,
-                        residualIrr,
-                        refIrr,
-                        relEpsilon
-                    );
-
-                    if (regionKind == RegionKind::Pruned)
+                    if (hessianLeafIndex < 0)
                     {
-                        addPairwiseRegionErrorSample(
-                            prunedStats,
-                            hessianIrr,
-                            residualIrr,
-                            refIrr,
-                            relEpsilon
-                        );
-
-                        // One residual coarse leaf represents the prune decision.
-                        addDecisionRegionErrorSample(
-                            pruneDecisionStats[residualLeafIdx],
-                            hessianIrr,
-                            residualIrr,
-                            refIrr,
-                            relEpsilon,
-                            hessianLevel,
-                            residualLevel
-                        );
-                    }
-                    else if (regionKind == RegionKind::Added)
-                    {
-                        addPairwiseRegionErrorSample(
-                            addedStats,
-                            hessianIrr,
-                            residualIrr,
-                            refIrr,
-                            relEpsilon
-                        );
-
-                        // One original Hessian leaf represents the region where
-                        // residual added refinement.
-                        addDecisionRegionErrorSample(
-                            refineDecisionStats[hessianLeafIdx],
-                            hessianIrr,
-                            residualIrr,
-                            refIrr,
-                            relEpsilon,
-                            hessianLevel,
-                            residualLevel
-                        );
-                    }
-                    else
-                    {
-                        addPairwiseRegionErrorSample(
-                            sameLevelStats,
-                            hessianIrr,
-                            residualIrr,
-                            refIrr,
-                            relEpsilon
-                        );
+                        failedHessianQueries++;
+                        continue;
                     }
 
-                    totalNormalSamples++;
+                    const int egcLeafIndex =
+                        egcGrid->
+                        findLeafProbeIndexCPU(
+                            positionWorld
+                        );
+
+                    if (egcLeafIndex < 0)
+                    {
+                        failedEGCQueries++;
+                        continue;
+                    }
+
+                    // The query should normally return the same EGC
+                    // leaf currently being sampled. A different leaf
+                    // can occur only from boundary precision.
+                    const float3 referenceMin =
+                        reference->getMinPoint();
+
+                    const float3 referenceMax =
+                        reference->getMaxPoint();
+
+                    const bool insideReference =
+                        positionWorld.x >= referenceMin.x &&
+                        positionWorld.y >= referenceMin.y &&
+                        positionWorld.z >= referenceMin.z &&
+                        positionWorld.x <= referenceMax.x &&
+                        positionWorld.y <= referenceMax.y &&
+                        positionWorld.z <= referenceMax.z;
+
+                    if (!insideReference)
+                    {
+                        failedReferenceQueries++;
+                        continue;
+                    }
+
+                    for (
+                        const float3& normalWorld :
+                        normalDirections
+                        )
+                    {
+                        const float3 referenceIrradiance =
+                            reference->
+                            evaluateIrradianceHermiteCPU(
+                                positionWorld,
+                                normalWorld
+                            );
+
+                        const float3 hessianIrradiance =
+                            hessianGrid->
+                            evaluateIrradianceHermiteCPU(
+                                positionWorld,
+                                normalWorld
+                            );
+
+                        const float3 egcIrradiance =
+                            egcGrid->
+                            evaluateIrradianceHermiteCPU(
+                                positionWorld,
+                                normalWorld
+                            );
+
+                        // Collect gain for this position-normal sample.
+                        const float referenceLuminance =
+                            luminance709(referenceIrradiance);
+
+                        const float hessianLuminance =
+                            luminance709(hessianIrradiance);
+
+                        const float egcLuminance =
+                            luminance709(egcIrradiance);
+
+                        gainLossStats.add(
+                            std::abs(
+                                hessianLuminance -
+                                referenceLuminance
+                            ),
+                            std::abs(
+                                egcLuminance -
+                                referenceLuminance
+                            )
+                        );
+                    }
                 }
             }
         }
     }
 
     // ============================================================
-    // Write sample-level region CSV
-    // ============================================================
+// Write compact gain/loss summary
+// ============================================================
 
-    {
-        std::ofstream csv(outRegionCsvFile);
+    std::ofstream summaryCsv(summaryCsvFile);
 
-        if (!csv)
-        {
-            logError(
-                "Failed to open residual topology region error CSV: " +
-                outRegionCsvFile
-            );
-            return;
-        }
-
-        csv << std::fixed << std::setprecision(8);
-
-        csv
-            << "region,"
-            << "sampleCount,"
-            << "sampleSharePercent,"
-
-            << "hessianMAPE,"
-            << "residualMAPE,"
-            << "deltaMAPE_HessianMinusResidual,"
-            << "medianDeltaMAPE,"
-            << "p05DeltaMAPE,"
-            << "p95DeltaMAPE,"
-
-            << "hessianMeanAbsErr,"
-            << "residualMeanAbsErr,"
-            << "deltaMeanAbsErr_HessianMinusResidual,"
-
-            << "residualBetterRatePercent,"
-            << "residualWorseRatePercent,"
-            << "residualEqualRatePercent,"
-
-            << "meanDeltaAPE_WhenResidualBetter,"
-            << "meanDeltaAPE_WhenResidualWorse,"
-            << "meanDeltaAbsErr_WhenResidualBetter,"
-            << "meanDeltaAbsErr_WhenResidualWorse"
-            << "\n";
-
-        writePairwiseRegionErrorRow(
-            csv,
-            "all",
-            allStats,
-            totalNormalSamples
-        );
-
-        writePairwiseRegionErrorRow(
-            csv,
-            "same_level",
-            sameLevelStats,
-            totalNormalSamples
-        );
-
-        writePairwiseRegionErrorRow(
-            csv,
-            "pruned_residual_coarser",
-            prunedStats,
-            totalNormalSamples
-        );
-
-        writePairwiseRegionErrorRow(
-            csv,
-            "added_residual_finer",
-            addedStats,
-            totalNormalSamples
-        );
-    }
-
-    // ============================================================
-    // Write decision-level summary CSV
-    // ============================================================
-
-    {
-        std::ofstream csv(outDecisionSummaryCsvFile);
-
-        if (!csv)
-        {
-            logError(
-                "Failed to open residual topology decision summary CSV: " +
-                outDecisionSummaryCsvFile
-            );
-            return;
-        }
-
-        csv << std::fixed << std::setprecision(8);
-
-        csv
-            << "decisionType,"
-            << "decisionCount,"
-            << "totalDecisionSamples,"
-            << "sampleSharePercent,"
-            << "meanSamplesPerDecision,"
-
-            << "favorableDecisionCount,"
-            << "neutralDecisionCount,"
-            << "unfavorableDecisionCount,"
-
-            << "favorableDecisionRatePercent,"
-            << "neutralDecisionRatePercent,"
-            << "unfavorableDecisionRatePercent,"
-
-            << "residualBetterGt20Count,"
-            << "residualBetter10To20Count,"
-            << "residualBetter5To10Count,"
-            << "within5PercentCount,"
-            << "residualWorse5To10Count,"
-            << "residualWorse10To20Count,"
-            << "residualWorseGt20Count,"
-
-            << "residualBetterGt20RatePercent,"
-            << "residualBetter10To20RatePercent,"
-            << "residualBetter5To10RatePercent,"
-            << "within5PercentRatePercent,"
-            << "residualWorse5To10RatePercent,"
-            << "residualWorse10To20RatePercent,"
-            << "residualWorseGt20RatePercent,"
-
-            << "meanDecisionHessianMAPE,"
-            << "meanDecisionResidualMAPE,"
-            << "meanDecisionDeltaMAPE,"
-            << "medianDecisionDeltaMAPE,"
-            << "p05DecisionDeltaMAPE,"
-            << "p95DecisionDeltaMAPE,"
-
-            << "meanDecisionHessianAbsErr,"
-            << "meanDecisionResidualAbsErr,"
-            << "meanDecisionDeltaAbsErr,"
-            << "medianDecisionDeltaAbsErr,"
-            << "p05DecisionDeltaAbsErr,"
-            << "p95DecisionDeltaAbsErr,"
-
-            << "meanDecisionDeltaAbsErrPercent,"
-            << "medianDecisionDeltaAbsErrPercent,"
-            << "p05DecisionDeltaAbsErrPercent,"
-            << "p95DecisionDeltaAbsErrPercent"
-            << "\n";
-
-        writeDecisionQualitySummaryRow(
-            csv,
-            "prune",
-            pruneDecisionStats,
-            totalNormalSamples,
-            decisionAbsTol
-        );
-
-        writeDecisionQualitySummaryRow(
-            csv,
-            "refine",
-            refineDecisionStats,
-            totalNormalSamples,
-            decisionAbsTol
-        );
-    }
-
-    // ============================================================
-    // Write decision-level details CSV
-    // ============================================================
-
-    {
-        std::ofstream csv(outDecisionDetailsCsvFile);
-
-        if (!csv)
-        {
-            logError(
-                "Failed to open residual topology decision details CSV: " +
-                outDecisionDetailsCsvFile
-            );
-            return;
-        }
-
-        csv << std::fixed << std::setprecision(8);
-
-        csv
-            << "decisionType,"
-            << "decisionKey,"
-            << "decisionClass,"
-            << "sampleCount,"
-
-            << "minHessianLevel,"
-            << "maxHessianLevel,"
-            << "minResidualLevel,"
-            << "maxResidualLevel,"
-            << "meanHessianLevel,"
-            << "meanResidualLevel,"
-            << "meanLevelDeltaResidualMinusHessian,"
-
-            << "meanHessianAbsErr,"
-            << "meanResidualAbsErr,"
-            << "meanDeltaAbsErr,"
-            << "deltaAbsErrPercent,"
-
-            << "meanHessianMAPE,"
-            << "meanResidualMAPE,"
-            << "meanDeltaMAPE"
-            << "\n";
-
-        writeDecisionDetailsRows(
-            csv,
-            "prune",
-            pruneDecisionStats,
-            decisionAbsTol
-        );
-
-        writeDecisionDetailsRows(
-            csv,
-            "refine",
-            refineDecisionStats,
-            decisionAbsTol
-        );
-    }
-
-    logInfo(
-        "Wrote residual topology region error comparison: " +
-        outRegionCsvFile
-    );
-
-    logInfo(
-        "Wrote residual topology decision quality summary: " +
-        outDecisionSummaryCsvFile
-    );
-
-    logInfo(
-        "Wrote residual topology decision details: " +
-        outDecisionDetailsCsvFile
-    );
-
-    logInfo(
-        "Failed topology lookup count: " +
-        std::to_string(failedTopologyLookup)
-    );
-
-    bool wroteMainStatsText =
-        writeResidualTopologyMainStatsText(
-            outMainStatsTxtFile,
-            referenceFile,
-            hessianFile,
-            residualFile,
-            queryRes,
-            totalNormalSamples,
-            failedTopologyLookup,
-            allStats,
-            sameLevelStats,
-            prunedStats,
-            addedStats,
-            pruneDecisionStats,
-            refineDecisionStats,
-            decisionAbsTol
-        );
-
-    if (!wroteMainStatsText)
+    if (!summaryCsv)
     {
         logError(
-            "Failed to open residual topology main stats text file: " +
-            outMainStatsTxtFile
+            "Failed to open EGC gain/loss summary CSV: " +
+            summaryCsvFile
         );
+
+        return;
     }
-    else
-    {
-        logInfo(
-            "Wrote residual topology main stats text file: " +
-            outMainStatsTxtFile
-        );
-    }
+
+    summaryCsv << std::fixed << std::setprecision(10);
+
+    summaryCsv
+        << "referenceFile,"
+        << "hessianFile,"
+        << "egcFile,"
+        << "egcAddedLeafCount,"
+        << "validSampleCount,"
+
+        << "improvedCount,"
+        << "improvedPercent,"
+        << "meanGain,"
+        << "medianGain,"
+        << "totalGain,"
+
+        << "worsenedCount,"
+        << "worsenedPercent,"
+        << "meanLoss,"
+        << "medianLoss,"
+        << "totalLoss,"
+
+        << "comparableCount,"
+        << "comparablePercent,"
+
+        << "netGain,"
+        << "netMeanErrorReduction,"
+        << "gainLossRatio"
+        << "\n";
+
+    summaryCsv
+        << referenceFile << ","
+        << hessianFile << ","
+        << egcFile << ","
+        << egcAddedLeafCount << ","
+        << gainLossStats.getValidSampleCount() << ","
+
+        << gainLossStats.improvedCount << ","
+        << gainLossStats.percent(
+            gainLossStats.improvedCount
+        ) << ","
+        << gainLossStats.getMeanGain() << ","
+        << gainLossStats.getMedianGain() << ","
+        << gainLossStats.totalGain << ","
+
+        << gainLossStats.worsenedCount << ","
+        << gainLossStats.percent(
+            gainLossStats.worsenedCount
+        ) << ","
+        << gainLossStats.getMeanLoss() << ","
+        << gainLossStats.getMedianLoss() << ","
+        << gainLossStats.totalLoss << ","
+
+        << gainLossStats.comparableCount << ","
+        << gainLossStats.percent(
+            gainLossStats.comparableCount
+        ) << ","
+
+        << gainLossStats.getNetGain() << ","
+        << gainLossStats.getNetMeanErrorReduction() << ","
+        << gainLossStats.getGainLossRatio()
+        << "\n";
+
+    summaryCsv.close();
 }

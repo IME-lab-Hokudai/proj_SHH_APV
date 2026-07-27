@@ -86,7 +86,7 @@ void BakeLightMapSingle::execute(RenderContext* pRenderContext, const RenderData
         if (mbloadLightMap) {
             auto applyVar = mpVars->getRootVar();
             //bindDataSceneData(applyVar);
-            bindCornellData(applyVar);
+            bindCornellShadowBoundaryData(applyVar);
             mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpVars.get(), mpRasterState, mpRasterState);
         }
         else {
@@ -316,7 +316,8 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
     if (mpScene)
     {
         //setupDataSceneBakeTargets();
-        setupCornellBakeTargets();
+        //setupCornellShadowBoundaryBakeTargets();
+        setupCornellVisibilitySlabBakeTargets();
         if (mbloadLightMap) {
             ProgramDesc previewDesc;
             previewDesc.addShaderModules(mpScene->getShaderModules());
@@ -349,7 +350,7 @@ void BakeLightMapSingle::setScene(RenderContext* pRenderContext, const ref<Scene
 
             //loadLightmaps();
             //loadDataSceneLightmaps();
-            loadCornellLightmaps();
+            loadCornellShadowBoundaryLightmaps();
         }
         else {
             //logInfo("Geometry instance count = {}", mpScene->getGeometryInstanceCount());
@@ -757,7 +758,7 @@ void BakeLightMapSingle::loadDataSceneLightmaps()
     loadOne(13, mpDataShortBoxLLightmap, "DataShortBoxLLightmap");
 }
 
-void BakeLightMapSingle::setupCornellBakeTargets()
+void BakeLightMapSingle::setupCornellShadowBoundaryBakeTargets()
 {
     mBakeTargets =
     {
@@ -780,7 +781,7 @@ void BakeLightMapSingle::setupCornellBakeTargets()
     };
 }
 
-void BakeLightMapSingle::loadCornellLightmaps()
+void BakeLightMapSingle::loadCornellShadowBoundaryLightmaps()
 {
     auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
         {
@@ -798,7 +799,7 @@ void BakeLightMapSingle::loadCornellLightmaps()
     loadOne(5, mpCornellThinSlabLightmapShadowBoundaryTestScene, "CornellVisibilitySlabLightmap");
 }
 
-void BakeLightMapSingle::bindCornellData(ShaderVar applyVar)
+void BakeLightMapSingle::bindCornellShadowBoundaryData(ShaderVar applyVar)
 {
     applyVar["gLinearSampler"] = mpLinearSampler;
 
@@ -821,4 +822,68 @@ void BakeLightMapSingle::bindCornellData(ShaderVar applyVar)
     // Bind Pillar Data for Slab
     applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.12f, 0.28f, 0.00f);
     applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.15f, 0.0175f, 0.11f);
+}
+
+void BakeLightMapSingle::setupCornellVisibilitySlabBakeTargets()
+{
+    mBakeTargets =
+    {
+        // Room shell targets (Quads)
+        { "Floor",     0, 1024, 1024, "BakedCornellSlab_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedCornellSlab_Ceiling.exr"   },
+        { "BackWall",  2, 1024, 1024, "BakedCornellSlab_BackWall.exr"  },
+        { "LeftWall",  3, 1024, 1024, "BakedCornellSlab_LeftWall.exr"  },
+        { "RightWall", 4, 1024, 1024, "BakedCornellSlab_RightWall.exr" },
+
+        // Visibility-discontinuity test slab (Cube/Pillar)
+        { "VisibilitySlab", 6, 512, 512, "BakedCornellSlab_VisibilitySlab.exr",
+            BakeTargetType::Pillar,
+            float3(-0.05f, 0.21f, -0.02f),       // Center (slabX, slabY, slabZ)
+            float3(0.01f, 0.21f, 0.18f),       // Half extent (scaling * 0.5)
+            float3(0.0f, 0.0f, 0.0f)           // Rotation
+        }
+    };
+}
+
+void BakeLightMapSingle::loadCornellVisibilitySlabLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size()) return;
+            const auto& target = mBakeTargets[idx];
+            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
+            if (dst) dst->setName(debugName);
+        };
+
+    loadOne(0, mpCornellFloorLightmapVisibilitySlab, "CornellFloorLightmapSlab");
+    loadOne(1, mpCornellCeilingLightmapVisibilitySlab, "CornellCeilingLightmapSlab");
+    loadOne(2, mpCornellBackWallLightmapVisibilitySlab, "CornellBackWallLightmapSlab");
+    loadOne(3, mpCornellLeftWallLightmapVisibilitySlab, "CornellLeftWallLightmapSlab");
+    loadOne(4, mpCornellRightWallLightmapVisibilitySlab, "CornellRightWallLightmapSlab");
+    loadOne(5, mpCornellSlabLightmapVisibilitySlab, "CornellVisibilitySlabLightmapSlab");
+}
+
+void BakeLightMapSingle::bindCornellVisibilitySlabData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    // Bind Textures
+    applyVar["gFloorLightmap"] = mpCornellFloorLightmapVisibilitySlab;
+    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapVisibilitySlab;
+    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapVisibilitySlab;
+    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapVisibilitySlab;
+    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapVisibilitySlab;
+    applyVar["gVisibilitySlabLightmap"] = mpCornellSlabLightmapVisibilitySlab;
+
+    // Bind Instance IDs
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
+
+    // Bind Pillar Data for Slab
+    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(-0.05f, 0.21f, -0.02f);
+    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.01f, 0.21f, 0.18f);
 }

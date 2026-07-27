@@ -62,9 +62,14 @@ public:
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
     // Cornell box
-    void setupCornellBakeTargets();
-    void loadCornellLightmaps();
-    void bindCornellData(ShaderVar var);
+    void setupCornellShadowBoundaryBakeTargets();
+    void loadCornellShadowBoundaryLightmaps();
+    void bindCornellShadowBoundaryData(ShaderVar var);
+
+    // Add to public/private methods
+    void setupCornellVisibilitySlabBakeTargets();
+    void loadCornellVisibilitySlabLightmaps();
+    void bindCornellVisibilitySlabData(ShaderVar var);
 private:
     enum class BakeTargetType
     {
@@ -169,11 +174,19 @@ private:
     ref<Texture> mpDataTallBoxJLightmap;
     ref<Texture> mpDataShortBoxLLightmap;
 
-    // Cornell box
+    // Cornell shadow boundary scene
     ref<Texture> mpCornellFloorLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellCeilingLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellBackWallLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellLeftWallLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellRightWallLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellThinSlabLightmapShadowBoundaryTestScene;
+
+    // cornell thin slab scene
+    ref<Texture> mpCornellFloorLightmapVisibilitySlab;
+    ref<Texture> mpCornellCeilingLightmapVisibilitySlab;
+    ref<Texture> mpCornellBackWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellLeftWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellRightWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellSlabLightmapVisibilitySlab;
 };

@@ -54,16 +54,23 @@
 //const std::string loadFromFileName = "DirectAbsErr4p25DataSceneIrrMetric.txt";
 //const std::string loadFromFileName = "DirectAbsErr2p1DataScenePresentativeNormalMetricAvg.txt";
 
-const std::string loadFromFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt";
+//const std::string loadFromFileName = "DirectAbsErr2ResidualScaleV2MetricCornellThinSlab.txt"; //note this is actually shadow boundary scene
+//const std::string loadFromFileName = "DirectAbsErr2N5HessianMetricThinSlabScene4096spp.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N5EdgeGradientMetricThinSlabScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
+//const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
+const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
 //const std::string loadFromFileName = "U32DataScene.txt";
 //const std::string loadFromFileName = "U32DataScene_4096spp_4spt.txt";
-const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
+//const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U32CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U64DataScene.txt";
+const std::string loadFromFileName = "U64DataScene_4096spp.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
 
@@ -81,6 +88,159 @@ AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : R
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
     mpLinearSampler = mpDevice->createSampler(samplerDesc);
+}
+
+namespace
+{
+    constexpr float kPi = 3.14159265358979323846f;
+
+    float degreesToRadians(float degrees)
+    {
+        return degrees * kPi / 180.0f;
+    }
+
+    float radiansToDegrees(float radians)
+    {
+        return radians * 180.0f / kPi;
+    }
+}
+
+void AdaptiveSHDemo::captureCurrentCameraOrbit()
+{
+    if (!mpScene)
+    {
+        return;
+    }
+
+    const auto pCamera = mpScene->getCamera();
+    if (!pCamera)
+    {
+        return;
+    }
+
+    const float3 position = pCamera->getPosition();
+    const float3 offset = position - mCameraOrbitCenter;
+
+    const float horizontalRadius = std::sqrt(
+        offset.x * offset.x +
+        offset.z * offset.z
+    );
+
+    if (horizontalRadius < 1e-4f)
+    {
+        logWarning(
+            "Cannot capture orbit: camera is directly above "
+            "the orbit center."
+        );
+        return;
+    }
+
+    mCameraOrbitRadius = horizontalRadius;
+    mCameraOrbitHeight = offset.y;
+    mCameraOrbitAngle = std::atan2(offset.z, offset.x);
+}
+
+void AdaptiveSHDemo::startCameraOrbit()
+{
+    if (!mpScene || !mpScene->getCamera())
+    {
+        logWarning("Cannot start camera orbit: no camera is available.");
+        return;
+    }
+
+    if (mCameraOrbitUseCurrentPoseOnStart)
+    {
+        captureCurrentCameraOrbit();
+    }
+    else
+    {
+        applyCameraOrbitPose();
+    }
+
+    mCameraOrbitLastTime = std::chrono::steady_clock::now();
+    mCameraOrbitActive = true;
+}
+
+void AdaptiveSHDemo::stopCameraOrbit()
+{
+    mCameraOrbitActive = false;
+}
+
+void AdaptiveSHDemo::toggleCameraOrbit()
+{
+    if (mCameraOrbitActive)
+    {
+        stopCameraOrbit();
+    }
+    else
+    {
+        startCameraOrbit();
+    }
+}
+
+void AdaptiveSHDemo::updateCameraOrbit()
+{
+    if (!mCameraOrbitActive || !mpScene)
+    {
+        return;
+    }
+
+    const auto currentTime = std::chrono::steady_clock::now();
+
+    float deltaTime = std::chrono::duration<float>(
+        currentTime - mCameraOrbitLastTime
+    ).count();
+
+    mCameraOrbitLastTime = currentTime;
+
+    // Avoid jumps after debugging or a long frame.
+    deltaTime = std::clamp(deltaTime, 0.0f, 0.1f);
+
+    mCameraOrbitAngle +=
+        degreesToRadians(mCameraOrbitSpeedDeg) * deltaTime;
+
+    // Prevent the angle from growing indefinitely.
+    if (mCameraOrbitAngle > 2.0f * kPi)
+    {
+        mCameraOrbitAngle -= 2.0f * kPi;
+    }
+    else if (mCameraOrbitAngle < -2.0f * kPi)
+    {
+        mCameraOrbitAngle += 2.0f * kPi;
+    }
+
+    applyCameraOrbitPose();
+}
+
+void AdaptiveSHDemo::applyCameraOrbitPose()
+{
+    if (!mpScene)
+    {
+        return;
+    }
+
+    const auto pCamera = mpScene->getCamera();
+    if (!pCamera)
+    {
+        return;
+    }
+
+    const float3 cameraPosition(
+        mCameraOrbitCenter.x +
+        mCameraOrbitRadius * std::cos(mCameraOrbitAngle),
+
+        mCameraOrbitCenter.y +
+        mCameraOrbitHeight,
+
+        mCameraOrbitCenter.z +
+        mCameraOrbitRadius * std::sin(mCameraOrbitAngle)
+    );
+
+    const float3 lookAtPoint =
+        mCameraOrbitCenter + mCameraLookAtOffset;
+
+    pCamera->setPosition(cameraPosition);
+    pCamera->setTarget(lookAtPoint);
 }
 
 Properties AdaptiveSHDemo::getProperties() const
@@ -138,13 +298,14 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
     mpFbo->attachDepthStencilTarget(pDepth);
     pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::Color);
     if (mpScene) {
-
+        updateCameraOrbit();
         // ------------------------------------------------------------------
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
         //bindDataSceneData(applyVar);
-        bindCornellData(applyVar);
+        //bindCornellData(applyVar);
+        bindCornellVisibilitySlabData(applyVar);
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
         applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
@@ -226,9 +387,175 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         }
     }
 }
+bool AdaptiveSHDemo::onKeyEvent(
+    const KeyboardEvent& keyEvent
+)
+{
+    if (
+        keyEvent.type == KeyboardEvent::Type::KeyPressed &&
+        keyEvent.key == Input::Key::O
+        )
+    {
+        toggleCameraOrbit();
+        return true;
+    }
+
+    return false;
+}
 
 void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     widget.text("Loaded probe file: " + loadFromFileName);
+
+    if (auto orbitGroup = widget.group("Camera Orbit", true))
+    {
+        orbitGroup.text("Hotkey: O");
+
+        orbitGroup.text(
+            mCameraOrbitActive
+            ? "Status: running"
+            : "Status: stopped"
+        );
+
+        // --------------------------------------------------------------
+        // Target presets
+        // --------------------------------------------------------------
+
+        if (orbitGroup.button("Target Bunny 0"))
+        {
+            mCameraOrbitCenter = float3(-3.2f, 1.0f, 0.2f);
+
+            if (mCameraOrbitActive)
+            {
+                applyCameraOrbitPose();
+            }
+        }
+
+        if (orbitGroup.button("Target Bunny 1"))
+        {
+            mCameraOrbitCenter = float3(-1.1f, 2.0f, 2.0f);
+
+            if (mCameraOrbitActive)
+            {
+                applyCameraOrbitPose();
+            }
+        }
+
+        if (orbitGroup.button("Target Bunny 2"))
+        {
+            mCameraOrbitCenter = float3(1.0f, 1.0f, 0.7f);
+
+            if (mCameraOrbitActive)
+            {
+                applyCameraOrbitPose();
+            }
+        }
+
+        // --------------------------------------------------------------
+        // Position and target
+        // --------------------------------------------------------------
+
+        bool poseChanged = false;
+
+        poseChanged |= orbitGroup.var(
+            "Orbit center",
+            mCameraOrbitCenter,
+            -10.0f,
+            10.0f,
+            0.01f
+        );
+
+        poseChanged |= orbitGroup.var(
+            "Look-at offset",
+            mCameraLookAtOffset,
+            -5.0f,
+            5.0f,
+            0.01f
+        );
+
+        poseChanged |= orbitGroup.var(
+            "Radius",
+            mCameraOrbitRadius,
+            0.05f,
+            20.0f,
+            0.01f
+        );
+
+        poseChanged |= orbitGroup.var(
+            "Height",
+            mCameraOrbitHeight,
+            -10.0f,
+            10.0f,
+            0.01f
+        );
+
+        // Present the internal radian angle as degrees in the UI.
+        float angleDeg = radiansToDegrees(mCameraOrbitAngle);
+
+        if (
+            orbitGroup.var(
+                "Angle (deg)",
+                angleDeg,
+                -360.0f,
+                360.0f,
+                0.1f
+            )
+            )
+        {
+            mCameraOrbitAngle = degreesToRadians(angleDeg);
+            poseChanged = true;
+        }
+
+        // Apply edits immediately, even while the animation is stopped.
+        if (poseChanged)
+        {
+            applyCameraOrbitPose();
+        }
+
+        // --------------------------------------------------------------
+        // Animation controls
+        // --------------------------------------------------------------
+
+        orbitGroup.var(
+            "Speed (deg/s)",
+            mCameraOrbitSpeedDeg,
+            -90.0f,
+            90.0f,
+            0.1f
+        );
+
+        orbitGroup.checkbox(
+            "Use current camera pose on start",
+            mCameraOrbitUseCurrentPoseOnStart
+        );
+
+        if (orbitGroup.button("Capture current camera pose"))
+        {
+            captureCurrentCameraOrbit();
+        }
+
+        if (orbitGroup.button("Reverse direction"))
+        {
+            mCameraOrbitSpeedDeg = -mCameraOrbitSpeedDeg;
+        }
+
+        if (orbitGroup.button("Reset angle"))
+        {
+            mCameraOrbitAngle = 0.0f;
+            applyCameraOrbitPose();
+        }
+
+        if (
+            orbitGroup.button(
+                mCameraOrbitActive
+                ? "Stop orbit"
+                : "Start orbit"
+            )
+            )
+        {
+            toggleCameraOrbit();
+        }
+    }
+
     if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
         requestRecompile();
     // Level Visibility Controls
@@ -361,7 +688,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         }
 
         //setupDataSceneBakeTargets();
-        setupCornellBakeTargets();
+        //setupCornellBakeTargets();
+        setupCornellVisibilitySlabBakeTargets();
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
         //Re-apply the visibility masks from our member variables
@@ -505,7 +833,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 
         //loadLightmaps();
         //loadDataSceneLightmaps();
-        loadCornellLightmaps();
+        //loadCornellLightmaps();
+        loadCornellVisibilitySlabLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
@@ -778,4 +1107,68 @@ void AdaptiveSHDemo::bindCornellData(ShaderVar applyVar)
     // Bind Pillar Data for Slab
     applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.12f, 0.28f, 0.00f);
     applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.15f, 0.0175f, 0.11f);
+}
+
+void AdaptiveSHDemo::setupCornellVisibilitySlabBakeTargets()
+{
+    mBakeTargets =
+    {
+        // Room shell targets (Quads)
+        { "Floor",     0, 1024, 1024, "BakedCornellSlab_Floor.exr"     },
+        { "Ceiling",   1, 1024, 1024, "BakedCornellSlab_Ceiling.exr"   },
+        { "BackWall",  2, 1024, 1024, "BakedCornellSlab_BackWall.exr"  },
+        { "LeftWall",  3, 1024, 1024, "BakedCornellSlab_LeftWall.exr"  },
+        { "RightWall", 4, 1024, 1024, "BakedCornellSlab_RightWall.exr" },
+
+        // Visibility-discontinuity test slab (Cube/Pillar)
+        { "VisibilitySlab", 6, 512, 512, "BakedCornellSlab_VisibilitySlab.exr",
+            BakeTargetType::Pillar,
+            float3(0.0f, 0.21f, -0.02f),       // Center (slabX, slabY, slabZ)
+            float3(0.01f, 0.21f, 0.18f),       // Half extent (scaling * 0.5)
+            float3(0.0f, 0.0f, 0.0f)           // Rotation
+        }
+    };
+}
+
+void AdaptiveSHDemo::loadCornellVisibilitySlabLightmaps()
+{
+    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
+        {
+            if (idx >= mBakeTargets.size()) return;
+            const auto& target = mBakeTargets[idx];
+            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
+            if (dst) dst->setName(debugName);
+        };
+
+    loadOne(0, mpCornellFloorLightmapVisibilitySlab, "CornellFloorLightmapSlab");
+    loadOne(1, mpCornellCeilingLightmapVisibilitySlab, "CornellCeilingLightmapSlab");
+    loadOne(2, mpCornellBackWallLightmapVisibilitySlab, "CornellBackWallLightmapSlab");
+    loadOne(3, mpCornellLeftWallLightmapVisibilitySlab, "CornellLeftWallLightmapSlab");
+    loadOne(4, mpCornellRightWallLightmapVisibilitySlab, "CornellRightWallLightmapSlab");
+    loadOne(5, mpCornellSlabLightmapVisibilitySlab, "CornellVisibilitySlabLightmapSlab");
+}
+
+void AdaptiveSHDemo::bindCornellVisibilitySlabData(ShaderVar applyVar)
+{
+    applyVar["gLinearSampler"] = mpLinearSampler;
+
+    // Bind Textures
+    applyVar["gFloorLightmap"] = mpCornellFloorLightmapVisibilitySlab;
+    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapVisibilitySlab;
+    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapVisibilitySlab;
+    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapVisibilitySlab;
+    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapVisibilitySlab;
+    applyVar["gVisibilitySlabLightmap"] = mpCornellSlabLightmapVisibilitySlab;
+
+    // Bind Instance IDs
+    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
+    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
+    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
+    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
+    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
+    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
+
+    // Bind Pillar Data for Slab
+    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.0f, 0.21f, -0.02f);
+    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.01f, 0.21f, 0.18f);
 }

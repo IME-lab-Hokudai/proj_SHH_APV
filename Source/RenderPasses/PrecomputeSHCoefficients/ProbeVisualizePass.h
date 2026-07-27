@@ -38,6 +38,10 @@ public:
     {
         mShowEdgeAdded = show;
     }
+    void setShowNormal(bool b)
+    {
+        mShowNormal = b;
+    }
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
@@ -60,4 +64,5 @@ private:
     uint32_t mVisibleLevelMask = 0xFFFFFFFF;
     bool mDrawLeafOnly = false; // New State
     bool mShowEdgeAdded = true;
+    bool mShowNormal = true;
 };

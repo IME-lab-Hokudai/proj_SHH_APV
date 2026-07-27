@@ -56,7 +56,7 @@ public:
     void loadLightmaps();
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
-    virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+    virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override;
 
     //data scene
     void loadDataSceneLightmaps();
@@ -67,6 +67,11 @@ public:
     void setupCornellBakeTargets();
     void loadCornellLightmaps();
     void bindCornellData(ShaderVar var);
+
+    // Cornel box thin slab
+    void setupCornellVisibilitySlabBakeTargets();
+    void loadCornellVisibilitySlabLightmaps();
+    void bindCornellVisibilitySlabData(ShaderVar var);
 private:
     enum class BakeTargetType
     {
@@ -185,4 +190,43 @@ private:
     ref<Texture> mpCornellLeftWallLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellRightWallLightmapShadowBoundaryTestScene;
     ref<Texture> mpCornellThinSlabLightmapShadowBoundaryTestScene;
+
+    // cornell thin slab scene
+    ref<Texture> mpCornellFloorLightmapVisibilitySlab;
+    ref<Texture> mpCornellCeilingLightmapVisibilitySlab;
+    ref<Texture> mpCornellBackWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellLeftWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellRightWallLightmapVisibilitySlab;
+    ref<Texture> mpCornellSlabLightmapVisibilitySlab;
+
+    // Camera orbit.
+    void startCameraOrbit();
+    void stopCameraOrbit();
+    void toggleCameraOrbit();
+    void updateCameraOrbit();
+    void captureCurrentCameraOrbit();
+    void applyCameraOrbitPose();
+
+    bool mCameraOrbitActive = false;
+
+    // When enabled, pressing Start derives radius, height, and angle
+    // from the current manually positioned camera.
+    bool mCameraOrbitUseCurrentPoseOnStart = true;
+
+    // Center of the circular camera path.
+    float3 mCameraOrbitCenter = float3(-1.1f, 2.0f, 2.0f);
+
+    // Camera looks at orbit center + this offset.
+    float3 mCameraLookAtOffset = float3(0.0f, 0.25f, 0.0f);
+
+    float mCameraOrbitRadius = 2.0f;
+    float mCameraOrbitHeight = 0.3f;
+
+    // Stored internally in radians.
+    float mCameraOrbitAngle = 0.0f;
+
+    // Negative values reverse direction.
+    float mCameraOrbitSpeedDeg = 8.0f;
+
+    std::chrono::steady_clock::time_point mCameraOrbitLastTime;
 };
