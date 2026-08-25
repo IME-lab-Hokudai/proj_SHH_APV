@@ -214,19 +214,24 @@ private:
     bool mCameraOrbitUseCurrentPoseOnStart = true;
 
     // Center of the circular camera path.
-    float3 mCameraOrbitCenter = float3(-1.1f, 2.0f, 2.0f);
-
+    float3 mCameraOrbitCenter = float3(-0.0f, 2.0f, 1.0f);
+    float3 mCameraLookAtTarget =
+        float3(-1.1f, 1.5f, 1.1f);
     // Camera looks at orbit center + this offset.
     float3 mCameraLookAtOffset = float3(0.0f, 0.25f, 0.0f);
 
-    float mCameraOrbitRadius = 2.0f;
+    float mCameraOrbitRadiusX = 4.710f;
+    float mCameraOrbitRadiusZ = 2.660f;
+
+    // Rotates the ellipse around the world Y axis.
+    float mCameraOrbitYawDeg = 0.0f;
     float mCameraOrbitHeight = 0.3f;
 
     // Stored internally in radians.
     float mCameraOrbitAngle = 0.0f;
 
     // Negative values reverse direction.
-    float mCameraOrbitSpeedDeg = 8.0f;
+    float mCameraOrbitSpeedDeg = 22.0f;
 
     std::chrono::steady_clock::time_point mCameraOrbitLastTime;
 };

@@ -58,9 +58,9 @@
 //const std::string loadFromFileName = "DirectAbsErr2N5HessianMetricThinSlabScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N5EdgeGradientMetricThinSlabScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
-//const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
+const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
-const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
+//const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -118,26 +118,72 @@ void AdaptiveSHDemo::captureCurrentCameraOrbit()
         return;
     }
 
-    const float3 position = pCamera->getPosition();
-    const float3 offset = position - mCameraOrbitCenter;
+    constexpr float kEpsilon = 1e-4f;
 
-    const float horizontalRadius = std::sqrt(
-        offset.x * offset.x +
-        offset.z * offset.z
-    );
-
-    if (horizontalRadius < 1e-4f)
+    if (
+        mCameraOrbitRadiusX < kEpsilon ||
+        mCameraOrbitRadiusZ < kEpsilon
+        )
     {
         logWarning(
-            "Cannot capture orbit: camera is directly above "
-            "the orbit center."
+            "Cannot capture ellipse orbit with a zero radius."
         );
         return;
     }
 
-    mCameraOrbitRadius = horizontalRadius;
-    mCameraOrbitHeight = offset.y;
-    mCameraOrbitAngle = std::atan2(offset.z, offset.x);
+    const float3 position =
+        pCamera->getPosition();
+
+    const float3 worldOffset =
+        position - mCameraOrbitCenter;
+
+    mCameraOrbitHeight = worldOffset.y;
+
+    // Transform the camera offset into the ellipse's local frame.
+    const float yaw =
+        degreesToRadians(mCameraOrbitYawDeg);
+
+    const float cosYaw = std::cos(yaw);
+    const float sinYaw = std::sin(yaw);
+
+    const float localX =
+        cosYaw * worldOffset.x +
+        sinYaw * worldOffset.z;
+
+    const float localZ =
+        -sinYaw * worldOffset.x +
+        cosYaw * worldOffset.z;
+
+    // Uniformly scale the ellipse so the current camera position lies on it,
+    // while preserving the X/Z radius ratio.
+    const float normalizedX =
+        localX / mCameraOrbitRadiusX;
+
+    const float normalizedZ =
+        localZ / mCameraOrbitRadiusZ;
+
+    const float ellipseScale =
+        std::sqrt(
+            normalizedX * normalizedX +
+            normalizedZ * normalizedZ
+        );
+
+    if (ellipseScale < kEpsilon)
+    {
+        logWarning(
+            "Cannot capture orbit: camera is too close "
+            "to the orbit center."
+        );
+        return;
+    }
+
+    mCameraOrbitRadiusX *= ellipseScale;
+    mCameraOrbitRadiusZ *= ellipseScale;
+
+    mCameraOrbitAngle = std::atan2(
+        localZ / mCameraOrbitRadiusZ,
+        localX / mCameraOrbitRadiusX
+    );
 }
 
 void AdaptiveSHDemo::startCameraOrbit()
@@ -225,22 +271,42 @@ void AdaptiveSHDemo::applyCameraOrbitPose()
         return;
     }
 
+    const float theta = mCameraOrbitAngle;
+    const float yaw =
+        degreesToRadians(mCameraOrbitYawDeg);
+
+    // Ellipse in its local XZ plane.
+    const float localX =
+        mCameraOrbitRadiusX * std::cos(theta);
+
+    const float localZ =
+        mCameraOrbitRadiusZ * std::sin(theta);
+
+    // Rotate the ellipse around world Y.
+    const float cosYaw = std::cos(yaw);
+    const float sinYaw = std::sin(yaw);
+
+    const float offsetX =
+        cosYaw * localX -
+        sinYaw * localZ;
+
+    const float offsetZ =
+        sinYaw * localX +
+        cosYaw * localZ;
+
     const float3 cameraPosition(
-        mCameraOrbitCenter.x +
-        mCameraOrbitRadius * std::cos(mCameraOrbitAngle),
-
-        mCameraOrbitCenter.y +
-        mCameraOrbitHeight,
-
-        mCameraOrbitCenter.z +
-        mCameraOrbitRadius * std::sin(mCameraOrbitAngle)
+        mCameraOrbitCenter.x + offsetX,
+        mCameraOrbitCenter.y + mCameraOrbitHeight,
+        mCameraOrbitCenter.z + offsetZ
     );
 
-    const float3 lookAtPoint =
-        mCameraOrbitCenter + mCameraLookAtOffset;
-
+    //const float3 lookAtPoint =
+    //    mCameraOrbitCenter + mCameraLookAtOffset;
     pCamera->setPosition(cameraPosition);
-    pCamera->setTarget(lookAtPoint);
+    pCamera->setTarget(mCameraLookAtTarget);
+
+    //pCamera->setPosition(cameraPosition);
+    //pCamera->setTarget(lookAtPoint);
 }
 
 Properties AdaptiveSHDemo::getProperties() const
@@ -303,9 +369,9 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        //bindDataSceneData(applyVar);
+        bindDataSceneData(applyVar);
         //bindCornellData(applyVar);
-        bindCornellVisibilitySlabData(applyVar);
+        //bindCornellVisibilitySlabData(applyVar);
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
         applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
@@ -415,41 +481,6 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
             ? "Status: running"
             : "Status: stopped"
         );
-
-        // --------------------------------------------------------------
-        // Target presets
-        // --------------------------------------------------------------
-
-        if (orbitGroup.button("Target Bunny 0"))
-        {
-            mCameraOrbitCenter = float3(-3.2f, 1.0f, 0.2f);
-
-            if (mCameraOrbitActive)
-            {
-                applyCameraOrbitPose();
-            }
-        }
-
-        if (orbitGroup.button("Target Bunny 1"))
-        {
-            mCameraOrbitCenter = float3(-1.1f, 2.0f, 2.0f);
-
-            if (mCameraOrbitActive)
-            {
-                applyCameraOrbitPose();
-            }
-        }
-
-        if (orbitGroup.button("Target Bunny 2"))
-        {
-            mCameraOrbitCenter = float3(1.0f, 1.0f, 0.7f);
-
-            if (mCameraOrbitActive)
-            {
-                applyCameraOrbitPose();
-            }
-        }
-
         // --------------------------------------------------------------
         // Position and target
         // --------------------------------------------------------------
@@ -464,20 +495,44 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
             0.01f
         );
 
+        //poseChanged |= orbitGroup.var(
+        //    "Look-at offset",
+        //    mCameraLookAtOffset,
+        //    -5.0f,
+        //    5.0f,
+        //    0.01f
+        //);
+
         poseChanged |= orbitGroup.var(
-            "Look-at offset",
-            mCameraLookAtOffset,
-            -5.0f,
-            5.0f,
+            "Look-at target",
+            mCameraLookAtTarget,
+            -10.0f,
+            10.0f,
             0.01f
         );
 
         poseChanged |= orbitGroup.var(
-            "Radius",
-            mCameraOrbitRadius,
+            "Radius X",
+            mCameraOrbitRadiusX,
             0.05f,
             20.0f,
             0.01f
+        );
+
+        poseChanged |= orbitGroup.var(
+            "Radius Z",
+            mCameraOrbitRadiusZ,
+            0.05f,
+            20.0f,
+            0.01f
+        );
+
+        poseChanged |= orbitGroup.var(
+            "Ellipse rotation (deg)",
+            mCameraOrbitYawDeg,
+            -180.0f,
+            180.0f,
+            0.5f
         );
 
         poseChanged |= orbitGroup.var(
@@ -687,9 +742,9 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
 
-        //setupDataSceneBakeTargets();
+        setupDataSceneBakeTargets();
         //setupCornellBakeTargets();
-        setupCornellVisibilitySlabBakeTargets();
+        //setupCornellVisibilitySlabBakeTargets();
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
         //Re-apply the visibility masks from our member variables
@@ -832,9 +887,9 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpCompositeState->setVao(mpEmptyVao);
 
         //loadLightmaps();
-        //loadDataSceneLightmaps();
+        loadDataSceneLightmaps();
         //loadCornellLightmaps();
-        loadCornellVisibilitySlabLightmaps();
+        //loadCornellVisibilitySlabLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
