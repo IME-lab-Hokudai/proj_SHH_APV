@@ -432,41 +432,41 @@ void PathTracer::setScene(RenderContext* pRenderContext, const ref<Scene>& pScen
 
     if (mpScene)
     {
-        //REMARK :  set all materials to diffuse for SH testing
-        auto allMat = pScene->getMaterials();
+        ////REMARK :  set all materials to diffuse for SH testing
+        //auto allMat = pScene->getMaterials();
 
-        for (auto& pMat : allMat)
-        {
-            // STEP 1: Handle the Base properties (Legacy & Common)
-            // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
-            auto pBasicMat = pMat->toBasicMaterial();
+        //for (auto& pMat : allMat)
+        //{
+        //    // STEP 1: Handle the Base properties (Legacy & Common)
+        //    // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
+        //    auto pBasicMat = pMat->toBasicMaterial();
 
-            if (pBasicMat)
-            {
-                // 1. Kill the Specular Color / Shininess
-                // For Legacy OBJ: This makes it matte.
-                // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
-                pBasicMat->setSpecularParams(float4(0.0f));
+        //    if (pBasicMat)
+        //    {
+        //        // 1. Kill the Specular Color / Shininess
+        //        // For Legacy OBJ: This makes it matte.
+        //        // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
+        //        pBasicMat->setSpecularParams(float4(0.0f));
 
-                // 2. Kill Transmission (Glass/Ghosting)
-                pBasicMat->setTransmissionColor(float3(0.0f));
-                pBasicMat->setSpecularTransmission(0.0f);
-                pBasicMat->setDiffuseTransmission(0.0f);
-            }
+        //        // 2. Kill Transmission (Glass/Ghosting)
+        //        pBasicMat->setTransmissionColor(float3(0.0f));
+        //        pBasicMat->setSpecularTransmission(0.0f);
+        //        pBasicMat->setDiffuseTransmission(0.0f);
+        //    }
 
-            // STEP 2: Handle the PBR-specific properties
-            // This ONLY runs if the material is actually the modern StandardMaterial type.
-            StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
+        //    // STEP 2: Handle the PBR-specific properties
+        //    // This ONLY runs if the material is actually the modern StandardMaterial type.
+        //    StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
 
-            if (pStdMat)
-            {
-                // 3. Force PBR Roughness (The most important setting for modern renderers)
-                pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
-                pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
-                pStdMat->setSpecularTransmission(0.0f);
-                pStdMat->setTransmissionColor(float3(0.0f));
-            }
-        }
+        //    if (pStdMat)
+        //    {
+        //        // 3. Force PBR Roughness (The most important setting for modern renderers)
+        //        pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
+        //        pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
+        //        pStdMat->setSpecularTransmission(0.0f);
+        //        pStdMat->setTransmissionColor(float3(0.0f));
+        //    }
+        //}
         
         mUpdateFlagsConnection = mpScene->getUpdateFlagsSignal().connect([&](IScene::UpdateFlags flags) { mUpdateFlags |= flags; });
 

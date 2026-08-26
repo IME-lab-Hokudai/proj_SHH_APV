@@ -776,8 +776,8 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     {
         // Test-only fallback. Once the xatlas path is validated, this branch
         // can be replaced by the adaptive-SH path for dynamic/unbaked objects.
-        litColor = albedo * 0.05f;
-        //litColor = 0.0f;
+        // litColor = albedo * 0.05f;
+        litColor = float3(1, 0, 1);
     }
 
     litColor += emissiveSample.rgb;
