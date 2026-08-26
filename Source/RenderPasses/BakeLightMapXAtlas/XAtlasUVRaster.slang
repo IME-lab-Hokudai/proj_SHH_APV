@@ -1,7 +1,10 @@
 import Scene.Raster;
-
 #include "BakeDataStructures.slang"
 
+// Page-local compact triangle data.
+// gTriangleIDs maps a page-local triangle to the original triangle ID in
+// the Falcor geometry instance. gTriangleUVs uses the same local index.
+StructuredBuffer<uint> gTriangleIDs;
 StructuredBuffer<TriangleLightmapUV> gTriangleUVs;
 
 cbuffer BakeCB
@@ -12,105 +15,49 @@ cbuffer BakeCB
 
 struct BakeVSOut
 {
-    float3 posW    : POSW;
+    float3 posW : POSW;
     float3 normalW : NORMAL;
-
     float4 posH : SV_POSITION;
 };
 
 struct PSOut
 {
-    float4 posW  : SV_Target0;
+    float4 posW : SV_Target0;
     float4 normW : SV_Target1;
 };
-
-
-// =============================================================
-// Vertex shader
-//
-// We will issue a NON-INDEXED draw with:
-//
-//     vertexCount = triangleCount * 3
-//
-// Therefore:
-//
-//     vertexID / 3 = triangle ID
-//     vertexID % 3 = corner ID
-//
-// Example:
-//
-//     vertexID 0 -> triangle 0, corner 0
-//     vertexID 1 -> triangle 0, corner 1
-//     vertexID 2 -> triangle 0, corner 2
-//     vertexID 3 -> triangle 1, corner 0
-//     ...
-// =============================================================
 
 BakeVSOut vsMain(uint vertexID : SV_VertexID)
 {
     BakeVSOut o;
 
-    const uint triangleID =
-        vertexID / 3;
+    const uint localTriangleID = vertexID / 3;
+    const uint cornerID = vertexID % 3;
 
-    const uint cornerID =
-        vertexID % 3;
+    const uint sourceTriangleID =
+        gTriangleIDs[localTriangleID];
 
-    const GeometryInstanceID instanceID =
+    GeometryInstanceID instanceID =
         { gReceiverInstanceID };
-
-    // ---------------------------------------------------------
-    // Get the ORIGINAL Falcor vertex indices for this triangle.
-    //
-    // These are global indices into gScene.vertices.
-    // ---------------------------------------------------------
 
     const uint3 vertexIndices =
         gScene.getIndices(
             instanceID,
-            triangleID
+            sourceTriangleID
         );
 
-    uint vertexIndex;
-
-    if (cornerID == 0)
-    {
-        vertexIndex = vertexIndices.x;
-    }
-    else if (cornerID == 1)
-    {
-        vertexIndex = vertexIndices.y;
-    }
-    else
-    {
-        vertexIndex = vertexIndices.z;
-    }
-
-    // ---------------------------------------------------------
-    // Fetch the original Falcor vertex.
-    //
-    // This gives us its original:
-    //     position
-    //     normal
-    //     tangent
-    //     texcoord
-    // etc.
-    // ---------------------------------------------------------
+    const uint vertexIndex =
+        cornerID == 0 ? vertexIndices.x :
+        cornerID == 1 ? vertexIndices.y :
+                        vertexIndices.z;
 
     const StaticVertexData vertex =
         gScene.getVertex(vertexIndex);
-
-    // ---------------------------------------------------------
-    // Transform original geometry into world space.
-    // ---------------------------------------------------------
 
     const float4x4 worldMat =
         gScene.getWorldMatrix(instanceID);
 
     const float3x3 normalMat =
-        gScene.getInverseTransposeWorldMatrix(
-            instanceID
-        );
+        gScene.getInverseTransposeWorldMatrix(instanceID);
 
     o.posW =
         mul(
@@ -124,31 +71,13 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
             vertex.normal
         );
 
-    // ---------------------------------------------------------
-    // Get xatlas UV for this triangle corner.
-    // ---------------------------------------------------------
-
     const TriangleLightmapUV triUV =
-        gTriangleUVs[triangleID];
+        gTriangleUVs[localTriangleID];
 
-    float2 uv;
-
-    if (cornerID == 0)
-    {
-        uv = triUV.uv0;
-    }
-    else if (cornerID == 1)
-    {
-        uv = triUV.uv1;
-    }
-    else
-    {
-        uv = triUV.uv2;
-    }
-
-    // ---------------------------------------------------------
-    // Rasterize directly in xatlas UV space.
-    // ---------------------------------------------------------
+    const float2 uv =
+        cornerID == 0 ? triUV.uv0 :
+        cornerID == 1 ? triUV.uv1 :
+                        triUV.uv2;
 
     o.posH =
         float4(
@@ -160,23 +89,10 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
     return o;
 }
 
-
-// =============================================================
-// Pixel shader
-// =============================================================
-
 PSOut psMain(BakeVSOut pin)
 {
     PSOut o;
-
-    o.posW =
-        float4(pin.posW, 1.f);
-
-    o.normW =
-        float4(
-            normalize(pin.normalW),
-            1.f
-        );
-
+    o.posW = float4(pin.posW, 1.f);
+    o.normW = float4(normalize(pin.normalW), 1.f);
     return o;
 }

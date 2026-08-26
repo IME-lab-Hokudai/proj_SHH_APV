@@ -25,51 +25,73 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+
 #include "BakeLightMapXAtlas.h"
+
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Utils/Logger.h"
 #include "xatlas.h"
 
-const char kUVRasterFile[] =
-"RenderPasses/BakeLightMapXAtlas/XAtlasUVRaster.slang";
+#include <algorithm>
+#include <map>
+#include <unordered_set>
 
-const char kBakingFile[] =
-"RenderPasses/BakeLightMapXAtlas/LightmapBakingSingle.rt.slang";
+namespace
+{
+    const char kUVRasterFile[] =
+        "RenderPasses/BakeLightMapXAtlas/XAtlasUVRaster.slang";
 
-const char kExtractFile[] =
-"RenderPasses/BakeLightMapXAtlas/ExtractTexelsSingle.cs.slang";
+    const char kBakingFile[] =
+        "RenderPasses/BakeLightMapXAtlas/LightmapBakingSingle.rt.slang";
 
-const char kNormalizeFile[] =
-"RenderPasses/BakeLightMapXAtlas/NormalizeLightmapSingle.cs.slang";
+    const char kExtractFile[] =
+        "RenderPasses/BakeLightMapXAtlas/ExtractTexelsSingle.cs.slang";
 
-extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
+    const char kNormalizeFile[] =
+        "RenderPasses/BakeLightMapXAtlas/NormalizeLightmapSingle.cs.slang";
+}
+
+extern "C" FALCOR_API_EXPORT void registerPlugin(
+    Falcor::PluginRegistry& registry
+)
 {
     registry.registerClass<RenderPass, BakeLightMapXAtlas>();
 }
 
-BakeLightMapXAtlas::BakeLightMapXAtlas(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
-{
-
-}
+BakeLightMapXAtlas::BakeLightMapXAtlas(
+    ref<Device> pDevice,
+    const Properties& props
+)
+    : RenderPass(pDevice)
+{}
 
 Properties BakeLightMapXAtlas::getProperties() const
 {
     return {};
 }
 
-RenderPassReflection BakeLightMapXAtlas::reflect(const CompileData& compileData)
+RenderPassReflection BakeLightMapXAtlas::reflect(
+    const CompileData& compileData
+)
 {
-    // Define the required resources here
     RenderPassReflection reflector;
-    const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
-    // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA32Float);
-    //reflector.addOutput("output", "Color").texture2D(mLightmapWidth, mLightmapHeight, 4).format(ResourceFormat::RGBA32Float);
+
+    const uint2 sz = RenderPassHelpers::calculateIOSize(
+        mOutputSizeSelection,
+        mFixedOutputSize,
+        compileData.defaultTexDims
+    );
+
+    reflector.addOutput("output", "Color")
+        .texture2D(sz.x, sz.y, 4)
+        .format(ResourceFormat::RGBA32Float);
+
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
         .bindFlags(ResourceBindFlags::DepthStencil)
         .texture2D(sz.x, sz.y, 4);
+
     return reflector;
 }
 
@@ -78,81 +100,13 @@ void BakeLightMapXAtlas::execute(
     const RenderData& renderData
 )
 {
-    if (!mpScene)
-    {
-        return;
-    }
-
-    if (mCurrentTargetIndex >= mBakeTargets.size())
-    {
-        return;
-    }
-
-    const BakeTarget& target =
-        mBakeTargets[mCurrentTargetIndex];
-
-    // -------------------------------------------------------------
-    // Prepare UV atlas, extract valid texels, allocate accumulation.
-    // Runs only once per target.
-    // -------------------------------------------------------------
-
-    if (mNeedsPreparation)
-    {
-        prepareTarget(
-            pRenderContext,
-            target
-        );
-
-        if (mNumExtractedTexels == 0)
-        {
-            logWarning(
-                "Target '{}' has no extracted texels. Skipping.",
-                target.name
-            );
-
-            advanceTarget();
-            return;
-        }
-    }
-
-    // -------------------------------------------------------------
-    // Accumulate one RT sample per frame.
-    // -------------------------------------------------------------
-
-    if (mCurrentSample < mTotalSamples)
-    {
-        traceOneSample(
-            pRenderContext
-        );
-
-        return;
-    }
-
-    // -------------------------------------------------------------
-    // All samples complete.
-    // Normalize and save EXR once.
-    // -------------------------------------------------------------
-
-    if (mCurrentSample == mTotalSamples)
-    {
-        finalizeTarget(
-            pRenderContext,
-            target
-        );
-
-        logInfo(
-            "Finished baking '{}' with {} samples.",
-            target.name,
-            mTotalSamples
-        );
-
-        advanceTarget();
-
-        return;
-    }
+    // Baking is currently triggered once from setScene(). Keeping execute()
+    // empty avoids re-running the expensive atlas build every frame.
 }
 
-void BakeLightMapXAtlas::renderUI(Gui::Widgets& widget) {}
+void BakeLightMapXAtlas::renderUI(Gui::Widgets& widget)
+{}
+
 void BakeLightMapXAtlas::setScene(
     RenderContext* pRenderContext,
     const ref<Scene>& pScene
@@ -161,29 +115,68 @@ void BakeLightMapXAtlas::setScene(
     resetBakingState();
 
     mpScene = pScene;
-
     if (!mpScene)
-    {
         return;
-    }
 
     createUVRasterProgram();
     createComputePasses();
     createRayTracingProgram(pRenderContext);
 
-    buildBakeTargets();
-    buildMeshAtlases(pRenderContext);
+    const std::vector<uint32_t> allInstanceIDs =
+        collectTriangleInstanceIDs();
+
+    if (allInstanceIDs.empty())
+    {
+        logWarning("BakeLightMapXAtlas: scene has no triangle-mesh instances.");
+        return;
+    }
+
+    // Keep the current 48-instance Bistro test while the multi-page path is
+    // being validated. Set mTestInstanceCount >= allInstanceIDs.size() to
+    // build the complete scene atlas.
+    const uint32_t instanceCount =
+        std::min<uint32_t>(
+            mTestInstanceCount,
+            uint32_t(allInstanceIDs.size())
+        );
+
+    std::vector<uint32_t> instanceIDs(
+        allInstanceIDs.begin(),
+        allInstanceIDs.begin() + instanceCount
+    );
+
+    buildAtlasPages(
+        pRenderContext,
+        instanceIDs,
+        mAtlasResolution,
+        mTexelsPerUnit
+    );
+
+    logInfo(
+        "Built {} lightmap atlas page(s) from {} instance(s).",
+        mAtlasPages.size(),
+        instanceIDs.size()
+    );
+
+    // Bake each physical xatlas page independently. All pages share the same
+    // dimensions, exactly like the official xatlas multi-atlas example.
+    //for (auto& page : mAtlasPages)
+    //{
+    //    bakeAtlasPage(
+    //        pRenderContext,
+    //        page
+    //    );
+    //}
 }
 
 void BakeLightMapXAtlas::resetBakingState()
 {
-    mMeshAtlases.clear();
-    mBakeTargets.clear();
+    mAtlasPages.clear();
 
-    mCurrentTargetIndex = 0;
-    mCurrentSample = 0;
+    mLightmapWidth = 0;
+    mLightmapHeight = 0;
     mNumExtractedTexels = 0;
-    mNeedsPreparation = true;
+    mCurrentSample = 0;
 
     mpUVFbo = nullptr;
     mpTexelBuffer = nullptr;
@@ -194,6 +187,8 @@ void BakeLightMapXAtlas::resetBakingState()
     mpUVProgram = nullptr;
     mpUVVars = nullptr;
     mpUVGraphicsState = nullptr;
+    mpRasterState = nullptr;
+    mpProceduralVao = nullptr;
 
     mpExtractPass = nullptr;
     mpNormalizePass = nullptr;
@@ -208,7 +203,6 @@ void BakeLightMapXAtlas::createUVRasterProgram()
 {
     ProgramDesc desc;
     desc.addShaderModules(mpScene->getShaderModules());
-
     desc.addShaderLibrary(kUVRasterFile)
         .vsEntry("vsMain")
         .psEntry("psMain");
@@ -225,28 +219,24 @@ void BakeLightMapXAtlas::createUVRasterProgram()
     );
 
     RasterizerState::Desc rasterDesc;
-    rasterDesc.setFillMode(
-        RasterizerState::FillMode::Solid
-    );
-    rasterDesc.setCullMode(
-        RasterizerState::CullMode::None
-    );
-
-    mpRasterState =
-        RasterizerState::create(rasterDesc);
+    rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
+    rasterDesc.setCullMode(RasterizerState::CullMode::None);
+    mpRasterState = RasterizerState::create(rasterDesc);
 
     DepthStencilState::Desc depthDesc;
     depthDesc.setDepthEnabled(false);
-
     ref<DepthStencilState> pDepthState =
         DepthStencilState::create(depthDesc);
 
-    mpUVGraphicsState =
-        GraphicsState::create(mpDevice);
-
+    mpUVGraphicsState = GraphicsState::create(mpDevice);
     mpUVGraphicsState->setProgram(mpUVProgram);
     mpUVGraphicsState->setRasterizerState(mpRasterState);
     mpUVGraphicsState->setDepthStencilState(pDepthState);
+
+    // The VS fetches the source geometry through gScene and uses only
+    // SV_VertexID, so no scene vertex/index buffers are bound to the IA.
+    mpProceduralVao = Vao::create(Vao::Topology::TriangleList);
+    mpUVGraphicsState->setVao(mpProceduralVao);
 }
 
 void BakeLightMapXAtlas::createComputePasses()
@@ -271,23 +261,18 @@ void BakeLightMapXAtlas::createRayTracingProgram(
 )
 {
     ProgramDesc rtDesc;
-    rtDesc.addShaderModules(
-        mpScene->getShaderModules()
-    );
+    rtDesc.addShaderModules(mpScene->getShaderModules());
     rtDesc.addShaderLibrary(kBakingFile);
     rtDesc.setMaxTraceRecursionDepth(3);
     rtDesc.setMaxPayloadSize(128);
     rtDesc.setMaxAttributeSize(8);
-    rtDesc.addTypeConformances(
-        mpScene->getTypeConformances()
-    );
+    rtDesc.addTypeConformances(mpScene->getTypeConformances());
 
-    ref<RtBindingTable> sbt =
-        RtBindingTable::create(
-            2,
-            2,
-            mpScene->getGeometryCount()
-        );
+    ref<RtBindingTable> sbt = RtBindingTable::create(
+        2,
+        2,
+        mpScene->getGeometryCount()
+    );
 
     sbt->setRayGen(rtDesc.addRayGen("rayGen"));
     sbt->setMiss(0, rtDesc.addMiss("primaryMiss"));
@@ -295,14 +280,11 @@ void BakeLightMapXAtlas::createRayTracingProgram(
 
     auto primaryHit =
         rtDesc.addHitGroup("primaryClosestHit");
-
     auto shadowHit =
         rtDesc.addHitGroup("", "shadowAnyHit");
 
     const auto triangleGeometryIDs =
-        mpScene->getGeometryIDs(
-            Scene::GeometryType::TriangleMesh
-        );
+        mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh);
 
     sbt->setHitGroup(
         0,
@@ -354,9 +336,7 @@ void BakeLightMapXAtlas::createRayTracingProgram(
             break;
 
         default:
-            FALCOR_THROW(
-                "Unknown emissive light sampler type."
-            );
+            FALCOR_THROW("Unknown emissive light sampler type.");
         }
     }
 
@@ -374,12 +354,10 @@ void BakeLightMapXAtlas::createRayTracingProgram(
     }
 
     DefineList lightDefines;
-
     lightDefines.add(
         "USE_ANALYTIC_LIGHTS",
         mpScene->useAnalyticLights() ? "1" : "0"
     );
-
     lightDefines.add(
         "USE_EMISSIVE_LIGHTS",
         mpScene->useEmissiveLights() ? "1" : "0"
@@ -394,132 +372,86 @@ void BakeLightMapXAtlas::createRayTracingProgram(
     );
 }
 
-void BakeLightMapXAtlas::buildBakeTargets()
+std::vector<uint32_t>
+BakeLightMapXAtlas::collectTriangleInstanceIDs() const
 {
-    mBakeTargets.clear();
-    //std::unordered_map<uint32_t, uint32_t> firstInstanceForMesh;
+    const auto instanceIDs =
+        mpScene->getGeometryInstanceIDsByType(
+            Scene::GeometryType::TriangleMesh
+        );
 
-    //for (uint32_t instanceID = 0;
-    //    instanceID < mpScene->getGeometryInstanceCount();
-    //    ++instanceID)
-    //{
-    //    const auto& instance =
-    //        mpScene->getGeometryInstance(instanceID);
+    std::unordered_set<uint32_t> uniqueMeshes;
+    uint64_t totalTriangles = 0;
 
-    //    const uint32_t meshID =
-    //        instance.geometryID;
-
-    //    auto it =
-    //        firstInstanceForMesh.find(meshID);
-
-    //    if (it == firstInstanceForMesh.end())
-    //    {
-    //        firstInstanceForMesh[meshID] =
-    //            instanceID;
-    //    }
-    //    else
-    //    {
-    //        logInfo(
-    //            "Found repeated mesh: meshID={} instances={} and {}",
-    //            meshID,
-    //            it->second,
-    //            instanceID
-    //        );
-
-    //        break;
-    //    }
-    //}
-    const uint32_t testInstanceIDs[] =
+    for (uint32_t instanceID : instanceIDs)
     {
-        1786,
-        1787
-    };
-
-    for (uint32_t instanceID : testInstanceIDs)
-    {
-        if (instanceID >= mpScene->getGeometryInstanceCount())
-        {
-            logWarning(
-                "Skipping invalid test instance ID {}.",
-                instanceID
-            );
-
-            continue;
-        }
-
         const auto& instance =
             mpScene->getGeometryInstance(instanceID);
 
-        const MeshID meshID(
-            instance.geometryID
-        );
+        const MeshID meshID(instance.geometryID);
+        const auto& mesh = mpScene->getMesh(meshID);
 
-        const auto& mesh =
-            mpScene->getMesh(meshID);
-
-        BakeTarget target;
-
-        target.name =
-            "BistroTest_Instance" +
-            std::to_string(instanceID);
-
-        target.instanceID =
-            instanceID;
-
-        target.meshID =
-            meshID;
-
-        target.outputPath =
-            target.name + ".exr";
-
-        mBakeTargets.push_back(
-            target
-        );
-
-        logInfo(
-            "Added bake target '{}' "
-            "instanceID={} meshID={} "
-            "vertices={} triangles={}",
-            target.name,
-            target.instanceID,
-            target.meshID,
-            mesh.vertexCount,
-            mesh.indexCount / 3
-        );
+        uniqueMeshes.insert(meshID.get());
+        totalTriangles += mesh.indexCount / 3;
     }
+
+    logInfo(
+        "Bistro lightmap targets: "
+        "instances={} uniqueMeshes={} totalInstanceTriangles={}",
+        instanceIDs.size(),
+        uniqueMeshes.size(),
+        totalTriangles
+    );
+
+    return instanceIDs;
 }
 
-void BakeLightMapXAtlas::buildMeshAtlases(RenderContext* pRenderContext)
+void BakeLightMapXAtlas::buildAtlasPages(
+    RenderContext* pRenderContext,
+    const std::vector<uint32_t>& instanceIDs,
+    uint32_t resolution,
+    float texelsPerUnit
+)
 {
-    mMeshAtlases.clear();
+    if (instanceIDs.empty())
+        FALCOR_THROW("Cannot build xatlas pages from an empty instance list.");
 
-    for (const auto& target : mBakeTargets)
+    if (resolution == 0)
+        FALCOR_THROW("xatlas page resolution must be greater than zero.");
+
+    if (texelsPerUnit <= 0.f)
+        FALCOR_THROW("xatlas texelsPerUnit must be greater than zero.");
+
+    struct InputMeshInfo
     {
-        const uint32_t meshKey = target.meshID.get();
+        uint32_t instanceID = 0;
+        MeshID meshID;
+        std::vector<uint3> triangles;
+    };
 
-        // -------------------------------------------------------------
-        // A mesh only needs one xatlas parameterization.
-        // Multiple instances of the same mesh can reuse it.
-        // -------------------------------------------------------------
-        if (mMeshAtlases.find(meshKey) != mMeshAtlases.end())
-        {
-            logInfo(
-                "Reusing xatlas meshID={} for instanceID={}",
-                meshKey,
-                target.instanceID
-            );
+    std::vector<InputMeshInfo> inputMeshes;
+    inputMeshes.reserve(instanceIDs.size());
 
-            continue;
-        }
+    xatlas::Atlas* atlas = xatlas::Create();
+    if (!atlas)
+        FALCOR_THROW("xatlas::Create() failed.");
 
-        const auto& mesh = mpScene->getMesh(target.meshID);
+    // -----------------------------------------------------------------
+    // Add one xatlas mesh per Falcor geometry instance.
+    //
+    // This mirrors the official xatlas example: atlas->meshes[i]
+    // corresponds to the i-th successful AddMesh() call.
+    // -----------------------------------------------------------------
+    for (uint32_t instanceID : instanceIDs)
+    {
+        const auto& instance =
+            mpScene->getGeometryInstance(instanceID);
+
+        const MeshID meshID(instance.geometryID);
+        const auto& mesh = mpScene->getMesh(meshID);
 
         const uint32_t vertexCount = mesh.vertexCount;
         const uint32_t triangleCount = mesh.indexCount / 3;
-
-        // =============================================================
-        // STEP 1: Extract mesh data from Falcor
-        // =============================================================
 
         ref<Buffer> pPositions =
             mpDevice->createStructuredBuffer(
@@ -529,8 +461,8 @@ void BakeLightMapXAtlas::buildMeshAtlases(RenderContext* pRenderContext)
                 ResourceBindFlags::UnorderedAccess
             );
 
-        // Falcor requires the texcoord output buffer even though
-        // xatlas does not need the original material UVs here.
+        // Falcor's mesh extraction path expects this output even though
+        // xatlas does not need the material UVs for this parameterization.
         ref<Buffer> pTexCoords =
             mpDevice->createStructuredBuffer(
                 sizeof(float3),
@@ -548,19 +480,14 @@ void BakeLightMapXAtlas::buildMeshAtlases(RenderContext* pRenderContext)
             );
 
         std::map<std::string, ref<Buffer>> buffers;
-
         buffers["positions"] = pPositions;
         buffers["texcrds"] = pTexCoords;
         buffers["triangleIndices"] = pTriangleIndices;
 
         mpScene->getMeshVerticesAndIndices(
-            target.meshID,
+            meshID,
             buffers
         );
-
-        // =============================================================
-        // STEP 2: Read extracted data back to CPU
-        // =============================================================
 
         std::vector<float3> positions(vertexCount);
         std::vector<uint3> triangles(triangleCount);
@@ -568,26 +495,14 @@ void BakeLightMapXAtlas::buildMeshAtlases(RenderContext* pRenderContext)
         pPositions->getBlob(
             positions.data(),
             0,
-            vertexCount * sizeof(float3)
+            positions.size() * sizeof(float3)
         );
 
         pTriangleIndices->getBlob(
             triangles.data(),
             0,
-            triangleCount * sizeof(uint3)
+            triangles.size() * sizeof(uint3)
         );
-
-        logInfo(
-            "Extracted meshID={} vertices={} triangles={}",
-            meshKey,
-            vertexCount,
-            triangleCount
-        );
-
-        // =============================================================
-        // STEP 3: Flatten Falcor uint3 triangle indices
-        //         into the array expected by xatlas
-        // =============================================================
 
         std::vector<uint32_t> indices;
         indices.reserve(triangleCount * 3);
@@ -599,507 +514,442 @@ void BakeLightMapXAtlas::buildMeshAtlases(RenderContext* pRenderContext)
             indices.push_back(tri.z);
         }
 
-        // =============================================================
-        // STEP 4: Create xatlas input
-        // =============================================================
-
-        xatlas::Atlas* atlas = xatlas::Create();
-
         xatlas::MeshDecl meshDecl{};
-
         meshDecl.vertexCount = vertexCount;
-
-        meshDecl.vertexPositionData =
-            positions.data();
-
-        meshDecl.vertexPositionStride =
-            sizeof(float3);
-
-        meshDecl.indexCount =
-            uint32_t(indices.size());
-
-        meshDecl.indexData =
-            indices.data();
-
-        meshDecl.indexFormat =
-            xatlas::IndexFormat::UInt32;
-
-        // =============================================================
-        // STEP 5: Add the mesh to xatlas
-        // =============================================================
+        meshDecl.vertexPositionData = positions.data();
+        meshDecl.vertexPositionStride = sizeof(float3);
+        meshDecl.indexCount = uint32_t(indices.size());
+        meshDecl.indexData = indices.data();
+        meshDecl.indexFormat = xatlas::IndexFormat::UInt32;
 
         const xatlas::AddMeshError error =
             xatlas::AddMesh(
                 atlas,
-                meshDecl
+                meshDecl,
+                uint32_t(instanceIDs.size())
             );
 
         if (error != xatlas::AddMeshError::Success)
         {
-            logError(
-                "xatlas::AddMesh() failed for meshID={}: {}",
-                meshKey,
-                xatlas::StringForEnum(error)
-            );
+            const std::string errorString =
+                xatlas::StringForEnum(error);
 
             xatlas::Destroy(atlas);
 
             FALCOR_THROW(
-                "xatlas::AddMesh() failed."
+                "xatlas::AddMesh() failed for instanceID={} meshID={}: {}",
+                instanceID,
+                meshID,
+                errorString
             );
         }
 
-        // =============================================================
-        // STEP 6: Generate charts and pack them into the atlas
-        // =============================================================
-
-        xatlas::ChartOptions chartOptions{};
-
-        xatlas::PackOptions packOptions{};
-
-        // Temporary resolution for this first test.
-        packOptions.resolution = 512;
-
-        // Padding between UV charts.
-        packOptions.padding = 4;
-
-        // Reserve padding appropriate for bilinear filtering.
-        packOptions.bilinear = true;
-
-        // We don't need xatlas's debug image.
-        packOptions.createImage = false;
-
-        xatlas::Generate(
-            atlas,
-            chartOptions,
-            packOptions
-        );
-
-        // =============================================================
-        // STEP 7: Inspect xatlas output
-        // =============================================================
+        InputMeshInfo input;
+        input.instanceID = instanceID;
+        input.meshID = meshID;
+        input.triangles = std::move(triangles);
+        inputMeshes.push_back(std::move(input));
 
         logInfo(
-            "xatlas meshID={}: "
-            "atlasCount={} "
-            "size={}x{} "
-            "charts={} "
-            "meshes={}",
-            meshKey,
-            atlas->atlasCount,
-            atlas->width,
-            atlas->height,
-            atlas->chartCount,
-            atlas->meshCount
-        );
-
-        if (atlas->meshCount != 1)
-        {
-            const uint32_t outputMeshCount =
-                atlas->meshCount;
-
-            xatlas::Destroy(atlas);
-
-            FALCOR_THROW(
-                "Expected 1 xatlas output mesh, got {}.",
-                outputMeshCount
-            );
-        }
-
-        // Our current representation only stores one UV coordinate
-        // per triangle corner. It does not yet store atlasIndex.
-        if (atlas->atlasCount != 1)
-        {
-            const uint32_t outputAtlasCount =
-                atlas->atlasCount;
-
-            xatlas::Destroy(atlas);
-
-            FALCOR_THROW(
-                "Expected 1 xatlas atlas for this test, got {}.",
-                outputAtlasCount
-            );
-        }
-
-        const xatlas::Mesh& xaMesh =
-            atlas->meshes[0];
-
-        logInfo(
-            "xatlas output: "
-            "inputVertices={} "
-            "outputVertices={} "
-            "inputIndices={} "
-            "outputIndices={} "
-            "charts={}",
+            "xatlas input: instanceID={} meshID={} vertices={} triangles={}",
+            instanceID,
+            meshID,
             vertexCount,
-            xaMesh.vertexCount,
-            uint32_t(indices.size()),
-            xaMesh.indexCount,
-            xaMesh.chartCount
+            triangleCount
         );
+    }
 
-        // =============================================================
-        // STEP 8: Print a few xatlas vertices
-        // =============================================================
+    // The official example calls this only to join any asynchronous AddMesh
+    // work before printing totals. It is harmless here and makes the mesh
+    // list complete before generation/validation.
+    xatlas::AddMeshJoin(atlas);
 
-        const uint32_t vertexPrintCount =
-            std::min(xaMesh.vertexCount, 10u);
+    xatlas::ChartOptions chartOptions{};
+    xatlas::PackOptions packOptions{};
 
-        for (uint32_t i = 0;
-            i < vertexPrintCount;
-            ++i)
-        {
-            const xatlas::Vertex& v =
-                xaMesh.vertexArray[i];
+    packOptions.resolution = resolution;
+    packOptions.texelsPerUnit = texelsPerUnit;
+    packOptions.padding = 4;
+    packOptions.bilinear = true;
+    packOptions.createImage = false;
 
-            logInfo(
-                "  xaVertex[{}]: "
-                "xref={} "
-                "uv=({}, {}) "
-                "atlas={} "
-                "chart={}",
-                i,
-                v.xref,
-                v.uv[0],
-                v.uv[1],
-                v.atlasIndex,
-                v.chartIndex
-            );
-        }
+    xatlas::Generate(
+        atlas,
+        chartOptions,
+        packOptions
+    );
 
-        // =============================================================
-        // STEP 8.5:
-        //
-        // Convert xatlas output into:
-        //
-        //      one TriangleLightmapUV per Falcor triangle
-        //
-        // At the same time, verify that xatlas preserved the triangle
-        // and corner correspondence that we need later when indexing
-        // this array using SV_PrimitiveID.
-        // =============================================================
+    // NOW meshCount is valid.
+    if (atlas->meshCount != inputMeshes.size())
+    {
+        const uint32_t outputMeshCount = atlas->meshCount;
+        const size_t expectedMeshCount = inputMeshes.size();
+
+        xatlas::Destroy(atlas);
+
+        FALCOR_THROW(
+            "xatlas mesh count mismatch after Generate(). Expected {}, got {}.",
+            expectedMeshCount,
+            outputMeshCount
+        );
+    }
+
+    logInfo(
+        "xatlas result: meshes={} charts={} pages={} size={}x{} "
+        "texelsPerUnit={}",
+        atlas->meshCount,
+        atlas->chartCount,
+        atlas->atlasCount,
+        atlas->width,
+        atlas->height,
+        atlas->texelsPerUnit
+    );
+
+    if (atlas->atlasCount == 0 ||
+        atlas->width == 0 ||
+        atlas->height == 0)
+    {
+        xatlas::Destroy(atlas);
+        FALCOR_THROW("xatlas generated no valid atlas pages.");
+    }
+
+    for (uint32_t pageIndex = 0;
+        pageIndex < atlas->atlasCount;
+        ++pageIndex)
+    {
+        logInfo(
+            "xatlas page {} utilization={:.2f}%",
+            pageIndex,
+            atlas->utilization[pageIndex] * 100.f
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // One AtlasPageData per xatlas atlasIndex, exactly like the example's
+    // outputTrisImage[atlasIndex * imageDataSize].
+    // -----------------------------------------------------------------
+    mAtlasPages.clear();
+    mAtlasPages.resize(atlas->atlasCount);
+
+    for (uint32_t pageIndex = 0;
+        pageIndex < atlas->atlasCount;
+        ++pageIndex)
+    {
+        AtlasPageData& page = mAtlasPages[pageIndex];
+        page.pageIndex = pageIndex;
+        page.width = atlas->width;
+        page.height = atlas->height;
+        page.outputPath =
+            "Bistro_AtlasPage_" +
+            std::to_string(pageIndex) +
+            ".exr";
+    }
+
+    uint64_t packedTriangleCount = 0;
+    uint64_t unatlasedTriangleCount = 0;
+
+    // -----------------------------------------------------------------
+    // Convert xatlas output face-by-face.
+    //
+    // This deliberately follows the official example's triangle raster
+    // loop:
+    //   face f -> indexArray[f*3 + corner] -> Vertex
+    //   Vertex::atlasIndex selects the physical page
+    //   Vertex::uv is in atlas texel coordinates
+    //
+    // The example states atlasIndex is the same for all vertices in a face
+    // and skips faces whose atlasIndex < 0.
+    // -----------------------------------------------------------------
+    for (uint32_t meshIndex = 0;
+        meshIndex < atlas->meshCount;
+        ++meshIndex)
+    {
+        const xatlas::Mesh& xaMesh =
+            atlas->meshes[meshIndex];
+
+        const InputMeshInfo& input =
+            inputMeshes[meshIndex];
+
+        const uint32_t triangleCount =
+            uint32_t(input.triangles.size());
 
         if (xaMesh.indexCount != triangleCount * 3)
         {
-            const uint32_t xaIndexCount =
-                xaMesh.indexCount;
-
+            const uint32_t outputIndexCount = xaMesh.indexCount;
             xatlas::Destroy(atlas);
 
             FALCOR_THROW(
-                "xatlas index count mismatch. Expected {}, got {}.",
+                "xatlas index-count mismatch for instanceID={}. "
+                "Expected {}, got {}.",
+                input.instanceID,
                 triangleCount * 3,
-                xaIndexCount
+                outputIndexCount
             );
         }
 
-        std::vector<TriangleLightmapUV> triangleUVs;
-        triangleUVs.resize(triangleCount);
-
-        const float invWidth =
-            1.0f / float(atlas->width);
-
-        const float invHeight =
-            1.0f / float(atlas->height);
-
-        bool mappingValid = true;
+        // Index into page.instances for this input instance on each page.
+        // -1 means the instance has not contributed a packed face to that
+        // page yet.
+        std::vector<int32_t> pageInstanceIndices(
+            atlas->atlasCount,
+            -1
+        );
 
         for (uint32_t triangleID = 0;
             triangleID < triangleCount;
             ++triangleID)
         {
-            // Original Falcor triangle.
-            const uint3& originalTri =
-                triangles[triangleID];
+            const uint32_t firstIndex = triangleID * 3;
 
-            // xatlas outputs an index buffer referencing its own
-            // seam-split vertex array.
             const uint32_t xaIndex0 =
-                xaMesh.indexArray[triangleID * 3 + 0];
-
+                xaMesh.indexArray[firstIndex + 0];
             const uint32_t xaIndex1 =
-                xaMesh.indexArray[triangleID * 3 + 1];
-
+                xaMesh.indexArray[firstIndex + 1];
             const uint32_t xaIndex2 =
-                xaMesh.indexArray[triangleID * 3 + 2];
+                xaMesh.indexArray[firstIndex + 2];
 
-            const xatlas::Vertex& xaV0 =
+            const xatlas::Vertex& v0 =
                 xaMesh.vertexArray[xaIndex0];
-
-            const xatlas::Vertex& xaV1 =
+            const xatlas::Vertex& v1 =
                 xaMesh.vertexArray[xaIndex1];
-
-            const xatlas::Vertex& xaV2 =
+            const xatlas::Vertex& v2 =
                 xaMesh.vertexArray[xaIndex2];
 
-            // ---------------------------------------------------------
-            // xref refers back to the original Falcor vertex.
-            //
-            // Therefore this test verifies:
-            //
-            // Falcor triangle N:
-            //      (v0, v1, v2)
-            //
-            // corresponds to xatlas triangle N:
-            //      (xref0, xref1, xref2)
-            //
-            // with the same corner ordering.
-            // ---------------------------------------------------------
+            // Preserve the face/corner correspondence we already validated:
+            // xref maps each seam-split xatlas output vertex back to the
+            // original input vertex.
+            const uint3& sourceTriangle =
+                input.triangles[triangleID];
 
-            if (xaV0.xref != originalTri.x ||
-                xaV1.xref != originalTri.y ||
-                xaV2.xref != originalTri.z)
+            if (v0.xref != sourceTriangle.x ||
+                v1.xref != sourceTriangle.y ||
+                v2.xref != sourceTriangle.z)
             {
-                logError(
-                    "xatlas triangle mapping mismatch at triangle {}: "
-                    "Falcor=({}, {}, {}) "
-                    "xatlas xref=({}, {}, {})",
-                    triangleID,
-                    originalTri.x,
-                    originalTri.y,
-                    originalTri.z,
-                    xaV0.xref,
-                    xaV1.xref,
-                    xaV2.xref
-                );
+                xatlas::Destroy(atlas);
 
-                mappingValid = false;
-                break;
+                FALCOR_THROW(
+                    "xatlas face mapping mismatch for instanceID={} "
+                    "triangleID={}: Falcor=({}, {}, {}) "
+                    "xatlas xref=({}, {}, {}).",
+                    input.instanceID,
+                    triangleID,
+                    sourceTriangle.x,
+                    sourceTriangle.y,
+                    sourceTriangle.z,
+                    v0.xref,
+                    v1.xref,
+                    v2.xref
+                );
             }
 
-            // ---------------------------------------------------------
-            // xatlas UVs are in atlas texel coordinates.
-            //
-            // Convert them to normalized [0,1] coordinates.
-            // ---------------------------------------------------------
+            const int32_t atlasIndex = v0.atlasIndex;
 
-            TriangleLightmapUV triUV;
+            // Official xatlas example: atlasIndex is identical for every
+            // vertex in a face. Treat a violation as corrupted output.
+            if (v1.atlasIndex != atlasIndex ||
+                v2.atlasIndex != atlasIndex)
+            {
+                xatlas::Destroy(atlas);
 
-            triUV.uv0 = float2(
-                xaV0.uv[0] * invWidth,
-                xaV0.uv[1] * invHeight
+                FALCOR_THROW(
+                    "xatlas produced a cross-page face for instanceID={} "
+                    "triangleID={}: ({}, {}, {}).",
+                    input.instanceID,
+                    triangleID,
+                    v0.atlasIndex,
+                    v1.atlasIndex,
+                    v2.atlasIndex
+                );
+            }
+
+            // Same behavior as example.cpp: skip faces that xatlas did not
+            // atlas (for Bistro this includes the nearly-degenerate face we
+            // already diagnosed).
+            if (atlasIndex < 0)
+            {
+                ++unatlasedTriangleCount;
+                continue;
+            }
+
+            if (atlasIndex >= int32_t(atlas->atlasCount))
+            {
+                xatlas::Destroy(atlas);
+
+                FALCOR_THROW(
+                    "xatlas returned invalid atlasIndex={} for "
+                    "instanceID={} triangleID={}.",
+                    atlasIndex,
+                    input.instanceID,
+                    triangleID
+                );
+            }
+
+            AtlasPageData& page =
+                mAtlasPages[uint32_t(atlasIndex)];
+
+            int32_t& pageInstanceIndex =
+                pageInstanceIndices[uint32_t(atlasIndex)];
+
+            if (pageInstanceIndex < 0)
+            {
+                AtlasPageInstanceData instanceData;
+                instanceData.instanceID = input.instanceID;
+                instanceData.meshID = input.meshID;
+
+                page.instances.push_back(
+                    std::move(instanceData)
+                );
+
+                pageInstanceIndex =
+                    int32_t(page.instances.size() - 1);
+            }
+
+            AtlasPageInstanceData& instanceData =
+                page.instances[size_t(pageInstanceIndex)];
+
+            TriangleLightmapUV uv;
+            uv.uv0 = float2(
+                v0.uv[0] / float(atlas->width),
+                v0.uv[1] / float(atlas->height)
+            );
+            uv.uv1 = float2(
+                v1.uv[0] / float(atlas->width),
+                v1.uv[1] / float(atlas->height)
+            );
+            uv.uv2 = float2(
+                v2.uv[0] / float(atlas->width),
+                v2.uv[1] / float(atlas->height)
             );
 
-            triUV.uv1 = float2(
-                xaV1.uv[0] * invWidth,
-                xaV1.uv[1] * invHeight
-            );
+            instanceData.triangleIDs.push_back(triangleID);
+            instanceData.triangleUVs.push_back(uv);
 
-            triUV.uv2 = float2(
-                xaV2.uv[0] * invWidth,
-                xaV2.uv[1] * invHeight
-            );
-
-            triangleUVs[triangleID] =
-                triUV;
+            ++packedTriangleCount;
         }
-
-        if (!mappingValid)
-        {
-            xatlas::Destroy(atlas);
-
-            FALCOR_THROW(
-                "xatlas triangle ordering does not match "
-                "Falcor mesh ordering."
-            );
-        }
-
-        logInfo(
-            "xatlas triangle mapping verified for {} triangles.",
-            triangleCount
-        );
-
-        // =============================================================
-        // STEP 8.6: Print first few triangle UV triplets
-        // =============================================================
-
-        const uint32_t triangleUVPrintCount =
-            std::min(triangleCount, 5u);
-
-        for (uint32_t i = 0;
-            i < triangleUVPrintCount;
-            ++i)
-        {
-            const TriangleLightmapUV& uv =
-                triangleUVs[i];
-
-            logInfo(
-                "  triangleUV[{}]: "
-                "({}, {}) "
-                "({}, {}) "
-                "({}, {})",
-                i,
-                uv.uv0.x,
-                uv.uv0.y,
-                uv.uv1.x,
-                uv.uv1.y,
-                uv.uv2.x,
-                uv.uv2.y
-            );
-        }
-
- // =============================================================
-// STEP 9: Create GPU triangle-UV buffer and store atlas data
-// =============================================================
-
-        MeshAtlasData data;
-
-        data.meshID =
-            target.meshID;
-
-        data.triangleCount =
-            triangleCount;
-
-        data.width =
-            atlas->width;
-
-        data.height =
-            atlas->height;
-
-        // -------------------------------------------------------------
-        // Create one StructuredBuffer element per triangle.
-        //
-        // TriangleLightmapUV contains:
-        //
-        //     float2 uv0;
-        //     float2 uv1;
-        //     float2 uv2;
-        //
-        // so triangle N can later be accessed directly using
-        // SV_PrimitiveID.
-        // -------------------------------------------------------------
-
-        data.pTriangleUVBuffer =
-            mpDevice->createStructuredBuffer(
-                sizeof(TriangleLightmapUV),
-                triangleCount,
-                ResourceBindFlags::ShaderResource
-            );
-
-        data.pTriangleUVBuffer->setBlob(
-            triangleUVs.data(),
-            0,
-            triangleUVs.size() * sizeof(TriangleLightmapUV)
-        );
-
-        // Keep CPU copy as well for now.
-        // This is useful while we're debugging the implementation.
-        data.triangleUVs =
-            std::move(triangleUVs);
-
-        logInfo(
-            "Created triangle UV buffer for meshID={} "
-            "triangles={} elementSize={} totalBytes={}",
-            meshKey,
-            triangleCount,
-            sizeof(TriangleLightmapUV),
-            triangleCount * sizeof(TriangleLightmapUV)
-        );
-
-        mMeshAtlases.emplace(
-            meshKey,
-            std::move(data)
-        );
-
-        // =============================================================
-        // STEP 10: Done with xatlas CPU objects
-        // =============================================================
-
-        xatlas::Destroy(atlas);
     }
-    // =============================================================
-    // STEP 11: Assign atlas dimensions to each bake target
-    // =============================================================
-    for (auto& target : mBakeTargets)
-    {
-        const auto atlasIt =
-            mMeshAtlases.find(target.meshID.get());
 
-        if (atlasIt == mMeshAtlases.end())
+    xatlas::Destroy(atlas);
+
+    createAtlasPageGpuBuffers();
+
+    uint64_t storedTriangleCount = 0;
+
+    for (const AtlasPageData& page : mAtlasPages)
+    {
+        uint64_t pageTriangleCount = 0;
+
+        for (const AtlasPageInstanceData& instance : page.instances)
         {
-            FALCOR_THROW(
-                "No mesh atlas found for bake target '{}' (meshID={}).",
-                target.name,
-                target.meshID.get()
-            );
+            pageTriangleCount += instance.triangleIDs.size();
         }
 
-        const MeshAtlasData& atlasData =
-            atlasIt->second;
-
-        target.width =
-            atlasData.width;
-
-        target.height =
-            atlasData.height;
+        storedTriangleCount += pageTriangleCount;
 
         logInfo(
-            "Bake target '{}' uses lightmap size {}x{}",
-            target.name,
-            target.width,
-            target.height
+            "Atlas page {} stored: size={}x{} instances={} triangles={} "
+            "output='{}'.",
+            page.pageIndex,
+            page.width,
+            page.height,
+            page.instances.size(),
+            pageTriangleCount,
+            page.outputPath
         );
+    }
+
+    if (storedTriangleCount != packedTriangleCount)
+    {
+        FALCOR_THROW(
+            "Atlas storage mismatch. Packed {} triangles but stored {}.",
+            packedTriangleCount,
+            storedTriangleCount
+        );
+    }
+
+    logInfo(
+        "Atlas conversion complete: packedTriangles={} "
+        "unatlasedTriangles={} pages={}.",
+        packedTriangleCount,
+        unatlasedTriangleCount,
+        mAtlasPages.size()
+    );
+}
+
+void BakeLightMapXAtlas::createAtlasPageGpuBuffers()
+{
+    for (AtlasPageData& page : mAtlasPages)
+    {
+        for (AtlasPageInstanceData& instance : page.instances)
+        {
+            if (instance.triangleIDs.size() !=
+                instance.triangleUVs.size())
+            {
+                FALCOR_THROW(
+                    "Atlas page {} instance {} has mismatched triangle "
+                    "ID/UV counts ({} vs {}).",
+                    page.pageIndex,
+                    instance.instanceID,
+                    instance.triangleIDs.size(),
+                    instance.triangleUVs.size()
+                );
+            }
+
+            const uint32_t triangleCount =
+                uint32_t(instance.triangleIDs.size());
+
+            if (triangleCount == 0)
+                continue;
+
+            instance.pTriangleIDBuffer =
+                mpDevice->createStructuredBuffer(
+                    sizeof(uint32_t),
+                    triangleCount,
+                    ResourceBindFlags::ShaderResource
+                );
+
+            instance.pTriangleIDBuffer->setBlob(
+                instance.triangleIDs.data(),
+                0,
+                instance.triangleIDs.size() * sizeof(uint32_t)
+            );
+
+            instance.pTriangleUVBuffer =
+                mpDevice->createStructuredBuffer(
+                    sizeof(TriangleLightmapUV),
+                    triangleCount,
+                    ResourceBindFlags::ShaderResource
+                );
+
+            instance.pTriangleUVBuffer->setBlob(
+                instance.triangleUVs.data(),
+                0,
+                instance.triangleUVs.size() * sizeof(TriangleLightmapUV)
+            );
+        }
     }
 }
 
-void BakeLightMapXAtlas::prepareTarget(
+void BakeLightMapXAtlas::bakeAtlasPage(
     RenderContext* pRenderContext,
-    const BakeTarget& target
+    AtlasPageData& page
 )
 {
-    // -------------------------------------------------------------
-    // Find the xatlas data belonging to this target's mesh.
-    // -------------------------------------------------------------
-
-    auto atlasIt =
-        mMeshAtlases.find(target.meshID.get());
-
-    if (atlasIt == mMeshAtlases.end())
+    if (page.width == 0 || page.height == 0)
     {
         FALCOR_THROW(
-            "No MeshAtlasData found for target '{}'.",
-            target.name
+            "Atlas page {} has invalid dimensions {}x{}.",
+            page.pageIndex,
+            page.width,
+            page.height
         );
     }
 
-    const MeshAtlasData& atlasData =
-        atlasIt->second;
+    mLightmapWidth = page.width;
+    mLightmapHeight = page.height;
 
-    if (!atlasData.pTriangleUVBuffer)
-    {
-        FALCOR_THROW(
-            "Target '{}' has no triangle UV buffer.",
-            target.name
-        );
-    }
-
-    // -------------------------------------------------------------
-    // Lightmap resolution comes directly from xatlas.
-    // For our current mesh this is 118 x 115.
-    // -------------------------------------------------------------
-
-    mLightmapWidth =
-        target.width;
-
-    mLightmapHeight =
-        target.height;
-
-    if (mLightmapWidth == 0 ||
-        mLightmapHeight == 0)
-    {
-        FALCOR_THROW(
-            "Invalid lightmap size {}x{} for target '{}'.",
-            mLightmapWidth,
-            mLightmapHeight,
-            target.name
-        );
-    }
-
-    // -------------------------------------------------------------
-    // Create textures that store world-space position and normal
-    // for every valid lightmap texel.
-    // -------------------------------------------------------------
-
+    // -----------------------------------------------------------------
+    // UV-space G-buffer for this one physical xatlas page.
+    // -----------------------------------------------------------------
     ref<Texture> pPosTex =
         mpDevice->createTexture2D(
             mLightmapWidth,
@@ -1111,8 +961,6 @@ void BakeLightMapXAtlas::prepareTarget(
             ResourceBindFlags::RenderTarget |
             ResourceBindFlags::ShaderResource
         );
-
-    pPosTex->setName("XAtlas_PosTex");
 
     ref<Texture> pNormTex =
         mpDevice->createTexture2D(
@@ -1126,32 +974,18 @@ void BakeLightMapXAtlas::prepareTarget(
             ResourceBindFlags::ShaderResource
         );
 
-    pNormTex->setName("XAtlas_NormTex");
-
-    // -------------------------------------------------------------
-    // Create UV-space FBO.
-    //
-    // PS output:
-    //   SV_Target0 -> world position
-    //   SV_Target1 -> world normal
-    // -------------------------------------------------------------
-
-    mpUVFbo =
-        Fbo::create(mpDevice);
-
-    mpUVFbo->attachColorTarget(
-        pPosTex,
-        0
+    pPosTex->setName(
+        "XAtlasPage_Pos_" +
+        std::to_string(page.pageIndex)
+    );
+    pNormTex->setName(
+        "XAtlasPage_Normal_" +
+        std::to_string(page.pageIndex)
     );
 
-    mpUVFbo->attachColorTarget(
-        pNormTex,
-        1
-    );
-
-    // -------------------------------------------------------------
-    // Set rasterization viewport to actual xatlas dimensions.
-    // -------------------------------------------------------------
+    mpUVFbo = Fbo::create(mpDevice);
+    mpUVFbo->attachColorTarget(pPosTex, 0);
+    mpUVFbo->attachColorTarget(pNormTex, 1);
 
     GraphicsState::Viewport viewport(
         0.f,
@@ -1162,16 +996,9 @@ void BakeLightMapXAtlas::prepareTarget(
         1.f
     );
 
-    mpUVGraphicsState->setViewport(
-        0,
-        viewport
-    );
+    mpUVGraphicsState->setViewport(0, viewport);
+    mpUVGraphicsState->setFbo(mpUVFbo);
 
-    mpUVGraphicsState->setFbo(
-        mpUVFbo
-    );
-
-    // Start from empty textures.
     pRenderContext->clearFbo(
         mpUVFbo.get(),
         float4(0.f),
@@ -1180,109 +1007,82 @@ void BakeLightMapXAtlas::prepareTarget(
         FboAttachmentType::Color
     );
 
-    // -------------------------------------------------------------
-    // Bind xatlas data.
-    // -------------------------------------------------------------
+    auto var = mpUVVars->getRootVar();
+    mpScene->bindShaderData(var["gScene"]);
 
-    auto var =
-        mpUVVars->getRootVar();
+    uint64_t rasterTriangleCount = 0;
 
-    mpScene->bindShaderData(
-        var["gScene"]
-    );
-
-    var["gTriangleUVs"] =
-        atlasData.pTriangleUVBuffer;
-
-    var["BakeCB"]["gReceiverInstanceID"] =
-        target.instanceID;
-
-    var["BakeCB"]["gTriangleCount"] =
-        atlasData.triangleCount;
-
-    ref<Vao> pVao =
-        mpScene->getMeshVao();
-
-    if (!pVao)
-    {
-        pVao =
-            mpScene->getMeshVao16();
-    }
-
-    if (!pVao)
-    {
-        FALCOR_THROW(
-            "Scene has no mesh VAO available for UV rasterization."
-        );
-    }
-
-    mpUVGraphicsState->setVao(
-        pVao
-    );
-
-    const uint32_t drawVertexCount =
-        atlasData.triangleCount * 3;
-
-    pRenderContext->draw(
-        mpUVGraphicsState.get(),
-        mpUVVars.get(),
-        drawVertexCount,
-        0
-    );
-
-    //var["gTriangleUVs"] =
-    //    atlasData.pTriangleUVBuffer;
-
-    //var["BakeCB"]["gReceiverInstanceID"] =
-    //    target.instanceID;
-
-    //var["BakeCB"]["gTriangleCount"] =
-    //    atlasData.triangleCount;
-
-    // -------------------------------------------------------------
-    // Rasterize.
+    // -----------------------------------------------------------------
+    // Draw only the compact face subset assigned to this atlasIndex.
     //
-    // Scene::rasterize() submits the complete scene, but gsMain()
-    // discards every geometry instance except target.instanceID.
-    // -------------------------------------------------------------
+    // XAtlasUVRaster.slang must use gTriangleIDs[localTriangleID] to map
+    // the compact page-local triangle back to the original Falcor mesh
+    // triangle before calling gScene.getIndices().
+    // -----------------------------------------------------------------
+    for (const AtlasPageInstanceData& instance : page.instances)
+    {
+        const uint32_t triangleCount =
+            uint32_t(instance.triangleIDs.size());
 
-    //mpScene->rasterize(
-    //    pRenderContext,
-    //    mpUVGraphicsState.get(),
-    //    mpUVVars.get(),
-    //    mpRasterState,
-    //    mpRasterState
-    //);
+        if (triangleCount == 0)
+            continue;
+
+        if (!instance.pTriangleIDBuffer ||
+            !instance.pTriangleUVBuffer)
+        {
+            FALCOR_THROW(
+                "Atlas page {} instance {} is missing GPU triangle data.",
+                page.pageIndex,
+                instance.instanceID
+            );
+        }
+
+        var["gTriangleIDs"] =
+            instance.pTriangleIDBuffer;
+
+        var["gTriangleUVs"] =
+            instance.pTriangleUVBuffer;
+
+        var["BakeCB"]["gReceiverInstanceID"] =
+            instance.instanceID;
+
+        var["BakeCB"]["gTriangleCount"] =
+            triangleCount;
+
+        const uint32_t vertexCount =
+            triangleCount * 3;
+
+        pRenderContext->draw(
+            mpUVGraphicsState.get(),
+            mpUVVars.get(),
+            vertexCount,
+            0
+        );
+
+        rasterTriangleCount += triangleCount;
+    }
 
     logInfo(
-        "UV-rasterized target '{}' "
-        "instanceID={} meshID={} size={}x{} "
-        "triangles={} drawVertices={}",
-        target.name,
-        target.instanceID,
-        target.meshID,
+        "Rasterized atlas page {}: size={}x{} instances={} triangles={}.",
+        page.pageIndex,
         mLightmapWidth,
         mLightmapHeight,
-        atlasData.triangleCount,
-        drawVertexCount
+        page.instances.size(),
+        rasterTriangleCount
     );
-    // =============================================================
-// Validate UV rasterization by extracting occupied texels
-// =============================================================
 
+    // -----------------------------------------------------------------
+    // Extract valid atlas texels.
+    // -----------------------------------------------------------------
     const uint32_t totalTexels =
         mLightmapWidth * mLightmapHeight;
 
-    // One possible TexelSample for every lightmap pixel.
     mpTexelBuffer =
         mpDevice->createStructuredBuffer(
             sizeof(TexelSample),
             totalTexels
         );
 
-    mpTexelBuffer->setName("XAtlas_TexelBuffer");
-
-    // Atomic counter used by ExtractTexelsSingle.cs.slang.
     mpCounterBuffer =
         mpDevice->createBuffer(
             sizeof(uint32_t),
@@ -1290,42 +1090,24 @@ void BakeLightMapXAtlas::prepareTarget(
             MemoryType::DeviceLocal
         );
 
-    mpCounterBuffer->setName("XAtlas_CounterBuffer");
-
-    // Start counter at zero.
     pRenderContext->clearUAV(
         mpCounterBuffer->getUAV().get(),
         uint4(0)
     );
-
-    // -------------------------------------------------------------
-    // Bind extraction shader resources.
-    // -------------------------------------------------------------
 
     auto extractVar =
         mpExtractPass->getRootVar();
 
     extractVar["gPosW"] =
         mpUVFbo->getColorTexture(0);
-
     extractVar["gNormW"] =
         mpUVFbo->getColorTexture(1);
-
     extractVar["gTexelSamples"] =
         mpTexelBuffer;
-
     extractVar["gCounter"] =
         mpCounterBuffer;
-
     extractVar["CB"]["gResolution"] =
-        uint2(
-            mLightmapWidth,
-            mLightmapHeight
-        );
-
-    // -------------------------------------------------------------
-    // Run extraction.
-    // -------------------------------------------------------------
+        uint2(mLightmapWidth, mLightmapHeight);
 
     mpExtractPass->execute(
         pRenderContext,
@@ -1333,51 +1115,42 @@ void BakeLightMapXAtlas::prepareTarget(
         mLightmapHeight
     );
 
-    // -------------------------------------------------------------
-    // Read number of covered texels.
-    // -------------------------------------------------------------
-
     uint32_t extractedCount = 0;
-
     mpCounterBuffer->getBlob(
         &extractedCount,
         0,
         sizeof(uint32_t)
     );
 
-    mNumExtractedTexels =
-        extractedCount;
+    mNumExtractedTexels = extractedCount;
 
     logInfo(
-        "Extracted {} / {} texels ({:.2f}% coverage) "
-        "for target '{}'.",
+        "Atlas page {} extracted {} / {} texels ({:.2f}% coverage).",
+        page.pageIndex,
         mNumExtractedTexels,
         totalTexels,
-        100.f * float(mNumExtractedTexels) / float(totalTexels),
-        target.name
+        totalTexels > 0
+        ? 100.f * float(mNumExtractedTexels) / float(totalTexels)
+        : 0.f
     );
 
-    // =============================================================
-// Create irradiance accumulation buffer.
-//
-// IMPORTANT:
-// TexelSample::texelIndex refers to the original atlas pixel,
-// so this buffer must have one element per atlas texel,
-// NOT one element per extracted texel.
-// =============================================================
+    if (mNumExtractedTexels == 0)
+    {
+        logWarning(
+            "Atlas page {} has no valid texels; skipping RT bake.",
+            page.pageIndex
+        );
+        return;
+    }
 
-
+    // TexelSample::texelIndex is the original atlas pixel index, so the
+    // accumulation buffer must contain one element per atlas pixel.
     mpAccumBuffer =
         mpDevice->createStructuredBuffer(
             sizeof(float4),
             totalTexels
         );
 
-    mpAccumBuffer->setName(
-        "XAtlas_IrradianceAccum"
-    );
-
-    // Start completely empty.
     pRenderContext->clearUAV(
         mpAccumBuffer->getUAV().get(),
         float4(0.f)
@@ -1385,108 +1158,16 @@ void BakeLightMapXAtlas::prepareTarget(
 
     mCurrentSample = 0;
 
-    logInfo(
-        "Created accumulation buffer with {} texels.",
-        totalTexels
-    );
-
-    mNeedsPreparation = false;
-}
-
-void BakeLightMapXAtlas::traceOneSample(
-    RenderContext* pRenderContext
-)
-{
-    if (!mpTexelBuffer)
+    for (uint32_t sample = 0;
+        sample < mBakeSampleCount;
+        ++sample)
     {
-        FALCOR_THROW(
-            "Texel buffer is null."
-        );
+        traceOneSample(pRenderContext);
     }
 
-    if (!mpAccumBuffer)
-    {
-        FALCOR_THROW(
-            "Accumulation buffer is null."
-        );
-    }
-
-    if (mNumExtractedTexels == 0)
-    {
-        FALCOR_THROW(
-            "No extracted texels available for ray tracing."
-        );
-    }
-
-    auto rtVar =
-        mpRtVars->getRootVar();
-
-    rtVar["gTexelSamples"] =
-        mpTexelBuffer;
-
-    rtVar["gIrradianceAccum"] =
-        mpAccumBuffer;
-
-    rtVar["PerFrameCB"]["sampleIndex"] =
-        mCurrentSample;
-
-    rtVar["PerFrameCB"]["numTexels"] =
-        mNumExtractedTexels;
-
-    rtVar["PerFrameCB"]["bias"] =
-        0.01f;
-
-    if (mpEmissiveSampler)
-    {
-        mpEmissiveSampler->bindShaderData(
-            rtVar["PerFrameCB"]["emissiveSampler"]
-        );
-    }
-
-    const uint32_t threadCount =
-        mNumExtractedTexels;
-
-    mpScene->raytrace(
-        pRenderContext,
-        mpRtProgram.get(),
-        mpRtVars,
-        uint3(threadCount, 1, 1)
-    );
-
-    ++mCurrentSample;
-
-    logInfo(
-        "Completed RT sample {} for {} texels.",
-        mCurrentSample,
-        mNumExtractedTexels
-    );
-}
-
-void BakeLightMapXAtlas::finalizeTarget(
-    RenderContext* pRenderContext,
-    const BakeTarget& target
-)
-{
-    if (!mpAccumBuffer)
-    {
-        FALCOR_THROW(
-            "Accumulation buffer is null."
-        );
-    }
-
-    if (mLightmapWidth == 0 || mLightmapHeight == 0)
-    {
-        FALCOR_THROW(
-            "Invalid lightmap size {}x{}.",
-            mLightmapWidth,
-            mLightmapHeight
-        );
-    }
-
-    // -------------------------------------------------------------
-    // Create normalized lightmap output texture.
-    // -------------------------------------------------------------
-
+    // -----------------------------------------------------------------
+    // Normalize and save this physical page.
+    // -----------------------------------------------------------------
     mpResultTex =
         mpDevice->createTexture2D(
             mLightmapWidth,
@@ -1499,36 +1180,22 @@ void BakeLightMapXAtlas::finalizeTarget(
             ResourceBindFlags::UnorderedAccess
         );
 
-    mpResultTex->setName("XAtlas_ResultTex");
-
-    // Clear to black first.
     pRenderContext->clearUAV(
         mpResultTex->getUAV().get(),
         float4(0.f)
     );
-
-    // -------------------------------------------------------------
-    // Bind normalization resources.
-    // -------------------------------------------------------------
 
     auto normVar =
         mpNormalizePass->getRootVar();
 
     normVar["gAccumBuffer"] =
         mpAccumBuffer;
-
     normVar["gOutput"] =
         mpResultTex;
-
     normVar["CB"]["gTotalSamples"] =
         mCurrentSample;
-
     normVar["CB"]["gWidth"] =
         mLightmapWidth;
-
-    // -------------------------------------------------------------
-    // Run normalization.
-    // -------------------------------------------------------------
 
     mpNormalizePass->execute(
         pRenderContext,
@@ -1536,36 +1203,76 @@ void BakeLightMapXAtlas::finalizeTarget(
         mLightmapHeight
     );
 
-    logInfo(
-        "Normalized target '{}' into texture {}x{} using {} sample(s).",
-        target.name,
-        mLightmapWidth,
-        mLightmapHeight,
-        mCurrentSample
-    );
-
-    if (mpResultTex)
+    if (page.outputPath.empty())
     {
-        mpResultTex->captureToFile(
-            0,
-            0,
-            target.outputPath,
-            Bitmap::FileFormat::ExrFile,
-            Bitmap::ExportFlags::Uncompressed
-        );
-
-        logInfo(
-            "Saved test lightmap to '{}'.",
-            target.outputPath
+        FALCOR_THROW(
+            "Atlas page {} has no output path.",
+            page.pageIndex
         );
     }
+
+    mpResultTex->captureToFile(
+        0,
+        0,
+        page.outputPath,
+        Bitmap::FileFormat::ExrFile,
+        Bitmap::ExportFlags::Uncompressed
+    );
+
+    logInfo(
+        "Saved atlas page {} to '{}' using {} samples.",
+        page.pageIndex,
+        page.outputPath,
+        mCurrentSample
+    );
 }
 
-void BakeLightMapXAtlas::advanceTarget()
+void BakeLightMapXAtlas::traceOneSample(
+    RenderContext* pRenderContext
+)
 {
-    ++mCurrentTargetIndex;
+    if (!mpTexelBuffer)
+        FALCOR_THROW("Texel buffer is null.");
 
-    mCurrentSample = 0;
-    mNumExtractedTexels = 0;
-    mNeedsPreparation = true;
+    if (!mpAccumBuffer)
+        FALCOR_THROW("Accumulation buffer is null.");
+
+    if (mNumExtractedTexels == 0)
+        FALCOR_THROW("No extracted texels available for ray tracing.");
+
+    auto rtVar = mpRtVars->getRootVar();
+
+    rtVar["gTexelSamples"] =
+        mpTexelBuffer;
+    rtVar["gIrradianceAccum"] =
+        mpAccumBuffer;
+
+    rtVar["PerFrameCB"]["sampleIndex"] =
+        mCurrentSample;
+    rtVar["PerFrameCB"]["numTexels"] =
+        mNumExtractedTexels;
+    rtVar["PerFrameCB"]["bias"] =
+        0.01f;
+
+    if (mpEmissiveSampler)
+    {
+        mpEmissiveSampler->bindShaderData(
+            rtVar["PerFrameCB"]["emissiveSampler"]
+        );
+    }
+
+    mpScene->raytrace(
+        pRenderContext,
+        mpRtProgram.get(),
+        mpRtVars,
+        uint3(mNumExtractedTexels, 1, 1)
+    );
+
+    ++mCurrentSample;
+
+    logInfo(
+        "Completed RT sample {} for {} texels.",
+        mCurrentSample,
+        mNumExtractedTexels
+    );
 }

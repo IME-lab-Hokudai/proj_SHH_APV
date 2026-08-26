@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #pragma once
+
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
 #include "RenderGraph/RenderPassHelpers.h"
@@ -33,109 +34,136 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "BakeDataStructures.slang"
 
+#include <filesystem>
+#include <vector>
+
 using namespace Falcor;
 
 class BakeLightMapXAtlas : public RenderPass
 {
 public:
-    FALCOR_PLUGIN_CLASS(BakeLightMapXAtlas, "BakeLightMapXAtlas", "Insert pass description here.");
+    FALCOR_PLUGIN_CLASS(
+        BakeLightMapXAtlas,
+        "BakeLightMapXAtlas",
+        "Bake scene lightmaps using xatlas-generated multi-page UV atlases."
+    );
 
-    static ref<BakeLightMapXAtlas> create(ref<Device> pDevice, const Properties& props)
+    static ref<BakeLightMapXAtlas> create(
+        ref<Device> pDevice,
+        const Properties& props
+    )
     {
         return make_ref<BakeLightMapXAtlas>(pDevice, props);
     }
 
-    BakeLightMapXAtlas(ref<Device> pDevice, const Properties& props);
+    BakeLightMapXAtlas(
+        ref<Device> pDevice,
+        const Properties& props
+    );
 
-    virtual Properties getProperties() const override;
-    virtual RenderPassReflection reflect(const CompileData& compileData) override;
-    virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
-    virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
-    virtual void renderUI(Gui::Widgets& widget) override;
-    virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
-    virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
-    virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+    Properties getProperties() const override;
+    RenderPassReflection reflect(const CompileData& compileData) override;
+    void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
+    void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
+    void renderUI(Gui::Widgets& widget) override;
+    void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
+    bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
+    bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
 private:
-    struct MeshAtlasData
+    // One Falcor instance may contribute triangles to several xatlas pages.
+    // The arrays below are compact and parallel:
+    //   triangleIDs[i] -> original Falcor mesh triangle ID
+    //   triangleUVs[i] -> UV triplet assigned by xatlas for that triangle
+    struct AtlasPageInstanceData
     {
-        MeshID meshID;
-
-        uint32_t width = 0;
-        uint32_t height = 0;
-        uint32_t triangleCount = 0;
-
-        std::vector<TriangleLightmapUV> triangleUVs;
-        ref<Buffer> pTriangleUVBuffer;
-    };
-
-    struct BakeTarget
-    {
-        std::string name;
-
         uint32_t instanceID = 0;
         MeshID meshID;
 
-        uint32_t width = 0;
-        uint32_t height = 0;
+        std::vector<uint32_t> triangleIDs;
+        std::vector<TriangleLightmapUV> triangleUVs;
 
-        std::filesystem::path outputPath;
+        ref<Buffer> pTriangleIDBuffer;
+        ref<Buffer> pTriangleUVBuffer;
     };
 
-    ref<Scene> mpScene;
-    ref<Program> mpUVProgram;
-    ref<ProgramVars> mpUVVars;
-    ref<GraphicsState> mpUVGraphicsState;
-    ref<RasterizerState> mpRasterState;
-    ref<Fbo> mpUVFbo;
+    // xatlas::Atlas::atlasIndex selects one physical page. Every page has
+    // the common xatlas width/height and contains only the triangles whose
+    // output vertices reference this atlasIndex.
+    struct AtlasPageData
+    {
+        uint32_t pageIndex = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::filesystem::path outputPath;
+        std::vector<AtlasPageInstanceData> instances;
+    };
 
-    RenderPassHelpers::IOSize mOutputSizeSelection = RenderPassHelpers::IOSize::Default;
-    uint2 mFixedOutputSize = { 512, 512 };
-    uint32_t mLightmapWidth = 1024;
-    uint32_t mLightmapHeight = 1024;
-    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform;
-    std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;
-    mutable LightBVHSampler::Options mLightBVHOptions;
-    ref<Program> mpRtProgram;
-    ref<RtProgramVars> mpRtVars;
-
-    ref<ComputePass> mpExtractPass;
-    ref<ComputePass> mpNormalizePass;
-    ref<Buffer> mpTexelBuffer;
-    ref<Buffer> mpCounterBuffer;
-    ref<Buffer> mpAccumBuffer;
-    // In BakeLightMap.h
-    ref<Texture> mpResultTex;
-    uint32_t mNumExtractedTexels = 0;
-    bool mNeedsPreparation = true;
-    uint32_t mCurrentSample = 0;
-    //uint32_t mTotalSamples = 4096; // Set your target quality here
-    uint32_t mTotalSamples = 8; // Set your target quality here
-    std::unordered_map<uint32_t, MeshAtlasData> mMeshAtlases;
-    std::vector<BakeTarget> mBakeTargets;
-    uint32_t mCurrentTargetIndex = 0;
-
-    //xatlas
     void resetBakingState();
 
     void createUVRasterProgram();
     void createComputePasses();
     void createRayTracingProgram(RenderContext* pRenderContext);
 
-    void buildBakeTargets();
-    void buildMeshAtlases(RenderContext* pRenderContext);
+    std::vector<uint32_t> collectTriangleInstanceIDs() const;
 
-    void prepareTarget(
+    void buildAtlasPages(
         RenderContext* pRenderContext,
-        const BakeTarget& target
+        const std::vector<uint32_t>& instanceIDs,
+        uint32_t resolution,
+        float texelsPerUnit
+    );
+
+    void createAtlasPageGpuBuffers();
+
+    void bakeAtlasPage(
+        RenderContext* pRenderContext,
+        AtlasPageData& page
     );
 
     void traceOneSample(RenderContext* pRenderContext);
 
-    void finalizeTarget(
-        RenderContext* pRenderContext,
-        const BakeTarget& target
-    );
+private:
+    ref<Scene> mpScene;
 
-    void advanceTarget();
+    ref<Program> mpUVProgram;
+    ref<ProgramVars> mpUVVars;
+    ref<GraphicsState> mpUVGraphicsState;
+    ref<RasterizerState> mpRasterState;
+    ref<Vao> mpProceduralVao;
+    ref<Fbo> mpUVFbo;
+
+    ref<ComputePass> mpExtractPass;
+    ref<ComputePass> mpNormalizePass;
+
+    ref<Program> mpRtProgram;
+    ref<RtProgramVars> mpRtVars;
+
+    EmissiveLightSamplerType mEmissiveSamplerType =
+        EmissiveLightSamplerType::Uniform;
+    std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;
+    mutable LightBVHSampler::Options mLightBVHOptions;
+
+    ref<Buffer> mpTexelBuffer;
+    ref<Buffer> mpCounterBuffer;
+    ref<Buffer> mpAccumBuffer;
+    ref<Texture> mpResultTex;
+
+    std::vector<AtlasPageData> mAtlasPages;
+
+    RenderPassHelpers::IOSize mOutputSizeSelection =
+        RenderPassHelpers::IOSize::Default;
+    uint2 mFixedOutputSize = { 512, 512 };
+
+    uint32_t mLightmapWidth = 0;
+    uint32_t mLightmapHeight = 0;
+    uint32_t mNumExtractedTexels = 0;
+    uint32_t mCurrentSample = 0;
+
+    // Current Bistro validation settings. The implementation itself supports
+    // any number of input instances and any xatlas atlasCount.
+    uint32_t mAtlasResolution = 1024;
+    float mTexelsPerUnit = 258.60672f;
+    uint32_t mBakeSampleCount = 64;
+    uint32_t mTestInstanceCount = 2288;
 };
