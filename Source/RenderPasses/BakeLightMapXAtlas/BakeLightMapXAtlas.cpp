@@ -34,6 +34,11 @@
 #include "xatlas.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <map>
 #include <unordered_set>
 
@@ -50,6 +55,101 @@ namespace
 
     const char kNormalizeFile[] =
         "RenderPasses/BakeLightMapXAtlas/NormalizeLightmapSingle.cs.slang";
+
+    const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
+    const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
+
+    struct XAtlasProgressState
+    {
+        std::array<std::atomic<int>, 4> lastReported;
+
+        XAtlasProgressState()
+        {
+            for (auto& value : lastReported)
+                value.store(-10);
+        }
+    };
+
+    bool xatlasProgressCallback(
+        xatlas::ProgressCategory category,
+        int progress,
+        void* pUserData
+    )
+    {
+        auto* pState = static_cast<XAtlasProgressState*>(pUserData);
+        const size_t categoryIndex = static_cast<size_t>(category);
+
+        if (!pState || categoryIndex >= pState->lastReported.size())
+            return true;
+
+        int previous = pState->lastReported[categoryIndex].load();
+
+        if (progress == previous)
+            return true;
+
+        // xatlas may call the callback from worker threads. Only log when the
+        // category advances by at least 10%, plus the final 100% update.
+        while (progress == 100 || progress >= previous + 10)
+        {
+            if (pState->lastReported[categoryIndex].compare_exchange_weak(
+                previous,
+                progress
+            ))
+            {
+                const char* categoryName = "Unknown";
+
+                switch (category)
+                {
+                case xatlas::ProgressCategory::AddMesh:
+                    categoryName = "AddMesh";
+                    break;
+                case xatlas::ProgressCategory::ComputeCharts:
+                    categoryName = "ComputeCharts";
+                    break;
+                case xatlas::ProgressCategory::PackCharts:
+                    categoryName = "PackCharts";
+                    break;
+                case xatlas::ProgressCategory::BuildOutputMeshes:
+                    categoryName = "BuildOutputMeshes";
+                    break;
+                }
+
+                logInfo(
+                    "xatlas progress: {} {}%",
+                    categoryName,
+                    progress
+                );
+                break;
+            }
+        }
+
+        return true;
+    }
+
+#pragma pack(push, 1)
+    struct AtlasMappingHeader
+    {
+        char magic[8] = { 'X', 'A', 'L', 'M', 'A', 'P', '0', '1' };
+        uint32_t version = 1;
+        uint32_t pageCount = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        float texelsPerUnit = 0.f;
+        uint64_t triangleRecordCount = 0;
+    };
+
+    struct AtlasMappingRecord
+    {
+        uint32_t pageIndex = 0;
+        uint32_t instanceID = 0;
+        uint32_t meshID = 0;
+        uint32_t triangleID = 0;
+        float uv[6] = {};
+    };
+#pragma pack(pop)
+
+    static_assert(sizeof(AtlasMappingHeader) == 36);
+    static_assert(sizeof(AtlasMappingRecord) == 40);
 }
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(
@@ -100,8 +200,81 @@ void BakeLightMapXAtlas::execute(
     const RenderData& renderData
 )
 {
-    // Baking is currently triggered once from setScene(). Keeping execute()
-    // empty avoids re-running the expensive atlas build every frame.
+    if (!mpScene || mBakeCompleted)
+        return;
+
+    const bool mappingExists =
+        std::filesystem::exists(kAtlasMappingFile);
+
+    if (mRebuildAtlas || !mappingExists)
+    {
+        if (!mRebuildAtlas && !mappingExists)
+        {
+            logWarning(
+                "Atlas reuse requested, but '{}' does not exist. "
+                "Rebuilding the atlas mapping.",
+                kAtlasMappingFile
+            );
+        }
+
+        const std::vector<uint32_t> allInstanceIDs =
+            collectTriangleInstanceIDs();
+
+        if (allInstanceIDs.empty())
+        {
+            logWarning(
+                "BakeLightMapXAtlas: scene has no triangle-mesh instances."
+            );
+            mBakeCompleted = true;
+            return;
+        }
+
+        const uint32_t instanceCount =
+            std::min<uint32_t>(
+                mTestInstanceCount,
+                uint32_t(allInstanceIDs.size())
+            );
+
+        std::vector<uint32_t> instanceIDs(
+            allInstanceIDs.begin(),
+            allInstanceIDs.begin() + instanceCount
+        );
+
+        logInfo(
+            "Starting global xatlas build: instances={} / {} "
+            "targetResolution={} automaticTexelDensity=true.",
+            instanceIDs.size(),
+            allInstanceIDs.size(),
+            mAtlasResolution
+        );
+
+        // Build and finalize the complete persistent mapping BEFORE any RT
+        // baking. If a later high-spp bake is interrupted, the UV work is
+        // already safely reusable on the next run.
+        buildAndSaveAtlasMapping(instanceIDs);
+    }
+    else
+    {
+        logInfo(
+            "Reusing existing xatlas mapping '{}'. "
+            "No xatlas charting/packing will run.",
+            kAtlasMappingFile
+        );
+    }
+
+    // GPU programs are only needed for the actual lightmap bake. Creating
+    // them here also keeps setScene() lightweight and lets Falcor finish its
+    // normal scene update before the one-shot work begins.
+    if (!mpUVProgram)
+        createUVRasterProgram();
+    if (!mpExtractPass || !mpNormalizePass)
+        createComputePasses();
+    if (!mpRtProgram || !mpRtVars)
+        createRayTracingProgram(pRenderContext);
+
+    bakeSavedAtlasPages(pRenderContext);
+
+    mBakeCompleted = true;
 }
 
 void BakeLightMapXAtlas::renderUI(Gui::Widgets& widget)
@@ -113,65 +286,13 @@ void BakeLightMapXAtlas::setScene(
 )
 {
     resetBakingState();
-
     mpScene = pScene;
-    if (!mpScene)
-        return;
-
-    createUVRasterProgram();
-    createComputePasses();
-    createRayTracingProgram(pRenderContext);
-
-    const std::vector<uint32_t> allInstanceIDs =
-        collectTriangleInstanceIDs();
-
-    if (allInstanceIDs.empty())
-    {
-        logWarning("BakeLightMapXAtlas: scene has no triangle-mesh instances.");
-        return;
-    }
-
-    // Keep the current 48-instance Bistro test while the multi-page path is
-    // being validated. Set mTestInstanceCount >= allInstanceIDs.size() to
-    // build the complete scene atlas.
-    const uint32_t instanceCount =
-        std::min<uint32_t>(
-            mTestInstanceCount,
-            uint32_t(allInstanceIDs.size())
-        );
-
-    std::vector<uint32_t> instanceIDs(
-        allInstanceIDs.begin(),
-        allInstanceIDs.begin() + instanceCount
-    );
-
-    buildAtlasPages(
-        pRenderContext,
-        instanceIDs,
-        mAtlasResolution,
-        mTexelsPerUnit
-    );
-
-    logInfo(
-        "Built {} lightmap atlas page(s) from {} instance(s).",
-        mAtlasPages.size(),
-        instanceIDs.size()
-    );
-
-    // Bake each physical xatlas page independently. All pages share the same
-    // dimensions, exactly like the official xatlas multi-atlas example.
-    //for (auto& page : mAtlasPages)
-    //{
-    //    bakeAtlasPage(
-    //        pRenderContext,
-    //        page
-    //    );
-    //}
+    mBakeCompleted = false;
 }
 
 void BakeLightMapXAtlas::resetBakingState()
 {
-    mAtlasPages.clear();
+    mMeshGeometryCache.clear();
 
     mLightmapWidth = 0;
     mLightmapHeight = 0;
@@ -397,7 +518,7 @@ BakeLightMapXAtlas::collectTriangleInstanceIDs() const
 
     logInfo(
         "Bistro lightmap targets: "
-        "instances={} uniqueMeshes={} totalInstanceTriangles={}",
+        "instances={} uniqueMeshes={} totalInstanceTriangles={}.",
         instanceIDs.size(),
         uniqueMeshes.size(),
         totalTriangles
@@ -406,48 +527,30 @@ BakeLightMapXAtlas::collectTriangleInstanceIDs() const
     return instanceIDs;
 }
 
-void BakeLightMapXAtlas::buildAtlasPages(
-    RenderContext* pRenderContext,
-    const std::vector<uint32_t>& instanceIDs,
-    uint32_t resolution,
-    float texelsPerUnit
+void BakeLightMapXAtlas::buildMeshGeometryCache(
+    const std::vector<uint32_t>& instanceIDs
 )
 {
-    if (instanceIDs.empty())
-        FALCOR_THROW("Cannot build xatlas pages from an empty instance list.");
+    mMeshGeometryCache.clear();
 
-    if (resolution == 0)
-        FALCOR_THROW("xatlas page resolution must be greater than zero.");
+    std::unordered_set<uint32_t> requiredMeshIDs;
+    requiredMeshIDs.reserve(instanceIDs.size());
 
-    if (texelsPerUnit <= 0.f)
-        FALCOR_THROW("xatlas texelsPerUnit must be greater than zero.");
-
-    struct InputMeshInfo
-    {
-        uint32_t instanceID = 0;
-        MeshID meshID;
-        std::vector<uint3> triangles;
-    };
-
-    std::vector<InputMeshInfo> inputMeshes;
-    inputMeshes.reserve(instanceIDs.size());
-
-    xatlas::Atlas* atlas = xatlas::Create();
-    if (!atlas)
-        FALCOR_THROW("xatlas::Create() failed.");
-
-    // -----------------------------------------------------------------
-    // Add one xatlas mesh per Falcor geometry instance.
-    //
-    // This mirrors the official xatlas example: atlas->meshes[i]
-    // corresponds to the i-th successful AddMesh() call.
-    // -----------------------------------------------------------------
     for (uint32_t instanceID : instanceIDs)
     {
         const auto& instance =
             mpScene->getGeometryInstance(instanceID);
+        requiredMeshIDs.insert(MeshID(instance.geometryID).get());
+    }
 
-        const MeshID meshID(instance.geometryID);
+    mMeshGeometryCache.reserve(requiredMeshIDs.size());
+
+    uint32_t cacheIndex = 0;
+    uint64_t cachedTriangles = 0;
+
+    for (uint32_t meshIDValue : requiredMeshIDs)
+    {
+        const MeshID meshID(meshIDValue);
         const auto& mesh = mpScene->getMesh(meshID);
 
         const uint32_t vertexCount = mesh.vertexCount;
@@ -461,8 +564,8 @@ void BakeLightMapXAtlas::buildAtlasPages(
                 ResourceBindFlags::UnorderedAccess
             );
 
-        // Falcor's mesh extraction path expects this output even though
-        // xatlas does not need the material UVs for this parameterization.
+        // Falcor's extraction helper expects a texcoord output even though
+        // xatlas only consumes positions/indices here.
         ref<Buffer> pTexCoords =
             mpDevice->createStructuredBuffer(
                 sizeof(float3),
@@ -484,43 +587,137 @@ void BakeLightMapXAtlas::buildAtlasPages(
         buffers["texcrds"] = pTexCoords;
         buffers["triangleIndices"] = pTriangleIndices;
 
-        mpScene->getMeshVerticesAndIndices(
-            meshID,
-            buffers
-        );
+        mpScene->getMeshVerticesAndIndices(meshID, buffers);
 
-        std::vector<float3> positions(vertexCount);
-        std::vector<uint3> triangles(triangleCount);
+        CachedMeshGeometry geometry;
+        geometry.positions.resize(vertexCount);
+        geometry.triangles.resize(triangleCount);
+        geometry.indices.reserve(size_t(triangleCount) * 3u);
 
         pPositions->getBlob(
-            positions.data(),
+            geometry.positions.data(),
             0,
-            positions.size() * sizeof(float3)
+            geometry.positions.size() * sizeof(float3)
         );
 
         pTriangleIndices->getBlob(
-            triangles.data(),
+            geometry.triangles.data(),
             0,
-            triangles.size() * sizeof(uint3)
+            geometry.triangles.size() * sizeof(uint3)
         );
 
-        std::vector<uint32_t> indices;
-        indices.reserve(triangleCount * 3);
-
-        for (const uint3& tri : triangles)
+        for (const uint3& tri : geometry.triangles)
         {
-            indices.push_back(tri.x);
-            indices.push_back(tri.y);
-            indices.push_back(tri.z);
+            geometry.indices.push_back(tri.x);
+            geometry.indices.push_back(tri.y);
+            geometry.indices.push_back(tri.z);
         }
 
+        cachedTriangles += triangleCount;
+        mMeshGeometryCache.emplace(
+            meshIDValue,
+            std::move(geometry)
+        );
+
+        ++cacheIndex;
+        if (cacheIndex == uint32_t(requiredMeshIDs.size()) ||
+            (cacheIndex % 100u) == 0u)
+        {
+            logInfo(
+                "Mesh cache: {}/{} unique meshes extracted.",
+                cacheIndex,
+                requiredMeshIDs.size()
+            );
+        }
+    }
+
+    logInfo(
+        "Mesh cache complete: uniqueMeshes={} uniqueTriangles={}.",
+        mMeshGeometryCache.size(),
+        cachedTriangles
+    );
+}
+
+std::vector<BakeLightMapXAtlas::AtlasPageData>
+BakeLightMapXAtlas::buildGlobalAtlas(
+    const std::vector<uint32_t>& instanceIDs,
+    uint32_t targetResolution,
+    float& outChosenTexelsPerUnit
+)
+{
+    if (instanceIDs.empty())
+        FALCOR_THROW("Cannot build xatlas from an empty instance list.");
+
+    if (targetResolution == 0)
+        FALCOR_THROW("xatlas target resolution must be greater than zero.");
+
+    struct InputMeshInfo
+    {
+        uint32_t instanceID = 0;
+        uint32_t meshID = 0;
+        uint32_t triangleCount = 0;
+    };
+
+    std::vector<InputMeshInfo> inputMeshes;
+    inputMeshes.reserve(instanceIDs.size());
+
+    xatlas::Atlas* atlas = xatlas::Create();
+    if (!atlas)
+        FALCOR_THROW("xatlas::Create() failed.");
+
+    XAtlasProgressState progressState;
+    xatlas::SetProgressCallback(
+        atlas,
+        xatlasProgressCallback,
+        &progressState
+    );
+
+    uint64_t submittedTriangles = 0;
+
+    // -----------------------------------------------------------------
+    // Official-example-style submission:
+    // one xatlas::Atlas containing every selected Falcor instance.
+    //
+    // We still submit one xatlas mesh per Falcor geometry instance because
+    // different instances can receive different baked lighting even when they
+    // reference the same source mesh. Cached CPU geometry avoids repeated
+    // Falcor extraction/readback for reused meshIDs.
+    // -----------------------------------------------------------------
+    for (uint32_t instanceID : instanceIDs)
+    {
+        const auto& instance =
+            mpScene->getGeometryInstance(instanceID);
+
+        const MeshID meshID(instance.geometryID);
+        const uint32_t meshIDValue = meshID.get();
+
+        const auto cacheIt =
+            mMeshGeometryCache.find(meshIDValue);
+
+        if (cacheIt == mMeshGeometryCache.end())
+        {
+            xatlas::Destroy(atlas);
+            FALCOR_THROW(
+                "Missing cached mesh geometry for meshID={}.",
+                meshIDValue
+            );
+        }
+
+        const CachedMeshGeometry& geometry = cacheIt->second;
+
         xatlas::MeshDecl meshDecl{};
-        meshDecl.vertexCount = vertexCount;
-        meshDecl.vertexPositionData = positions.data();
-        meshDecl.vertexPositionStride = sizeof(float3);
-        meshDecl.indexCount = uint32_t(indices.size());
-        meshDecl.indexData = indices.data();
-        meshDecl.indexFormat = xatlas::IndexFormat::UInt32;
+        meshDecl.vertexCount =
+            uint32_t(geometry.positions.size());
+        meshDecl.vertexPositionData =
+            geometry.positions.data();
+        meshDecl.vertexPositionStride =
+            sizeof(float3);
+        meshDecl.indexCount =
+            uint32_t(geometry.indices.size());
+        meshDecl.indexData =
+            geometry.indices.data();
+        meshDecl.indexFormat =
+            xatlas::IndexFormat::UInt32;
 
         const xatlas::AddMeshError error =
             xatlas::AddMesh(
@@ -539,47 +736,76 @@ void BakeLightMapXAtlas::buildAtlasPages(
             FALCOR_THROW(
                 "xatlas::AddMesh() failed for instanceID={} meshID={}: {}",
                 instanceID,
-                meshID,
+                meshIDValue,
                 errorString
             );
         }
 
         InputMeshInfo input;
         input.instanceID = instanceID;
-        input.meshID = meshID;
-        input.triangles = std::move(triangles);
-        inputMeshes.push_back(std::move(input));
+        input.meshID = meshIDValue;
+        input.triangleCount =
+            uint32_t(geometry.triangles.size());
 
-        logInfo(
-            "xatlas input: instanceID={} meshID={} vertices={} triangles={}",
-            instanceID,
-            meshID,
-            vertexCount,
-            triangleCount
-        );
+        submittedTriangles += input.triangleCount;
+        inputMeshes.push_back(input);
     }
 
-    // The official example calls this only to join any asynchronous AddMesh
-    // work before printing totals. It is harmless here and makes the mesh
-    // list complete before generation/validation.
-    xatlas::AddMeshJoin(atlas);
-
-    xatlas::ChartOptions chartOptions{};
-    xatlas::PackOptions packOptions{};
-
-    packOptions.resolution = resolution;
-    packOptions.texelsPerUnit = texelsPerUnit;
-    packOptions.padding = 4;
-    packOptions.bilinear = true;
-    packOptions.createImage = false;
-
-    xatlas::Generate(
-        atlas,
-        chartOptions,
-        packOptions
+    logInfo(
+        "xatlas global input submitted: meshes={} triangles={}. "
+        "Waiting for AddMesh work...",
+        inputMeshes.size(),
+        submittedTriangles
     );
 
-    // NOW meshCount is valid.
+    xatlas::AddMeshJoin(atlas);
+
+    logInfo(
+        "xatlas global AddMeshJoin complete. Starting ComputeCharts()..."
+    );
+
+    xatlas::ChartOptions chartOptions{};
+    xatlas::ComputeCharts(atlas, chartOptions);
+
+    logInfo(
+        "xatlas global ComputeCharts complete. Starting PackCharts() "
+        "with targetResolution={} and automatic texel density...",
+        targetResolution
+    );
+
+    // -----------------------------------------------------------------
+    // Important xatlas mode.
+    //
+    // xatlas documentation:
+    // - texelsPerUnit == 0 asks xatlas to estimate the density.
+    // - resolution != 0 provides the resolution that estimate should
+    //   approximately match.
+    //
+    // This is fundamentally different from our old fixed-density mode
+    // (resolution > 0 AND texelsPerUnit > 0), which explicitly allowed
+    // xatlas to create many fixed-resolution sub-atlases.
+    // -----------------------------------------------------------------
+    xatlas::PackOptions packOptions{};
+    packOptions.resolution = targetResolution;
+    packOptions.texelsPerUnit = 0.0f;
+
+    // Keep lightmap-safe sampling margins.
+    packOptions.padding = 4;
+    packOptions.bilinear = true;
+
+    // Officially documented to reduce the number of possible chart
+    // locations and improve packing speed.
+    packOptions.blockAlign = true;
+
+    // Random packing is much faster than brute-force packing.
+    packOptions.bruteForce = false;
+
+    packOptions.createImage = false;
+    packOptions.rotateChartsToAxis = true;
+    packOptions.rotateCharts = true;
+
+    xatlas::PackCharts(atlas, packOptions);
+
     if (atlas->meshCount != inputMeshes.size())
     {
         const uint32_t outputMeshCount = atlas->meshCount;
@@ -588,22 +814,12 @@ void BakeLightMapXAtlas::buildAtlasPages(
         xatlas::Destroy(atlas);
 
         FALCOR_THROW(
-            "xatlas mesh count mismatch after Generate(). Expected {}, got {}.",
+            "xatlas mesh count mismatch after PackCharts(). "
+            "Expected {}, got {}.",
             expectedMeshCount,
             outputMeshCount
         );
     }
-
-    logInfo(
-        "xatlas result: meshes={} charts={} pages={} size={}x{} "
-        "texelsPerUnit={}",
-        atlas->meshCount,
-        atlas->chartCount,
-        atlas->atlasCount,
-        atlas->width,
-        atlas->height,
-        atlas->texelsPerUnit
-    );
 
     if (atlas->atlasCount == 0 ||
         atlas->width == 0 ||
@@ -613,29 +829,38 @@ void BakeLightMapXAtlas::buildAtlasPages(
         FALCOR_THROW("xatlas generated no valid atlas pages.");
     }
 
+    outChosenTexelsPerUnit = atlas->texelsPerUnit;
+
+    logInfo(
+        "xatlas global result: meshes={} charts={} pages={} "
+        "size={}x{} chosenTexelsPerUnit={}.",
+        atlas->meshCount,
+        atlas->chartCount,
+        atlas->atlasCount,
+        atlas->width,
+        atlas->height,
+        atlas->texelsPerUnit
+    );
+
     for (uint32_t pageIndex = 0;
         pageIndex < atlas->atlasCount;
         ++pageIndex)
     {
         logInfo(
-            "xatlas page {} utilization={:.2f}%",
+            "xatlas page {} utilization={:.2f}%.",
             pageIndex,
             atlas->utilization[pageIndex] * 100.f
         );
     }
 
-    // -----------------------------------------------------------------
-    // One AtlasPageData per xatlas atlasIndex, exactly like the example's
-    // outputTrisImage[atlasIndex * imageDataSize].
-    // -----------------------------------------------------------------
-    mAtlasPages.clear();
-    mAtlasPages.resize(atlas->atlasCount);
+    std::vector<AtlasPageData> pages(atlas->atlasCount);
 
     for (uint32_t pageIndex = 0;
         pageIndex < atlas->atlasCount;
         ++pageIndex)
     {
-        AtlasPageData& page = mAtlasPages[pageIndex];
+        AtlasPageData& page = pages[pageIndex];
+
         page.pageIndex = pageIndex;
         page.width = atlas->width;
         page.height = atlas->height;
@@ -649,16 +874,9 @@ void BakeLightMapXAtlas::buildAtlasPages(
     uint64_t unatlasedTriangleCount = 0;
 
     // -----------------------------------------------------------------
-    // Convert xatlas output face-by-face.
-    //
-    // This deliberately follows the official example's triangle raster
-    // loop:
-    //   face f -> indexArray[f*3 + corner] -> Vertex
-    //   Vertex::atlasIndex selects the physical page
-    //   Vertex::uv is in atlas texel coordinates
-    //
-    // The example states atlasIndex is the same for all vertices in a face
-    // and skips faces whose atlasIndex < 0.
+    // Preserve the face mapping already validated in earlier tests:
+    // source face f -> output indices f*3 + corner -> xatlas Vertex.
+    // Vertex::xref must map back to the original source vertex.
     // -----------------------------------------------------------------
     for (uint32_t meshIndex = 0;
         meshIndex < atlas->meshCount;
@@ -670,12 +888,29 @@ void BakeLightMapXAtlas::buildAtlasPages(
         const InputMeshInfo& input =
             inputMeshes[meshIndex];
 
+        const auto cacheIt =
+            mMeshGeometryCache.find(input.meshID);
+
+        if (cacheIt == mMeshGeometryCache.end())
+        {
+            xatlas::Destroy(atlas);
+            FALCOR_THROW(
+                "Cached source geometry disappeared for meshID={}.",
+                input.meshID
+            );
+        }
+
+        const CachedMeshGeometry& geometry =
+            cacheIt->second;
+
         const uint32_t triangleCount =
-            uint32_t(input.triangles.size());
+            input.triangleCount;
 
         if (xaMesh.indexCount != triangleCount * 3)
         {
-            const uint32_t outputIndexCount = xaMesh.indexCount;
+            const uint32_t outputIndexCount =
+                xaMesh.indexCount;
+
             xatlas::Destroy(atlas);
 
             FALCOR_THROW(
@@ -687,39 +922,28 @@ void BakeLightMapXAtlas::buildAtlasPages(
             );
         }
 
-        // Index into page.instances for this input instance on each page.
-        // -1 means the instance has not contributed a packed face to that
-        // page yet.
-        std::vector<int32_t> pageInstanceIndices(
-            atlas->atlasCount,
-            -1
-        );
-
         for (uint32_t triangleID = 0;
             triangleID < triangleCount;
             ++triangleID)
         {
-            const uint32_t firstIndex = triangleID * 3;
-
-            const uint32_t xaIndex0 =
-                xaMesh.indexArray[firstIndex + 0];
-            const uint32_t xaIndex1 =
-                xaMesh.indexArray[firstIndex + 1];
-            const uint32_t xaIndex2 =
-                xaMesh.indexArray[firstIndex + 2];
+            const uint32_t firstIndex =
+                triangleID * 3;
 
             const xatlas::Vertex& v0 =
-                xaMesh.vertexArray[xaIndex0];
+                xaMesh.vertexArray[
+                    xaMesh.indexArray[firstIndex + 0]
+                ];
             const xatlas::Vertex& v1 =
-                xaMesh.vertexArray[xaIndex1];
+                xaMesh.vertexArray[
+                    xaMesh.indexArray[firstIndex + 1]
+                ];
             const xatlas::Vertex& v2 =
-                xaMesh.vertexArray[xaIndex2];
+                xaMesh.vertexArray[
+                    xaMesh.indexArray[firstIndex + 2]
+                ];
 
-            // Preserve the face/corner correspondence we already validated:
-            // xref maps each seam-split xatlas output vertex back to the
-            // original input vertex.
             const uint3& sourceTriangle =
-                input.triangles[triangleID];
+                geometry.triangles[triangleID];
 
             if (v0.xref != sourceTriangle.x ||
                 v1.xref != sourceTriangle.y ||
@@ -742,18 +966,17 @@ void BakeLightMapXAtlas::buildAtlasPages(
                 );
             }
 
-            const int32_t atlasIndex = v0.atlasIndex;
+            const int32_t atlasIndex =
+                v0.atlasIndex;
 
-            // Official xatlas example: atlasIndex is identical for every
-            // vertex in a face. Treat a violation as corrupted output.
             if (v1.atlasIndex != atlasIndex ||
                 v2.atlasIndex != atlasIndex)
             {
                 xatlas::Destroy(atlas);
 
                 FALCOR_THROW(
-                    "xatlas produced a cross-page face for instanceID={} "
-                    "triangleID={}: ({}, {}, {}).",
+                    "xatlas produced a cross-page face for "
+                    "instanceID={} triangleID={}: ({}, {}, {}).",
                     input.instanceID,
                     triangleID,
                     v0.atlasIndex,
@@ -762,9 +985,8 @@ void BakeLightMapXAtlas::buildAtlasPages(
                 );
             }
 
-            // Same behavior as example.cpp: skip faces that xatlas did not
-            // atlas (for Bistro this includes the nearly-degenerate face we
-            // already diagnosed).
+            // Same behavior as the official examples: skip faces that xatlas
+            // could not atlas, such as degenerate geometry.
             if (atlasIndex < 0)
             {
                 ++unatlasedTriangleCount;
@@ -785,27 +1007,7 @@ void BakeLightMapXAtlas::buildAtlasPages(
             }
 
             AtlasPageData& page =
-                mAtlasPages[uint32_t(atlasIndex)];
-
-            int32_t& pageInstanceIndex =
-                pageInstanceIndices[uint32_t(atlasIndex)];
-
-            if (pageInstanceIndex < 0)
-            {
-                AtlasPageInstanceData instanceData;
-                instanceData.instanceID = input.instanceID;
-                instanceData.meshID = input.meshID;
-
-                page.instances.push_back(
-                    std::move(instanceData)
-                );
-
-                pageInstanceIndex =
-                    int32_t(page.instances.size() - 1);
-            }
-
-            AtlasPageInstanceData& instanceData =
-                page.instances[size_t(pageInstanceIndex)];
+                pages[uint32_t(atlasIndex)];
 
             TriangleLightmapUV uv;
             uv.uv0 = float2(
@@ -821,8 +1023,19 @@ void BakeLightMapXAtlas::buildAtlasPages(
                 v2.uv[1] / float(atlas->height)
             );
 
-            instanceData.triangleIDs.push_back(triangleID);
-            instanceData.triangleUVs.push_back(uv);
+            AtlasPageTriangleData triangleData;
+            triangleData.instanceID =
+                input.instanceID;
+            triangleData.meshID =
+                input.meshID;
+            triangleData.triangleID =
+                triangleID;
+            triangleData.uv =
+                uv;
+
+            page.triangles.push_back(
+                std::move(triangleData)
+            );
 
             ++packedTriangleCount;
         }
@@ -830,29 +1043,19 @@ void BakeLightMapXAtlas::buildAtlasPages(
 
     xatlas::Destroy(atlas);
 
-    createAtlasPageGpuBuffers();
-
     uint64_t storedTriangleCount = 0;
 
-    for (const AtlasPageData& page : mAtlasPages)
+    for (const AtlasPageData& page : pages)
     {
-        uint64_t pageTriangleCount = 0;
-
-        for (const AtlasPageInstanceData& instance : page.instances)
-        {
-            pageTriangleCount += instance.triangleIDs.size();
-        }
-
-        storedTriangleCount += pageTriangleCount;
+        storedTriangleCount +=
+            page.triangles.size();
 
         logInfo(
-            "Atlas page {} stored: size={}x{} instances={} triangles={} "
-            "output='{}'.",
+            "Atlas page {} stored: size={}x{} triangles={} output='{}'.",
             page.pageIndex,
             page.width,
             page.height,
-            page.instances.size(),
-            pageTriangleCount,
+            page.triangles.size(),
             page.outputPath
         );
     }
@@ -867,66 +1070,420 @@ void BakeLightMapXAtlas::buildAtlasPages(
     }
 
     logInfo(
-        "Atlas conversion complete: packedTriangles={} "
+        "Global atlas conversion complete: packedTriangles={} "
         "unatlasedTriangles={} pages={}.",
         packedTriangleCount,
         unatlasedTriangleCount,
-        mAtlasPages.size()
+        pages.size()
     );
+
+    return pages;
 }
 
-void BakeLightMapXAtlas::createAtlasPageGpuBuffers()
+void BakeLightMapXAtlas::buildAndSaveAtlasMapping(
+    const std::vector<uint32_t>& instanceIDs
+)
 {
-    for (AtlasPageData& page : mAtlasPages)
+    if (instanceIDs.empty())
+        FALCOR_THROW("Cannot build atlas mapping from an empty instance list.");
+
+    // Extract each unique Falcor mesh once. Reused scene instances share this
+    // cached CPU geometry when being submitted to xatlas.
+    buildMeshGeometryCache(instanceIDs);
+
+    float chosenTexelsPerUnit = 0.f;
+
+    // One global xatlas job, matching the official example structure:
+    // all inputs -> ComputeCharts once -> PackCharts once.
+    std::vector<AtlasPageData> pages =
+        buildGlobalAtlas(
+            instanceIDs,
+            mAtlasResolution,
+            chosenTexelsPerUnit
+        );
+
+    if (pages.empty())
+        FALCOR_THROW("Global xatlas build produced no pages.");
+
+    AtlasMappingHeader header;
+    header.pageCount =
+        uint32_t(pages.size());
+    header.width =
+        pages.front().width;
+    header.height =
+        pages.front().height;
+    header.texelsPerUnit =
+        chosenTexelsPerUnit;
+
+    uint64_t totalRecordCount = 0;
+
+    for (const AtlasPageData& page : pages)
     {
-        for (AtlasPageInstanceData& instance : page.instances)
+        if (page.width != header.width ||
+            page.height != header.height)
         {
-            if (instance.triangleIDs.size() !=
-                instance.triangleUVs.size())
-            {
-                FALCOR_THROW(
-                    "Atlas page {} instance {} has mismatched triangle "
-                    "ID/UV counts ({} vs {}).",
-                    page.pageIndex,
-                    instance.instanceID,
-                    instance.triangleIDs.size(),
-                    instance.triangleUVs.size()
-                );
-            }
-
-            const uint32_t triangleCount =
-                uint32_t(instance.triangleIDs.size());
-
-            if (triangleCount == 0)
-                continue;
-
-            instance.pTriangleIDBuffer =
-                mpDevice->createStructuredBuffer(
-                    sizeof(uint32_t),
-                    triangleCount,
-                    ResourceBindFlags::ShaderResource
-                );
-
-            instance.pTriangleIDBuffer->setBlob(
-                instance.triangleIDs.data(),
-                0,
-                instance.triangleIDs.size() * sizeof(uint32_t)
+            FALCOR_THROW(
+                "Atlas page dimension mismatch. Expected {}x{}, "
+                "got {}x{} on page {}.",
+                header.width,
+                header.height,
+                page.width,
+                page.height,
+                page.pageIndex
             );
+        }
 
-            instance.pTriangleUVBuffer =
-                mpDevice->createStructuredBuffer(
-                    sizeof(TriangleLightmapUV),
-                    triangleCount,
-                    ResourceBindFlags::ShaderResource
-                );
+        totalRecordCount +=
+            page.triangles.size();
+    }
 
-            instance.pTriangleUVBuffer->setBlob(
-                instance.triangleUVs.data(),
-                0,
-                instance.triangleUVs.size() * sizeof(TriangleLightmapUV)
+    header.triangleRecordCount =
+        totalRecordCount;
+
+    // Write only after xatlas succeeds. This avoids leaving a partially valid
+    // mapping header if charting/packing fails.
+    std::ofstream mappingFile(
+        kAtlasMappingFile,
+        std::ios::binary | std::ios::trunc
+    );
+
+    if (!mappingFile)
+        FALCOR_THROW(
+            "Failed to open '{}' for writing.",
+            kAtlasMappingFile
+        );
+
+    mappingFile.write(
+        reinterpret_cast<const char*>(&header),
+        sizeof(header)
+    );
+
+    for (const AtlasPageData& page : pages)
+    {
+        for (const AtlasPageTriangleData& triangle : page.triangles)
+        {
+            const TriangleLightmapUV& uv =
+                triangle.uv;
+
+            AtlasMappingRecord record;
+            record.pageIndex =
+                page.pageIndex;
+            record.instanceID =
+                triangle.instanceID;
+            record.meshID =
+                triangle.meshID;
+            record.triangleID =
+                triangle.triangleID;
+
+            record.uv[0] = uv.uv0.x;
+            record.uv[1] = uv.uv0.y;
+            record.uv[2] = uv.uv1.x;
+            record.uv[3] = uv.uv1.y;
+            record.uv[4] = uv.uv2.x;
+            record.uv[5] = uv.uv2.y;
+
+            mappingFile.write(
+                reinterpret_cast<const char*>(&record),
+                sizeof(record)
             );
         }
     }
+
+    if (!mappingFile)
+        FALCOR_THROW(
+            "Failed while writing '{}'.",
+            kAtlasMappingFile
+        );
+
+    mappingFile.close();
+
+    saveAtlasManifest(
+        header.pageCount,
+        header.width,
+        header.height,
+        header.triangleRecordCount,
+        header.texelsPerUnit
+    );
+
+    // xatlas is finished and the persistent mapping now owns everything needed
+    // by the bake. Release the CPU mesh cache before allocating bake resources.
+    mMeshGeometryCache.clear();
+
+    logInfo(
+        "Global atlas mapping complete: pages={} records={} size={}x{} "
+        "chosenTexelsPerUnit={} mapping='{}'.",
+        header.pageCount,
+        header.triangleRecordCount,
+        header.width,
+        header.height,
+        header.texelsPerUnit,
+        kAtlasMappingFile
+    );
+}
+
+std::vector<BakeLightMapXAtlas::AtlasPageData>
+BakeLightMapXAtlas::loadAtlasPagesFromMapping() const
+{
+    std::ifstream mappingFile(
+        kAtlasMappingFile,
+        std::ios::binary
+    );
+
+    if (!mappingFile)
+        FALCOR_THROW("Failed to open '{}' for reading.", kAtlasMappingFile);
+
+    AtlasMappingHeader header;
+    mappingFile.read(
+        reinterpret_cast<char*>(&header),
+        sizeof(header)
+    );
+
+    if (!mappingFile)
+        FALCOR_THROW("Failed to read atlas mapping header.");
+
+    static const char kExpectedMagic[8] =
+    { 'X', 'A', 'L', 'M', 'A', 'P', '0', '1' };
+
+    if (std::memcmp(header.magic, kExpectedMagic, 8) != 0)
+        FALCOR_THROW("Invalid atlas mapping magic in '{}'.", kAtlasMappingFile);
+    if (header.version != 1)
+        FALCOR_THROW("Unsupported atlas mapping version {}.", header.version);
+    if (header.pageCount == 0 || header.width == 0 || header.height == 0)
+        FALCOR_THROW("Atlas mapping header contains invalid page dimensions.");
+
+    std::vector<AtlasPageData> pages(header.pageCount);
+
+    for (uint32_t pageIndex = 0;
+        pageIndex < header.pageCount;
+        ++pageIndex)
+    {
+        AtlasPageData& page = pages[pageIndex];
+        page.pageIndex = pageIndex;
+        page.width = header.width;
+        page.height = header.height;
+        page.outputPath =
+            "Bistro_AtlasPage_" +
+            std::to_string(pageIndex) +
+            ".exr";
+    }
+
+    for (uint64_t recordIndex = 0;
+        recordIndex < header.triangleRecordCount;
+        ++recordIndex)
+    {
+        AtlasMappingRecord record;
+        mappingFile.read(
+            reinterpret_cast<char*>(&record),
+            sizeof(record)
+        );
+
+        if (!mappingFile)
+        {
+            FALCOR_THROW(
+                "Atlas mapping ended early at record {} / {}.",
+                recordIndex,
+                header.triangleRecordCount
+            );
+        }
+
+        if (record.pageIndex >= header.pageCount)
+        {
+            FALCOR_THROW(
+                "Atlas mapping record {} has invalid pageIndex={}.",
+                recordIndex,
+                record.pageIndex
+            );
+        }
+
+        AtlasPageTriangleData triangle;
+        triangle.instanceID = record.instanceID;
+        triangle.meshID = record.meshID;
+        triangle.triangleID = record.triangleID;
+        triangle.uv.uv0 = float2(record.uv[0], record.uv[1]);
+        triangle.uv.uv1 = float2(record.uv[2], record.uv[3]);
+        triangle.uv.uv2 = float2(record.uv[4], record.uv[5]);
+
+        pages[record.pageIndex].triangles.push_back(
+            std::move(triangle)
+        );
+    }
+
+    logInfo(
+        "Loaded persistent atlas mapping: pages={} records={} size={}x{} "
+        "texelsPerUnit={}.",
+        header.pageCount,
+        header.triangleRecordCount,
+        header.width,
+        header.height,
+        header.texelsPerUnit
+    );
+
+    return pages;
+}
+
+void BakeLightMapXAtlas::saveAtlasManifest(
+    uint32_t pageCount,
+    uint32_t width,
+    uint32_t height,
+    uint64_t triangleRecordCount,
+    float texelsPerUnit
+) const
+{
+    std::ofstream manifestFile(
+        kAtlasManifestFile,
+        std::ios::out | std::ios::trunc
+    );
+
+    if (!manifestFile)
+        FALCOR_THROW("Failed to open '{}' for writing.", kAtlasManifestFile);
+
+    manifestFile
+        << "format=XALMAP01\n"
+        << "version=1\n"
+        << "mappingFile=" << kAtlasMappingFile << "\n"
+        << "pageCount=" << pageCount << "\n"
+        << "width=" << width << "\n"
+        << "height=" << height << "\n"
+        << "texelsPerUnit=" << texelsPerUnit << "\n"
+        << "triangleRecordCount=" << triangleRecordCount << "\n";
+
+    for (uint32_t pageIndex = 0;
+        pageIndex < pageCount;
+        ++pageIndex)
+    {
+        manifestFile
+            << "page" << pageIndex
+            << "=Bistro_AtlasPage_" << pageIndex
+            << ".exr\n";
+    }
+
+    if (!manifestFile)
+        FALCOR_THROW("Failed while writing '{}'.", kAtlasManifestFile);
+
+    logInfo(
+        "Saved atlas manifest '{}' for {} pages.",
+        kAtlasManifestFile,
+        pageCount
+    );
+}
+
+void BakeLightMapXAtlas::createAtlasPageGpuBuffers(
+    AtlasPageData& page
+)
+{
+    const uint32_t triangleCount =
+        uint32_t(page.triangles.size());
+
+    if (triangleCount == 0)
+        return;
+
+    std::vector<uint32_t> instanceIDs(triangleCount);
+    std::vector<uint32_t> triangleIDs(triangleCount);
+    std::vector<TriangleLightmapUV> triangleUVs(triangleCount);
+
+    for (uint32_t i = 0; i < triangleCount; ++i)
+    {
+        const AtlasPageTriangleData& triangle = page.triangles[i];
+        instanceIDs[i] = triangle.instanceID;
+        triangleIDs[i] = triangle.triangleID;
+        triangleUVs[i] = triangle.uv;
+    }
+
+    page.pInstanceIDBuffer =
+        mpDevice->createStructuredBuffer(
+            sizeof(uint32_t),
+            triangleCount,
+            ResourceBindFlags::ShaderResource
+        );
+    page.pInstanceIDBuffer->setBlob(
+        instanceIDs.data(),
+        0,
+        instanceIDs.size() * sizeof(uint32_t)
+    );
+
+    page.pTriangleIDBuffer =
+        mpDevice->createStructuredBuffer(
+            sizeof(uint32_t),
+            triangleCount,
+            ResourceBindFlags::ShaderResource
+        );
+    page.pTriangleIDBuffer->setBlob(
+        triangleIDs.data(),
+        0,
+        triangleIDs.size() * sizeof(uint32_t)
+    );
+
+    page.pTriangleUVBuffer =
+        mpDevice->createStructuredBuffer(
+            sizeof(TriangleLightmapUV),
+            triangleCount,
+            ResourceBindFlags::ShaderResource
+        );
+    page.pTriangleUVBuffer->setBlob(
+        triangleUVs.data(),
+        0,
+        triangleUVs.size() * sizeof(TriangleLightmapUV)
+    );
+
+    logInfo(
+        "Created GPU raster buffers for atlas page {} ({} triangles).",
+        page.pageIndex,
+        triangleCount
+    );
+}
+
+void BakeLightMapXAtlas::releaseAtlasPageGpuBuffers(
+    AtlasPageData& page
+)
+{
+    page.pInstanceIDBuffer = nullptr;
+    page.pTriangleIDBuffer = nullptr;
+    page.pTriangleUVBuffer = nullptr;
+}
+
+void BakeLightMapXAtlas::bakeSavedAtlasPages(
+    RenderContext* pRenderContext
+)
+{
+    std::vector<AtlasPageData> pages =
+        loadAtlasPagesFromMapping();
+
+    logInfo(
+        "Starting lightmap bake from persistent mapping: pages={} "
+        "samplesPerPage={}.",
+        pages.size(),
+        mBakeSampleCount
+    );
+
+    for (size_t pageIndex = 0;
+        pageIndex < pages.size();
+        ++pageIndex)
+    {
+        AtlasPageData& page = pages[pageIndex];
+
+        logInfo(
+            "Starting bake for atlas page {}/{} (globalPage={} triangles={})...",
+            pageIndex + 1,
+            pages.size(),
+            page.pageIndex,
+            page.triangles.size()
+        );
+
+        createAtlasPageGpuBuffers(page);
+        bakeAtlasPage(pRenderContext, page);
+        releaseAtlasPageGpuBuffers(page);
+
+        // This page will never be needed again in this pass. Release its CPU
+        // triangle mapping too, so memory falls as the bake advances.
+        page.triangles.clear();
+        page.triangles.shrink_to_fit();
+    }
+
+    logInfo(
+        "Full lightmap bake complete: pages={} samplesPerPage={}.",
+        pages.size(),
+        mBakeSampleCount
+    );
 }
 
 void BakeLightMapXAtlas::bakeAtlasPage(
@@ -1010,47 +1567,35 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     auto var = mpUVVars->getRootVar();
     mpScene->bindShaderData(var["gScene"]);
 
-    uint64_t rasterTriangleCount = 0;
+    const uint32_t rasterTriangleCount =
+        uint32_t(page.triangles.size());
 
     // -----------------------------------------------------------------
-    // Draw only the compact face subset assigned to this atlasIndex.
-    //
-    // XAtlasUVRaster.slang must use gTriangleIDs[localTriangleID] to map
-    // the compact page-local triangle back to the original Falcor mesh
-    // triangle before calling gScene.getIndices().
+    // Draw the entire physical page in one procedural draw. Each page-local
+    // triangle fetches its source Falcor instance and triangle ID from the
+    // parallel indirection buffers.
     // -----------------------------------------------------------------
-    for (const AtlasPageInstanceData& instance : page.instances)
+    if (rasterTriangleCount > 0)
     {
-        const uint32_t triangleCount =
-            uint32_t(instance.triangleIDs.size());
-
-        if (triangleCount == 0)
-            continue;
-
-        if (!instance.pTriangleIDBuffer ||
-            !instance.pTriangleUVBuffer)
+        if (!page.pInstanceIDBuffer ||
+            !page.pTriangleIDBuffer ||
+            !page.pTriangleUVBuffer)
         {
             FALCOR_THROW(
-                "Atlas page {} instance {} is missing GPU triangle data.",
-                page.pageIndex,
-                instance.instanceID
+                "Atlas page {} is missing GPU raster data.",
+                page.pageIndex
             );
         }
 
+        var["gInstanceIDs"] =
+            page.pInstanceIDBuffer;
         var["gTriangleIDs"] =
-            instance.pTriangleIDBuffer;
-
+            page.pTriangleIDBuffer;
         var["gTriangleUVs"] =
-            instance.pTriangleUVBuffer;
-
-        var["BakeCB"]["gReceiverInstanceID"] =
-            instance.instanceID;
-
-        var["BakeCB"]["gTriangleCount"] =
-            triangleCount;
+            page.pTriangleUVBuffer;
 
         const uint32_t vertexCount =
-            triangleCount * 3;
+            rasterTriangleCount * 3;
 
         pRenderContext->draw(
             mpUVGraphicsState.get(),
@@ -1058,16 +1603,13 @@ void BakeLightMapXAtlas::bakeAtlasPage(
             vertexCount,
             0
         );
-
-        rasterTriangleCount += triangleCount;
     }
 
     logInfo(
-        "Rasterized atlas page {}: size={}x{} instances={} triangles={}.",
+        "Rasterized atlas page {}: size={}x{} triangles={} drawCalls=1.",
         page.pageIndex,
         mLightmapWidth,
         mLightmapHeight,
-        page.instances.size(),
         rasterTriangleCount
     );
 

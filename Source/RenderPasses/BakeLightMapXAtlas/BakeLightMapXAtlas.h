@@ -24,7 +24,7 @@
  # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- **************************************************************************/
+ ***************************************************************************/
 #pragma once
 
 #include "Falcor.h"
@@ -35,6 +35,8 @@
 #include "BakeDataStructures.slang"
 
 #include <filesystem>
+#include <limits>
+#include <unordered_map>
 #include <vector>
 
 using namespace Falcor;
@@ -71,33 +73,37 @@ public:
     bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
 private:
-    // One Falcor instance may contribute triangles to several xatlas pages.
-    // The arrays below are compact and parallel:
-    //   triangleIDs[i] -> original Falcor mesh triangle ID
-    //   triangleUVs[i] -> UV triplet assigned by xatlas for that triangle
-    struct AtlasPageInstanceData
+    struct AtlasPageTriangleData
     {
         uint32_t instanceID = 0;
-        MeshID meshID;
-
-        std::vector<uint32_t> triangleIDs;
-        std::vector<TriangleLightmapUV> triangleUVs;
-
-        ref<Buffer> pTriangleIDBuffer;
-        ref<Buffer> pTriangleUVBuffer;
+        uint32_t meshID = 0;
+        uint32_t triangleID = 0;
+        TriangleLightmapUV uv;
     };
 
-    // xatlas::Atlas::atlasIndex selects one physical page. Every page has
-    // the common xatlas width/height and contains only the triangles whose
-    // output vertices reference this atlasIndex.
     struct AtlasPageData
     {
         uint32_t pageIndex = 0;
         uint32_t width = 0;
         uint32_t height = 0;
         std::filesystem::path outputPath;
-        std::vector<AtlasPageInstanceData> instances;
+
+        std::vector<AtlasPageTriangleData> triangles;
+
+        ref<Buffer> pInstanceIDBuffer;
+        ref<Buffer> pTriangleIDBuffer;
+        ref<Buffer> pTriangleUVBuffer;
     };
+
+    // CPU copy of one unique Falcor mesh. Reused instances share this geometry
+    // during xatlas submission, avoiding repeated GPU extraction/readback.
+    struct CachedMeshGeometry
+    {
+        std::vector<float3> positions;
+        std::vector<uint3> triangles;
+        std::vector<uint32_t> indices;
+    };
+
 
     void resetBakingState();
 
@@ -106,15 +112,35 @@ private:
     void createRayTracingProgram(RenderContext* pRenderContext);
 
     std::vector<uint32_t> collectTriangleInstanceIDs() const;
+    void buildMeshGeometryCache(const std::vector<uint32_t>& instanceIDs);
 
-    void buildAtlasPages(
-        RenderContext* pRenderContext,
+    // Build one xatlas object for the complete selected scene. This follows the
+    // official xatlas examples: add all meshes, ComputeCharts once, then
+    // PackCharts once. texelsPerUnit is left at 0 so xatlas estimates a density
+    // that approximately matches targetResolution.
+    std::vector<AtlasPageData> buildGlobalAtlas(
         const std::vector<uint32_t>& instanceIDs,
-        uint32_t resolution,
-        float texelsPerUnit
+        uint32_t targetResolution,
+        float& outChosenTexelsPerUnit
     );
 
-    void createAtlasPageGpuBuffers();
+    void buildAndSaveAtlasMapping(
+        const std::vector<uint32_t>& instanceIDs
+    );
+
+    std::vector<AtlasPageData> loadAtlasPagesFromMapping() const;
+
+    void saveAtlasManifest(
+        uint32_t pageCount,
+        uint32_t width,
+        uint32_t height,
+        uint64_t triangleRecordCount,
+        float texelsPerUnit
+    ) const;
+
+    void createAtlasPageGpuBuffers(AtlasPageData& page);
+    void releaseAtlasPageGpuBuffers(AtlasPageData& page);
+    void bakeSavedAtlasPages(RenderContext* pRenderContext);
 
     void bakeAtlasPage(
         RenderContext* pRenderContext,
@@ -149,7 +175,7 @@ private:
     ref<Buffer> mpAccumBuffer;
     ref<Texture> mpResultTex;
 
-    std::vector<AtlasPageData> mAtlasPages;
+    std::unordered_map<uint32_t, CachedMeshGeometry> mMeshGeometryCache;
 
     RenderPassHelpers::IOSize mOutputSizeSelection =
         RenderPassHelpers::IOSize::Default;
@@ -160,10 +186,24 @@ private:
     uint32_t mNumExtractedTexels = 0;
     uint32_t mCurrentSample = 0;
 
-    // Current Bistro validation settings. The implementation itself supports
-    // any number of input instances and any xatlas atlasCount.
-    uint32_t mAtlasResolution = 1024;
-    float mTexelsPerUnit = 258.60672f;
+    // Atlas/bake settings.
+    //
+    // xatlas packing mode:
+    //   resolution      = mAtlasResolution
+    //   texelsPerUnit   = 0
+    //
+    // Per xatlas documentation this asks xatlas to estimate the texel density
+    // so the complete input approximately matches the requested resolution,
+    // instead of enforcing a fixed density and creating many atlas pages.
+    uint32_t mAtlasResolution = 2048;
     uint32_t mBakeSampleCount = 64;
-    uint32_t mTestInstanceCount = 2288;
+
+    // Set false after a successful full atlas build to reuse
+    // Bistro_AtlasMapping.bin and skip xatlas completely on later high-spp runs.
+    bool mRebuildAtlas = true;
+
+    // Temporary validation limit. Leave at max for the complete Bistro scene.
+    uint32_t mTestInstanceCount = std::numeric_limits<uint32_t>::max();
+
+    bool mBakeCompleted = false;
 };

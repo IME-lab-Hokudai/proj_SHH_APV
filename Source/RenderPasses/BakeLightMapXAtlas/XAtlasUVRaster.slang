@@ -2,16 +2,14 @@ import Scene.Raster;
 #include "BakeDataStructures.slang"
 
 // Page-local compact triangle data.
-// gTriangleIDs maps a page-local triangle to the original triangle ID in
-// the Falcor geometry instance. gTriangleUVs uses the same local index.
+// All three buffers use the same local triangle index.
+//
+// gInstanceIDs[i] -> original Falcor geometry instance ID
+// gTriangleIDs[i] -> original triangle ID inside that instance's mesh
+// gTriangleUVs[i] -> xatlas UV triplet for this physical atlas page
+StructuredBuffer<uint> gInstanceIDs;
 StructuredBuffer<uint> gTriangleIDs;
 StructuredBuffer<TriangleLightmapUV> gTriangleUVs;
-
-cbuffer BakeCB
-{
-    uint gReceiverInstanceID;
-    uint gTriangleCount;
-};
 
 struct BakeVSOut
 {
@@ -33,11 +31,14 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
     const uint localTriangleID = vertexID / 3;
     const uint cornerID = vertexID % 3;
 
+    const uint sourceInstanceID =
+        gInstanceIDs[localTriangleID];
+
     const uint sourceTriangleID =
         gTriangleIDs[localTriangleID];
 
     GeometryInstanceID instanceID =
-        { gReceiverInstanceID };
+        { sourceInstanceID };
 
     const uint3 vertexIndices =
         gScene.getIndices(

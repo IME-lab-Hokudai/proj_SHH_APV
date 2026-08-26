@@ -26,6 +26,14 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include <fstream>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <unordered_set>
+#include <vector>
 #include "AdaptiveSHDemo.h"
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
@@ -62,7 +70,8 @@ const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
-const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
+const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
+//const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
 //const std::string loadFromFileName = "U32DataScene.txt";
@@ -94,6 +103,51 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
+    constexpr const char* kBistroAtlasMappingFile =
+        "Bistro_AtlasMapping.bin";
+
+    constexpr const char* kBistroAtlasManifestFile =
+        "Bistro_AtlasManifest.txt";
+
+    constexpr uint32_t kBistroTestMaxPages = 2;
+
+#pragma pack(push, 1)
+    struct BistroAtlasMappingHeader
+    {
+        char magic[8];
+        uint32_t version;
+        uint32_t pageCount;
+        uint32_t width;
+        uint32_t height;
+        float texelsPerUnit;
+        uint64_t triangleRecordCount;
+    };
+
+    struct BistroAtlasMappingRecord
+    {
+        uint32_t pageIndex;
+        uint32_t instanceID;
+        uint32_t meshID;
+        uint32_t triangleID;
+        float uv[6];
+    };
+#pragma pack(pop)
+
+    static_assert(sizeof(BistroAtlasMappingHeader) == 36);
+    static_assert(sizeof(BistroAtlasMappingRecord) == 40);
+
+    ref<Texture> spBistroAtlasPage0;
+    ref<Texture> spBistroAtlasPage1;
+
+    ref<Buffer> spBistroInstanceRanges;
+    ref<Buffer> spBistroPageIndices;
+    ref<Buffer> spBistroUV01;
+    ref<Buffer> spBistroUV2;
+
+    uint32_t sBistroPageCount = 0;
+    uint32_t sBistroMaxInstanceID = 0;
+    bool sBistroLightmapEnabled = false;
+
     float degreesToRadians(float degrees)
     {
         return degrees * kPi / 180.0f;
@@ -102,6 +156,520 @@ namespace
     float radiansToDegrees(float radians)
     {
         return radians * 180.0f / kPi;
+    }
+
+    std::vector<std::string> readBistroAtlasPageFiles(
+        uint32_t pageCount
+    )
+    {
+        std::vector<std::string> pageFiles(pageCount);
+
+        std::ifstream manifest(kBistroAtlasManifestFile);
+
+        if (manifest)
+        {
+            std::string line;
+
+            while (std::getline(manifest, line))
+            {
+                // We only want entries of the form:
+                //
+                //     page0=Bistro_AtlasPage_0.exr
+                //     page1=Bistro_AtlasPage_1.exr
+                //
+                // Do NOT interpret "pageCount=..." as a page entry.
+                if (line.size() < 6)
+                    continue;
+
+                if (line.rfind("page", 0) != 0)
+                    continue;
+
+                const char firstIndexChar = line[4];
+
+                if (firstIndexChar < '0' ||
+                    firstIndexChar > '9')
+                {
+                    continue;
+                }
+
+                const size_t equalsPos =
+                    line.find('=');
+
+                if (equalsPos == std::string::npos ||
+                    equalsPos <= 4)
+                {
+                    continue;
+                }
+
+                const std::string indexString =
+                    line.substr(
+                        4,
+                        equalsPos - 4
+                    );
+
+                uint32_t pageIndex = 0;
+
+                try
+                {
+                    pageIndex =
+                        uint32_t(std::stoul(indexString));
+                }
+                catch (...)
+                {
+                    logWarning(
+                        "Ignoring malformed atlas manifest entry: '{}'.",
+                        line
+                    );
+
+                    continue;
+                }
+
+                if (pageIndex >= pageCount)
+                    continue;
+
+                pageFiles[pageIndex] =
+                    line.substr(equalsPos + 1);
+            }
+        }
+
+        // Fall back to the baker's normal file naming scheme.
+        for (uint32_t pageIndex = 0;
+            pageIndex < pageCount;
+            ++pageIndex)
+        {
+            if (pageFiles[pageIndex].empty())
+            {
+                pageFiles[pageIndex] =
+                    "Bistro_AtlasPage_" +
+                    std::to_string(pageIndex) +
+                    ".exr";
+            }
+        }
+
+        return pageFiles;
+    }
+
+    void loadBistroXAtlasLightmapTest(
+        const ref<Device>& pDevice,
+        const ref<Scene>& pScene
+    )
+    {
+        sBistroLightmapEnabled = false;
+
+        spBistroAtlasPage0 = nullptr;
+        spBistroAtlasPage1 = nullptr;
+        spBistroInstanceRanges = nullptr;
+        spBistroPageIndices = nullptr;
+        spBistroUV01 = nullptr;
+        spBistroUV2 = nullptr;
+
+        std::ifstream mappingFile(
+            kBistroAtlasMappingFile,
+            std::ios::binary
+        );
+
+        if (!mappingFile)
+        {
+            logWarning(
+                "Bistro xatlas test disabled: cannot open '{}'.",
+                kBistroAtlasMappingFile
+            );
+            return;
+        }
+
+        BistroAtlasMappingHeader header{};
+
+        mappingFile.read(
+            reinterpret_cast<char*>(&header),
+            sizeof(header)
+        );
+
+        const char expectedMagic[8] =
+        {
+            'X', 'A', 'L', 'M', 'A', 'P', '0', '1'
+        };
+
+        if (!mappingFile ||
+            std::memcmp(
+                header.magic,
+                expectedMagic,
+                sizeof(expectedMagic)
+            ) != 0)
+        {
+            FALCOR_THROW(
+                "Invalid Bistro atlas mapping header in '{}'.",
+                kBistroAtlasMappingFile
+            );
+        }
+
+        if (header.version != 1)
+        {
+            FALCOR_THROW(
+                "Unsupported Bistro atlas mapping version {}.",
+                header.version
+            );
+        }
+
+        if (header.pageCount == 0 ||
+            header.pageCount > kBistroTestMaxPages)
+        {
+            FALCOR_THROW(
+                "Bistro xatlas TEST shader supports 1-{} pages, "
+                "but mapping contains {} page(s).",
+                kBistroTestMaxPages,
+                header.pageCount
+            );
+        }
+
+        if (header.triangleRecordCount >
+            uint64_t(std::numeric_limits<size_t>::max()))
+        {
+            FALCOR_THROW(
+                "Bistro atlas mapping record count is too large."
+            );
+        }
+
+        std::vector<BistroAtlasMappingRecord> records(
+            size_t(header.triangleRecordCount)
+        );
+
+        if (!records.empty())
+        {
+            mappingFile.read(
+                reinterpret_cast<char*>(records.data()),
+                std::streamsize(
+                    records.size() *
+                    sizeof(BistroAtlasMappingRecord)
+                )
+            );
+        }
+
+        if (!mappingFile)
+        {
+            FALCOR_THROW(
+                "Failed while reading '{}'.",
+                kBistroAtlasMappingFile
+            );
+        }
+
+        uint32_t maxMappedInstanceID = 0;
+
+        for (const auto& record : records)
+        {
+            maxMappedInstanceID =
+                std::max(
+                    maxMappedInstanceID,
+                    record.instanceID
+                );
+        }
+
+        // Determine the original triangle count for every mapped instance.
+        std::vector<uint32_t> triangleCounts(
+            size_t(maxMappedInstanceID) + 1,
+            0u
+        );
+
+        const auto triangleInstanceIDs =
+            pScene->getGeometryInstanceIDsByType(
+                Scene::GeometryType::TriangleMesh
+            );
+
+        for (uint32_t instanceID : triangleInstanceIDs)
+        {
+            if (instanceID > maxMappedInstanceID)
+                continue;
+
+            const auto& instance =
+                pScene->getGeometryInstance(instanceID);
+
+            const MeshID meshID(instance.geometryID);
+            const auto& mesh = pScene->getMesh(meshID);
+
+            triangleCounts[instanceID] =
+                mesh.indexCount / 3;
+        }
+
+        std::vector<uint2> instanceRanges(
+            size_t(maxMappedInstanceID) + 1
+        );
+
+        uint64_t totalTriangleSlots64 = 0;
+
+        for (uint32_t instanceID = 0;
+            instanceID <= maxMappedInstanceID;
+            ++instanceID)
+        {
+            if (totalTriangleSlots64 >
+                uint64_t(std::numeric_limits<uint32_t>::max()))
+            {
+                FALCOR_THROW(
+                    "Bistro runtime lightmap lookup exceeds uint32 indexing."
+                );
+            }
+
+            instanceRanges[instanceID] =
+                uint2(
+                    uint32_t(totalTriangleSlots64),
+                    triangleCounts[instanceID]
+                );
+
+            totalTriangleSlots64 +=
+                triangleCounts[instanceID];
+        }
+
+        if (totalTriangleSlots64 >
+            uint64_t(std::numeric_limits<uint32_t>::max()))
+        {
+            FALCOR_THROW(
+                "Bistro runtime lightmap lookup exceeds uint32 indexing."
+            );
+        }
+
+        const uint32_t totalTriangleSlots =
+            uint32_t(totalTriangleSlots64);
+
+        std::vector<uint32_t> pageIndices(
+            totalTriangleSlots,
+            0xffffffffu
+        );
+
+        std::vector<float4> uv01(
+            totalTriangleSlots,
+            float4(0.f)
+        );
+
+        std::vector<float2> uv2(
+            totalTriangleSlots,
+            float2(0.f)
+        );
+
+        uint64_t loadedRecordCount = 0;
+
+        for (const auto& record : records)
+        {
+            if (record.instanceID > maxMappedInstanceID)
+                continue;
+
+            const uint2 range =
+                instanceRanges[record.instanceID];
+
+            if (record.triangleID >= range.y)
+            {
+                FALCOR_THROW(
+                    "Bistro atlas mapping has invalid triangleID={} "
+                    "for instanceID={} (triangleCount={}).",
+                    record.triangleID,
+                    record.instanceID,
+                    range.y
+                );
+            }
+
+            if (record.pageIndex >= header.pageCount)
+            {
+                FALCOR_THROW(
+                    "Bistro atlas mapping has invalid pageIndex={}.",
+                    record.pageIndex
+                );
+            }
+
+            const uint32_t lookupIndex =
+                range.x + record.triangleID;
+
+            pageIndices[lookupIndex] =
+                record.pageIndex;
+
+            uv01[lookupIndex] =
+                float4(
+                    record.uv[0],
+                    record.uv[1],
+                    record.uv[2],
+                    record.uv[3]
+                );
+
+            uv2[lookupIndex] =
+                float2(
+                    record.uv[4],
+                    record.uv[5]
+                );
+
+            ++loadedRecordCount;
+        }
+
+        if (instanceRanges.empty() ||
+            pageIndices.empty())
+        {
+            FALCOR_THROW(
+                "Bistro atlas mapping produced an empty runtime lookup."
+            );
+        }
+
+        spBistroInstanceRanges =
+            pDevice->createStructuredBuffer(
+                sizeof(uint2),
+                uint32_t(instanceRanges.size()),
+                ResourceBindFlags::ShaderResource
+            );
+
+        spBistroInstanceRanges->setBlob(
+            instanceRanges.data(),
+            0,
+            instanceRanges.size() * sizeof(uint2)
+        );
+
+        spBistroPageIndices =
+            pDevice->createStructuredBuffer(
+                sizeof(uint32_t),
+                totalTriangleSlots,
+                ResourceBindFlags::ShaderResource
+            );
+
+        spBistroPageIndices->setBlob(
+            pageIndices.data(),
+            0,
+            pageIndices.size() * sizeof(uint32_t)
+        );
+
+        spBistroUV01 =
+            pDevice->createStructuredBuffer(
+                sizeof(float4),
+                totalTriangleSlots,
+                ResourceBindFlags::ShaderResource
+            );
+
+        spBistroUV01->setBlob(
+            uv01.data(),
+            0,
+            uv01.size() * sizeof(float4)
+        );
+
+        spBistroUV2 =
+            pDevice->createStructuredBuffer(
+                sizeof(float2),
+                totalTriangleSlots,
+                ResourceBindFlags::ShaderResource
+            );
+
+        spBistroUV2->setBlob(
+            uv2.data(),
+            0,
+            uv2.size() * sizeof(float2)
+        );
+
+        const std::vector<std::string> pageFiles =
+            readBistroAtlasPageFiles(header.pageCount);
+
+        spBistroAtlasPage0 =
+            Texture::createFromFile(
+                pDevice,
+                pageFiles[0],
+                true,
+                false,
+                ResourceBindFlags::ShaderResource
+            );
+
+        if (!spBistroAtlasPage0)
+        {
+            FALCOR_THROW(
+                "Failed to load Bistro atlas page 0 from '{}'.",
+                pageFiles[0]
+            );
+        }
+
+        if (header.pageCount > 1)
+        {
+            spBistroAtlasPage1 =
+                Texture::createFromFile(
+                    pDevice,
+                    pageFiles[1],
+                    true,
+                    false,
+                    ResourceBindFlags::ShaderResource
+                );
+
+            if (!spBistroAtlasPage1)
+            {
+                FALCOR_THROW(
+                    "Failed to load Bistro atlas page 1 from '{}'.",
+                    pageFiles[1]
+                );
+            }
+        }
+        else
+        {
+            // Keep the second shader binding valid for the 1-page case.
+            spBistroAtlasPage1 =
+                spBistroAtlasPage0;
+        }
+
+        spBistroAtlasPage0->setName(
+            "BistroXAtlasPage0"
+        );
+
+        spBistroAtlasPage1->setName(
+            "BistroXAtlasPage1"
+        );
+
+        sBistroPageCount =
+            header.pageCount;
+
+        sBistroMaxInstanceID =
+            maxMappedInstanceID;
+
+        sBistroLightmapEnabled = true;
+
+        logInfo(
+            "Loaded Bistro xatlas lightmap test: "
+            "pages={} size={}x{} records={} "
+            "maxInstanceID={} lookupSlots={}.",
+            header.pageCount,
+            header.width,
+            header.height,
+            loadedRecordCount,
+            sBistroMaxInstanceID,
+            totalTriangleSlots
+        );
+    }
+
+    void bindBistroXAtlasLightmapTest(
+        ShaderVar var,
+        const ref<Sampler>& pLinearSampler
+    )
+    {
+        var["gLinearSampler"] =
+            pLinearSampler;
+
+        var["BistroLightmapCB"]["gBistroLightmapEnabled"] =
+            sBistroLightmapEnabled ? 1u : 0u;
+
+        var["BistroLightmapCB"]["gBistroPageCount"] =
+            sBistroPageCount;
+
+        var["BistroLightmapCB"]["gBistroMaxInstanceID"] =
+            sBistroMaxInstanceID;
+
+        var["BistroLightmapCB"]["gBistroPadding"] =
+            0u;
+
+        if (!sBistroLightmapEnabled)
+            return;
+
+        var["gBistroAtlasPage0"] =
+            spBistroAtlasPage0;
+
+        var["gBistroAtlasPage1"] =
+            spBistroAtlasPage1;
+
+        var["gBistroInstanceRanges"] =
+            spBistroInstanceRanges;
+
+        var["gBistroPageIndices"] =
+            spBistroPageIndices;
+
+        var["gBistroUV01"] =
+            spBistroUV01;
+
+        var["gBistroUV2"] =
+            spBistroUV2;
     }
 }
 
@@ -369,23 +937,13 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        bindDataSceneData(applyVar);
-        //bindCornellData(applyVar);
-        //bindCornellVisibilitySlabData(applyVar);
-#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-        applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-        applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
-
-        applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
-
-        applyVar["SeedGridCB"]["gUseSeedGrid"] = mAdaptiveProbeVolume->getUseSeedGrid() ? 1u : 0u;
-        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getSeedMinPoint();
-        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getSeedCellSize();
-        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getSeedResolution();
-
-#else
-        mUniformProbeVolume->bindShaderData(applyVar);
-#endif
+        bindBistroXAtlasLightmapTest(
+            applyVar,
+            mpLinearSampler
+        );
+        //bindDataSceneData(applyVar);
+        // Test shader uses only the Bistro xatlas lightmap lookup.
+        // The adaptive/uniform probe buffers are intentionally not bound here.
 
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
 
@@ -742,7 +1300,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
 
-        setupDataSceneBakeTargets();
+        //setupDataSceneBakeTargets();
         //setupCornellBakeTargets();
         //setupCornellVisibilitySlabBakeTargets();
         //init probe visual pass
@@ -763,20 +1321,20 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 
-            mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
-            mAdaptiveProbeVolume->uploadToGPU();
-            mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+        //mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+        //mAdaptiveProbeVolume->uploadToGPU();
+        //mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-            mUniformProbeVolume->loadFromFile(loadFromFileName);
-            mUniformProbeVolume->uploadToGPU();
-            mpProbeVisualizePass->setUniformVolumeData(
-                mUniformProbeVolume->getMinPoint(),
-                mUniformProbeVolume->getCellSize(),
-                mUniformProbeVolume->getCellResolution()
-            );
+        mUniformProbeVolume->loadFromFile(loadFromFileName);
+        mUniformProbeVolume->uploadToGPU();
+        mpProbeVisualizePass->setUniformVolumeData(
+            mUniformProbeVolume->getMinPoint(),
+            mUniformProbeVolume->getCellSize(),
+            mUniformProbeVolume->getCellResolution()
+        );
 #endif
-      
+
 
         ProgramDesc previewDesc;
         previewDesc.addShaderModules(mpScene->getShaderModules());
@@ -887,7 +1445,11 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpCompositeState->setVao(mpEmptyVao);
 
         //loadLightmaps();
-        loadDataSceneLightmaps();
+        loadBistroXAtlasLightmapTest(
+            mpDevice,
+            mpScene
+        );
+        //loadDataSceneLightmaps();
         //loadCornellLightmaps();
         //loadCornellVisibilitySlabLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
