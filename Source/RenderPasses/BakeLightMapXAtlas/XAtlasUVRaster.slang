@@ -90,10 +90,35 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
     return o;
 }
 
+//PSOut psMain(BakeVSOut pin)
+//{
+//    PSOut o;
+//    o.posW = float4(pin.posW, 1.f);
+//    o.normW = float4(normalize(pin.normalW), 1.f);
+//    return o;
+//}
+
 PSOut psMain(BakeVSOut pin)
 {
     PSOut o;
+
+    float3 N = normalize(pin.normalW);
+
+    // Current camera is inside the room, so for a visible interior-facing
+    // surface this should normally be positive.
+    float3 V = normalize(
+        gScene.camera.getPosition() - pin.posW
+    );
+
+    float facing = dot(N, V);
+
     o.posW = float4(pin.posW, 1.f);
-    o.normW = float4(normalize(pin.normalW), 1.f);
+
+    // XYZ = exact normal that will be sent to the lightmap baker.
+    // W   = normal-camera facing:
+    //       > 0 : normal points toward camera
+    //       < 0 : visible surface is being viewed from its back side
+    o.normW = float4(N, facing);
+
     return o;
 }

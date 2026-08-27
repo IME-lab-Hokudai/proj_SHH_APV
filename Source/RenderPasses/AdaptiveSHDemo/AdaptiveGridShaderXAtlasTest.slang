@@ -737,12 +737,6 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
     float3 albedo = baseColorSample.rgb;
     float3 litColor = albedo;
 
-    const uint instanceID = vsOut.instanceID.index;
-    if (instanceID < 19) {
-         //litColor = albedo;
-         //discard;
-    }
-
     // ------------------------------------------------------------------
     // Bistro xatlas lightmap validation.
     //
@@ -760,91 +754,34 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         lightmapUV
     ))
     {
-        const float3 irradiance =
-            sampleBistroAtlas(
+        //const float3 irradiance =
+        //      sampleBistroAtlas(
+        //        lightmapPage,
+        //        lightmapUV
+        //    );
+
+        // litColor =
+        //     shadeWithLightmap(
+        //         albedo,
+        //         irradiance
+        //     );
+        const float3 N =
+              sampleBistroAtlas(
                 lightmapPage,
                 lightmapUV
             );
-
-        litColor =
-            shadeWithLightmap(
-                albedo,
-                irradiance
-            );
+        litColor = N;
     }
     else
     {
-        // Test-only fallback. Once the xatlas path is validated, this branch
-        // can be replaced by the adaptive-SH path for dynamic/unbaked objects.
         // litColor = albedo * 0.05f;
         litColor = float3(1, 0, 1);
     }
 
-    litColor += emissiveSample.rgb;
+    // litColor += emissiveSample.rgb;
+
+
+    //litColor = shadingData.faceN;
+    //litColor = shadingData.posW;
     return float4(litColor, 1.0f);
 }
-
-//float4 psMain(
-//    VSOut vsOut,
-//    uint triangleIndex: SV_PrimitiveID
-//) : SV_TARGET
-//{
-//    // MAGENTA:
-//    // C++ did not enable/bind the Bistro lightmap lookup.
-//    if (gBistroLightmapEnabled == 0)
-//    {
-//        return float4(1, 0, 1, 1);
-//    }
-
-//    const uint instanceID = vsOut.instanceID.index;
-
-//    // RED:
-//    // Shader instance ID is outside the range contained in the mapping.
-//    if (instanceID > gBistroMaxInstanceID)
-//    {
-//        return float4(1, 0, 0, 1);
-//    }
-
-//    const uint2 range =
-//        gBistroInstanceRanges[instanceID];
-
-//    // YELLOW:
-//    // This instance exists in the range table but has zero triangles.
-//    if (range.y == 0)
-//    {
-//        return float4(1, 1, 0, 1);
-//    }
-
-//    // BLUE:
-//    // SV_PrimitiveID does not correspond to the triangle ID expected
-//    // by our mapping.
-//    if (triangleIndex >= range.y)
-//    {
-//        return float4(0, 0, 1, 1);
-//    }
-
-//    const uint lookupIndex =
-//        range.x + triangleIndex;
-
-//    const uint pageIndex =
-//        gBistroPageIndices[lookupIndex];
-
-//    // CYAN:
-//    // Instance + primitive lookup succeeded, but this triangle was
-//    // not present in the xatlas mapping.
-//    if (pageIndex == 0xffffffffu)
-//    {
-//        return float4(0, 1, 1, 1);
-//    }
-
-//    // ORANGE:
-//    // Mapping contains an unexpected atlas page.
-//    if (pageIndex >= gBistroPageCount)
-//    {
-//        return float4(1, 0.5, 0, 1);
-//    }
-
-//    // WHITE:
-//    // (instanceID, triangleID) lookup succeeded completely.
-//    return float4(1, 1, 1, 1);
-//}

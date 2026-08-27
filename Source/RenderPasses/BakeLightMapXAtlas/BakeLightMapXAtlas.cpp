@@ -59,6 +59,8 @@ namespace
     const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
     const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
 
+    //const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
+    //const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
     struct XAtlasProgressState
     {
         std::array<std::atomic<int>, 4> lastReported;
@@ -288,6 +290,42 @@ void BakeLightMapXAtlas::setScene(
     resetBakingState();
     mpScene = pScene;
     mBakeCompleted = false;
+    if (mpScene) {
+        auto allMat = pScene->getMaterials();
+
+        for (auto& pMat : allMat)
+        {
+            // STEP 1: Handle the Base properties (Legacy & Common)
+            // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
+            auto pBasicMat = pMat->toBasicMaterial();
+
+            if (pBasicMat)
+            {
+                // 1. Kill the Specular Color / Shininess
+                // For Legacy OBJ: This makes it matte.
+                // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
+                pBasicMat->setSpecularParams(float4(0.0f));
+
+                // 2. Kill Transmission (Glass/Ghosting)
+                pBasicMat->setTransmissionColor(float3(0.0f));
+                pBasicMat->setSpecularTransmission(0.0f);
+                pBasicMat->setDiffuseTransmission(0.0f);
+            }
+
+            // STEP 2: Handle the PBR-specific properties
+            // This ONLY runs if the material is actually the modern StandardMaterial type.
+            StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
+
+            if (pStdMat)
+            {
+                // 3. Force PBR Roughness (The most important setting for modern renderers)
+                pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
+                pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
+                pStdMat->setSpecularTransmission(0.0f);
+                pStdMat->setTransmissionColor(float3(0.0f));
+            }
+        }
+    }
 }
 
 void BakeLightMapXAtlas::resetBakingState()
@@ -674,6 +712,20 @@ BakeLightMapXAtlas::buildGlobalAtlas(
 
     uint64_t submittedTriangles = 0;
 
+    const AnimationController* pAnimationController =
+        mpScene->getAnimationController();
+
+    if (!pAnimationController)
+    {
+        xatlas::Destroy(atlas);
+        FALCOR_THROW(
+            "Scene has no AnimationController."
+        );
+    }
+
+    const auto& globalMatrices =
+        pAnimationController->getGlobalMatrices();
+
     // -----------------------------------------------------------------
     // Official-example-style submission:
     // one xatlas::Atlas containing every selected Falcor instance.
@@ -691,6 +743,17 @@ BakeLightMapXAtlas::buildGlobalAtlas(
         const MeshID meshID(instance.geometryID);
         const uint32_t meshIDValue = meshID.get();
 
+        if (instance.globalMatrixID >= globalMatrices.size())
+        {
+            xatlas::Destroy(atlas);
+
+            FALCOR_THROW(
+                "Invalid globalMatrixID={} for instanceID={}.",
+                instance.globalMatrixID,
+                instanceID
+            );
+        }
+
         const auto cacheIt =
             mMeshGeometryCache.find(meshIDValue);
 
@@ -703,19 +766,62 @@ BakeLightMapXAtlas::buildGlobalAtlas(
             );
         }
 
-        const CachedMeshGeometry& geometry = cacheIt->second;
+        const CachedMeshGeometry& geometry =
+            cacheIt->second;
 
+        // -------------------------------------------------------------
+        // Transform this particular INSTANCE to world space before giving
+        // its geometry to xatlas.
+        //
+        // geometry.positions is mesh-local.
+        // globalMatrices[instance.globalMatrixID] is the same world
+        // transform Falcor associates with this GeometryInstanceData.
+        // -------------------------------------------------------------
+        const float4x4& worldMat =
+            globalMatrices[instance.globalMatrixID];
+
+        std::vector<float3> worldPositions(
+            geometry.positions.size()
+        );
+
+        for (size_t vertexIndex = 0;
+            vertexIndex < geometry.positions.size();
+            ++vertexIndex)
+        {
+            const float4 p =
+                mul(
+                    worldMat,
+                    float4(
+                        geometry.positions[vertexIndex],
+                        1.0f
+                    )
+                );
+
+            worldPositions[vertexIndex] =
+                p.xyz();
+        }
+
+        // -------------------------------------------------------------
+        // Same topology/indices as before, only geometry metric supplied
+        // to xatlas is now the actual transformed instance geometry.
+        // -------------------------------------------------------------
         xatlas::MeshDecl meshDecl{};
+
         meshDecl.vertexCount =
-            uint32_t(geometry.positions.size());
+            uint32_t(worldPositions.size());
+
         meshDecl.vertexPositionData =
-            geometry.positions.data();
+            worldPositions.data();
+
         meshDecl.vertexPositionStride =
             sizeof(float3);
+
         meshDecl.indexCount =
             uint32_t(geometry.indices.size());
+
         meshDecl.indexData =
             geometry.indices.data();
+
         meshDecl.indexFormat =
             xatlas::IndexFormat::UInt32;
 
@@ -868,6 +974,10 @@ BakeLightMapXAtlas::buildGlobalAtlas(
             "Bistro_AtlasPage_" +
             std::to_string(pageIndex) +
             ".exr";
+        //page.outputPath =
+        //    "Room_AtlasPage_" +
+        //    std::to_string(pageIndex) +
+        //    ".exr";
     }
 
     uint64_t packedTriangleCount = 0;
@@ -1265,6 +1375,10 @@ BakeLightMapXAtlas::loadAtlasPagesFromMapping() const
             "Bistro_AtlasPage_" +
             std::to_string(pageIndex) +
             ".exr";
+        //page.outputPath =
+        //    "Room_AtlasPage_" +
+        //    std::to_string(pageIndex) +
+        //    ".exr";
     }
 
     for (uint64_t recordIndex = 0;
@@ -1355,6 +1469,10 @@ void BakeLightMapXAtlas::saveAtlasManifest(
             << "page" << pageIndex
             << "=Bistro_AtlasPage_" << pageIndex
             << ".exr\n";
+        //manifestFile
+        //    << "page" << pageIndex
+        //    << "=Room_AtlasPage_" << pageIndex
+        //    << ".exr\n";
     }
 
     if (!manifestFile)
@@ -1602,6 +1720,22 @@ void BakeLightMapXAtlas::bakeAtlasPage(
             mpUVVars.get(),
             vertexCount,
             0
+        );
+
+        pPosTex->captureToFile(
+            0,
+            0,
+            "DEBUG_XAtlas_Pos_bistro.exr",
+            Bitmap::FileFormat::ExrFile,
+            Bitmap::ExportFlags::Uncompressed
+        );
+
+        pNormTex->captureToFile(
+            0,
+            0,
+            "DEBUG_XAtlas_Normal_bistro.exr",
+            Bitmap::FileFormat::ExrFile,
+            Bitmap::ExportFlags::Uncompressed
         );
     }
 

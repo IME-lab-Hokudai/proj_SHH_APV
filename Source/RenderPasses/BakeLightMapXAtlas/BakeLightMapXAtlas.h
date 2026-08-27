@@ -195,15 +195,18 @@ private:
     // Per xatlas documentation this asks xatlas to estimate the texel density
     // so the complete input approximately matches the requested resolution,
     // instead of enforcing a fixed density and creating many atlas pages.
-    uint32_t mAtlasResolution = 2048;
+    uint32_t mAtlasResolution = 1024;
     uint32_t mBakeSampleCount = 64;
+    //uint32_t mBakeSampleCount = 1;
 
     // Set false after a successful full atlas build to reuse
     // Bistro_AtlasMapping.bin and skip xatlas completely on later high-spp runs.
     bool mRebuildAtlas = true;
+    //bool mRebuildAtlas = false;
 
     // Temporary validation limit. Leave at max for the complete Bistro scene.
     uint32_t mTestInstanceCount = std::numeric_limits<uint32_t>::max();
+    //uint32_t mTestInstanceCount = 4;
 
     bool mBakeCompleted = false;
 };
