@@ -736,7 +736,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
     float3 albedo = baseColorSample.rgb;
     float3 litColor = albedo;
-
+    emissiveSample *= 10;
     // ------------------------------------------------------------------
     // Bistro xatlas lightmap validation.
     //
@@ -754,23 +754,23 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         lightmapUV
     ))
     {
-        //const float3 irradiance =
+        const float3 irradiance =
+              M_PI*sampleBistroAtlas(
+                lightmapPage,
+                lightmapUV
+            );
+
+         litColor =
+             shadeWithLightmap(
+                 albedo,
+                 irradiance
+             );
+        //const float3 N =
         //      sampleBistroAtlas(
         //        lightmapPage,
         //        lightmapUV
         //    );
-
-        // litColor =
-        //     shadeWithLightmap(
-        //         albedo,
-        //         irradiance
-        //     );
-        const float3 N =
-              sampleBistroAtlas(
-                lightmapPage,
-                lightmapUV
-            );
-        litColor = N;
+        //litColor = N;
     }
     else
     {
@@ -778,7 +778,7 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
         litColor = float3(1, 0, 1);
     }
 
-    // litColor += emissiveSample.rgb;
+     litColor += emissiveSample.rgb;
 
 
     //litColor = shadingData.faceN;

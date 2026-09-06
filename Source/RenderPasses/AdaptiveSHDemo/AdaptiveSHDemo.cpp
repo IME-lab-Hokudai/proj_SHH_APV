@@ -42,8 +42,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -66,12 +66,12 @@
 //const std::string loadFromFileName = "DirectAbsErr2N5HessianMetricThinSlabScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N5EdgeGradientMetricThinSlabScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
-const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-//const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
-const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
-//const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
+const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+//const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
+const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
 #else
 //const std::string loadFromFileName = "U32DataScene.txt";
@@ -945,14 +945,27 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
-        bindBistroXAtlasLightmapTest(
-            applyVar,
-            mpLinearSampler
-        );
-        //bindDataSceneData(applyVar);
+        //bindBistroXAtlasLightmapTest(
+        //    applyVar,
+        //    mpLinearSampler
+        //);
+        bindDataSceneData(applyVar);
         // Test shader uses only the Bistro xatlas lightmap lookup.
         // The adaptive/uniform probe buffers are intentionally not bound here.
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+        applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
 
+        applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
+
+        applyVar["SeedGridCB"]["gUseSeedGrid"] = mAdaptiveProbeVolume->getUseSeedGrid() ? 1u : 0u;
+        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getSeedMinPoint();
+        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getSeedCellSize();
+        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getSeedResolution();
+
+#else
+        mUniformProbeVolume->bindShaderData(applyVar);
+#endif
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
 
         auto now = std::chrono::high_resolution_clock::now();
@@ -990,21 +1003,21 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
             probeCount = uint64_t(res.x) * uint64_t(res.y) * uint64_t(res.z);
 #endif
 
-            //std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
-            //out << modeName << ","
-            //    << loadFromFileName << ","
-            //    << probeCount << ","
-            //    << kWarmupFrames << ","
-            //    << kMeasureFrames << ","
-            //    << std::fixed << std::setprecision(4)
-            //    << meanMs << ","
-            //    << stdMs << ","
-            //    << meanFps << "\n";
+            std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
+            out << modeName << ","
+                << loadFromFileName << ","
+                << probeCount << ","
+                << kWarmupFrames << ","
+                << kMeasureFrames << ","
+                << std::fixed << std::setprecision(4)
+                << meanMs << ","
+                << stdMs << ","
+                << meanFps << "\n";
 
-            //out.close();
+            out.close();
 
-            //logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
-            //    loadFromFileName, meanMs, stdMs, meanFps);
+            logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
+                loadFromFileName, meanMs, stdMs, meanFps);
         }
 
         frameIndex++;
@@ -1308,7 +1321,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
 
-        //setupDataSceneBakeTargets();
+        setupDataSceneBakeTargets();
         //setupCornellBakeTargets();
         //setupCornellVisibilitySlabBakeTargets();
         //init probe visual pass
@@ -1329,9 +1342,9 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 
-        //mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
-        //mAdaptiveProbeVolume->uploadToGPU();
-        //mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+        mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+        mAdaptiveProbeVolume->uploadToGPU();
+        mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
         mUniformProbeVolume->loadFromFile(loadFromFileName);
@@ -1453,48 +1466,48 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpCompositeState->setVao(mpEmptyVao);
 
         //loadLightmaps();
-        loadBistroXAtlasLightmapTest(
-            mpDevice,
-            mpScene
-        );
-        //loadDataSceneLightmaps();
+        //loadBistroXAtlasLightmapTest(
+        //    mpDevice,
+        //    mpScene
+        //);
+        loadDataSceneLightmaps();
         //loadCornellLightmaps();
         //loadCornellVisibilitySlabLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         auto allMat = pScene->getMaterials();
 
-        //for (auto& pMat : allMat)
-        //{
-        //    // STEP 1: Handle the Base properties (Legacy & Common)
-        //    // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
-        //    auto pBasicMat = pMat->toBasicMaterial();
+        for (auto& pMat : allMat)
+        {
+            // STEP 1: Handle the Base properties (Legacy & Common)
+            // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
+            auto pBasicMat = pMat->toBasicMaterial();
 
-        //    if (pBasicMat)
-        //    {
-        //        // 1. Kill the Specular Color / Shininess
-        //        // For Legacy OBJ: This makes it matte.
-        //        // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
-        //        pBasicMat->setSpecularParams(float4(0.0f));
+            if (pBasicMat)
+            {
+                // 1. Kill the Specular Color / Shininess
+                // For Legacy OBJ: This makes it matte.
+                // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
+                pBasicMat->setSpecularParams(float4(0.0f));
 
-        //        // 2. Kill Transmission (Glass/Ghosting)
-        //        pBasicMat->setTransmissionColor(float3(0.0f));
-        //        pBasicMat->setSpecularTransmission(0.0f);
-        //        pBasicMat->setDiffuseTransmission(0.0f);
-        //    }
+                // 2. Kill Transmission (Glass/Ghosting)
+                pBasicMat->setTransmissionColor(float3(0.0f));
+                pBasicMat->setSpecularTransmission(0.0f);
+                pBasicMat->setDiffuseTransmission(0.0f);
+            }
 
-        //    // STEP 2: Handle the PBR-specific properties
-        //    // This ONLY runs if the material is actually the modern StandardMaterial type.
-        //    StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
+            // STEP 2: Handle the PBR-specific properties
+            // This ONLY runs if the material is actually the modern StandardMaterial type.
+            StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
 
-        //    if (pStdMat)
-        //    {
-        //        // 3. Force PBR Roughness (The most important setting for modern renderers)
-        //        pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
-        //        pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
-        //        pStdMat->setSpecularTransmission(0.0f);
-        //        pStdMat->setTransmissionColor(float3(0.0f));
-        //    }
-        //}
+            if (pStdMat)
+            {
+                // 3. Force PBR Roughness (The most important setting for modern renderers)
+                pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
+                pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
+                pStdMat->setSpecularTransmission(0.0f);
+                pStdMat->setTransmissionColor(float3(0.0f));
+            }
+        }
     }
 }
 
