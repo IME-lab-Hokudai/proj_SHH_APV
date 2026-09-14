@@ -55,12 +55,69 @@ namespace
 
     const char kNormalizeFile[] =
         "RenderPasses/BakeLightMapXAtlas/NormalizeLightmapSingle.cs.slang";
+    const char kBlurFile[] = "RenderPasses/BakeLightMapXAtlas/BlurLightmap.cs.slang";
+    const char kDilateFile[] = "RenderPasses/BakeLightMapXAtlas/DilateLightmap.cs.slang";
+    constexpr uint32_t kAtlasPadding = 4;
 
+    // Scene output configuration. Page and debug images are derived from the
+    // mapping filename and saved beside it, e.g. Room_AtlasMapping.bin produces
+    // Room_AtlasPage_0.exr. Relative paths are relative to the working directory.
     const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
     const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
 
     //const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
     //const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
+
+    std::filesystem::path getAtlasPagePath(uint32_t pageIndex)
+    {
+        const std::filesystem::path mappingPath(kAtlasMappingFile);
+        std::string sceneName = mappingPath.stem().string();
+        const std::string suffix = "_AtlasMapping";
+        if (sceneName.size() >= suffix.size() &&
+            sceneName.compare(sceneName.size() - suffix.size(), suffix.size(), suffix) == 0)
+        {
+            sceneName.resize(sceneName.size() - suffix.size());
+        }
+
+        return mappingPath.parent_path() /
+            (sceneName + "_AtlasPage_" + std::to_string(pageIndex) + ".exr");
+    }
+
+    std::filesystem::path getAtlasDebugPath(uint32_t pageIndex, const char* channel)
+    {
+        const std::filesystem::path pagePath = getAtlasPagePath(pageIndex);
+        return pagePath.parent_path() /
+            ("DEBUG_" + pagePath.stem().string() + "_" + channel + ".exr");
+    }
+
+    std::filesystem::path getAtlasRawPath(uint32_t pageIndex)
+    {
+        const auto pagePath = getAtlasPagePath(pageIndex);
+        return pagePath.parent_path() / (pagePath.stem().string() + "_Raw.exr");
+    }
+
+    std::filesystem::path getAtlasRawMetadataPath(uint32_t pageIndex)
+    {
+        auto path = getAtlasRawPath(pageIndex);
+        path.replace_extension(".txt");
+        return path;
+    }
+
+    uint64_t getMappingFingerprint()
+    {
+        std::ifstream file(kAtlasMappingFile, std::ios::binary);
+        if (!file) FALCOR_THROW("Cannot read atlas mapping '{}'.", kAtlasMappingFile);
+        uint64_t hash = 14695981039346656037ull;
+        std::array<char, 65536> bytes;
+        while (file)
+        {
+            file.read(bytes.data(), bytes.size());
+            for (std::streamsize i = 0; i < file.gcount(); ++i)
+                hash = (hash ^ static_cast<unsigned char>(bytes[i])) * 1099511628211ull;
+        }
+        if (file.bad()) FALCOR_THROW("Failed reading atlas mapping '{}'.", kAtlasMappingFile);
+        return hash;
+    }
     struct XAtlasProgressState
     {
         std::array<std::atomic<int>, 4> lastReported;
@@ -166,11 +223,17 @@ BakeLightMapXAtlas::BakeLightMapXAtlas(
     const Properties& props
 )
     : RenderPass(pDevice)
-{}
+{
+    mBlurRadius = std::min(props.get<uint32_t>("blurRadius", mBlurRadius), 8u);
+    mFilterOnly = props.get<bool>("filterOnly", mFilterOnly);
+}
 
 Properties BakeLightMapXAtlas::getProperties() const
 {
-    return {};
+    Properties props;
+    props["blurRadius"] = mBlurRadius;
+    props["filterOnly"] = mFilterOnly;
+    return props;
 }
 
 RenderPassReflection BakeLightMapXAtlas::reflect(
@@ -208,7 +271,10 @@ void BakeLightMapXAtlas::execute(
     const bool mappingExists =
         std::filesystem::exists(kAtlasMappingFile);
 
-    if (mRebuildAtlas || !mappingExists)
+    if (mFilterOnly && !mappingExists)
+        FALCOR_THROW("Filter-only mode requires existing mapping '{}'.", kAtlasMappingFile);
+
+    if (!mFilterOnly && (mRebuildAtlas || !mappingExists))
     {
         if (!mRebuildAtlas && !mappingExists)
         {
@@ -269,18 +335,27 @@ void BakeLightMapXAtlas::execute(
     // normal scene update before the one-shot work begins.
     if (!mpUVProgram)
         createUVRasterProgram();
-    if (!mpExtractPass || !mpNormalizePass)
+    if (!mpExtractPass || !mpNormalizePass || !mpBlurPass || !mpDilatePass)
         createComputePasses();
-    if (!mpRtProgram || !mpRtVars)
+    if (!mFilterOnly && (!mpRtProgram || !mpRtVars))
         createRayTracingProgram(pRenderContext);
 
+    mMappingFingerprint = getMappingFingerprint();
     bakeSavedAtlasPages(pRenderContext);
 
     mBakeCompleted = true;
 }
 
 void BakeLightMapXAtlas::renderUI(Gui::Widgets& widget)
-{}
+{
+    widget.var("Blur radius (texels)", mBlurRadius, 0u, 8u);
+    widget.text("0 disables blur. Start with 2; larger values soften lighting.");
+    if (widget.button("Apply blur to saved bake"))
+    {
+        mFilterOnly = true;
+        mBakeCompleted = false;
+    }
+}
 
 void BakeLightMapXAtlas::setScene(
     RenderContext* pRenderContext,
@@ -351,6 +426,8 @@ void BakeLightMapXAtlas::resetBakingState()
 
     mpExtractPass = nullptr;
     mpNormalizePass = nullptr;
+    mpBlurPass = nullptr;
+    mpDilatePass = nullptr;
 
     mpRtVars = nullptr;
     mpRtProgram = nullptr;
@@ -413,6 +490,8 @@ void BakeLightMapXAtlas::createComputePasses()
         "main",
         mpScene->getSceneDefines()
     );
+    mpBlurPass = ComputePass::create(mpDevice, kBlurFile, "main");
+    mpDilatePass = ComputePass::create(mpDevice, kDilateFile, "main");
 }
 
 void BakeLightMapXAtlas::createRayTracingProgram(
@@ -555,7 +634,7 @@ BakeLightMapXAtlas::collectTriangleInstanceIDs() const
     }
 
     logInfo(
-        "Bistro lightmap targets: "
+        "Scene lightmap targets: "
         "instances={} uniqueMeshes={} totalInstanceTriangles={}.",
         instanceIDs.size(),
         uniqueMeshes.size(),
@@ -896,7 +975,7 @@ BakeLightMapXAtlas::buildGlobalAtlas(
     packOptions.texelsPerUnit = 0.0f;
 
     // Keep lightmap-safe sampling margins.
-    packOptions.padding = 4;
+    packOptions.padding = kAtlasPadding;
     packOptions.bilinear = true;
 
     // Officially documented to reduce the number of possible chart
@@ -970,14 +1049,7 @@ BakeLightMapXAtlas::buildGlobalAtlas(
         page.pageIndex = pageIndex;
         page.width = atlas->width;
         page.height = atlas->height;
-        page.outputPath =
-            "Bistro_AtlasPage_" +
-            std::to_string(pageIndex) +
-            ".exr";
-        //page.outputPath =
-        //    "Room_AtlasPage_" +
-        //    std::to_string(pageIndex) +
-        //    ".exr";
+        page.outputPath = getAtlasPagePath(pageIndex);
     }
 
     uint64_t packedTriangleCount = 0;
@@ -1371,14 +1443,7 @@ BakeLightMapXAtlas::loadAtlasPagesFromMapping() const
         page.pageIndex = pageIndex;
         page.width = header.width;
         page.height = header.height;
-        page.outputPath =
-            "Bistro_AtlasPage_" +
-            std::to_string(pageIndex) +
-            ".exr";
-        //page.outputPath =
-        //    "Room_AtlasPage_" +
-        //    std::to_string(pageIndex) +
-        //    ".exr";
+        page.outputPath = getAtlasPagePath(pageIndex);
     }
 
     for (uint64_t recordIndex = 0;
@@ -1467,12 +1532,8 @@ void BakeLightMapXAtlas::saveAtlasManifest(
     {
         manifestFile
             << "page" << pageIndex
-            << "=Bistro_AtlasPage_" << pageIndex
-            << ".exr\n";
-        //manifestFile
-        //    << "page" << pageIndex
-        //    << "=Room_AtlasPage_" << pageIndex
-        //    << ".exr\n";
+            << "=" << getAtlasPagePath(pageIndex).generic_string()
+            << "\n";
     }
 
     if (!manifestFile)
@@ -1598,9 +1659,9 @@ void BakeLightMapXAtlas::bakeSavedAtlasPages(
     }
 
     logInfo(
-        "Full lightmap bake complete: pages={} samplesPerPage={}.",
+        "Lightmap processing complete: pages={} tracedSamplesPerPage={}.",
         pages.size(),
-        mBakeSampleCount
+        mFilterOnly ? 0u : mBakeSampleCount
     );
 }
 
@@ -1661,6 +1722,12 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     mpUVFbo = Fbo::create(mpDevice);
     mpUVFbo->attachColorTarget(pPosTex, 0);
     mpUVFbo->attachColorTarget(pNormTex, 1);
+    // XY = local world-space texel footprint, ZW = two exact 16-bit ID halves.
+    auto pFilterGuide = mpDevice->createTexture2D(
+        mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+        ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource
+    );
+    mpUVFbo->attachColorTarget(pFilterGuide, 2);
 
     GraphicsState::Viewport viewport(
         0.f,
@@ -1725,7 +1792,7 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         pPosTex->captureToFile(
             0,
             0,
-            "DEBUG_XAtlas_Pos_bistro.exr",
+            getAtlasDebugPath(page.pageIndex, "Pos"),
             Bitmap::FileFormat::ExrFile,
             Bitmap::ExportFlags::Uncompressed
         );
@@ -1733,7 +1800,7 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         pNormTex->captureToFile(
             0,
             0,
-            "DEBUG_XAtlas_Normal_bistro.exr",
+            getAtlasDebugPath(page.pageIndex, "Normal"),
             Bitmap::FileFormat::ExrFile,
             Bitmap::ExportFlags::Uncompressed
         );
@@ -1750,6 +1817,38 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     // -----------------------------------------------------------------
     // Extract valid atlas texels.
     // -----------------------------------------------------------------
+    if (mFilterOnly)
+    {
+        const auto rawPath = getAtlasRawPath(page.pageIndex);
+        const bool hasRaw = std::filesystem::exists(rawPath);
+        const auto sourcePath = hasRaw ? rawPath : page.outputPath;
+        if (!std::filesystem::exists(sourcePath))
+            FALCOR_THROW("No saved lightmap '{}' to filter. Bake the page first.", sourcePath);
+
+        if (hasRaw)
+        {
+            std::ifstream metadata(getAtlasRawMetadataPath(page.pageIndex));
+            uint64_t fingerprint = 0;
+            if (!(metadata >> fingerprint) || fingerprint != mMappingFingerprint)
+                FALCOR_THROW("Raw lightmap '{}' does not match the current atlas mapping. Re-bake it.", rawPath);
+        }
+
+        auto pRaw = Texture::createFromFile(mpDevice, sourcePath, false, false, ResourceBindFlags::ShaderResource);
+        if (!pRaw || pRaw->getWidth() != page.width || pRaw->getHeight() != page.height)
+            FALCOR_THROW("Saved lightmap '{}' is missing or has incompatible dimensions.", sourcePath);
+
+        if (!hasRaw)
+        {
+            logWarning(
+                "Importing existing page '{}' as the raw baseline. It must belong to the current scene/mapping. "
+                "Only raster-covered texels will be filtered; old gutters are ignored.", sourcePath
+            );
+            saveRawAtlasPage(page, pRaw);
+        }
+        filterAndSaveAtlasPage(pRenderContext, page, pRaw);
+        return;
+    }
+
     const uint32_t totalTexels =
         mLightmapWidth * mLightmapHeight;
 
@@ -1879,28 +1978,47 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         mLightmapHeight
     );
 
-    if (page.outputPath.empty())
-    {
-        FALCOR_THROW(
-            "Atlas page {} has no output path.",
-            page.pageIndex
-        );
-    }
+    const ref<Texture> pRaw = mpResultTex;
+    saveRawAtlasPage(page, pRaw);
+    filterAndSaveAtlasPage(pRenderContext, page, pRaw);
+}
 
-    mpResultTex->captureToFile(
-        0,
-        0,
-        page.outputPath,
-        Bitmap::FileFormat::ExrFile,
-        Bitmap::ExportFlags::Uncompressed
-    );
+void BakeLightMapXAtlas::saveRawAtlasPage(const AtlasPageData& page, const ref<Texture>& pRaw) const
+{
+    // Keep an immutable baseline for radius comparisons. Never filter a filtered result again.
+    pRaw->captureToFile(0, 0, getAtlasRawPath(page.pageIndex), Bitmap::FileFormat::ExrFile,
+        Bitmap::ExportFlags::Uncompressed | Bitmap::ExportFlags::ExportAlpha, false);
+    std::ofstream metadata(getAtlasRawMetadataPath(page.pageIndex), std::ios::trunc);
+    metadata << mMappingFingerprint << '\n';
+    if (!metadata) FALCOR_THROW("Could not save raw lightmap metadata for page {}.", page.pageIndex);
+}
 
-    logInfo(
-        "Saved atlas page {} to '{}' using {} samples.",
-        page.pageIndex,
-        page.outputPath,
-        mCurrentSample
-    );
+void BakeLightMapXAtlas::filterAndSaveAtlasPage(
+    RenderContext* pRenderContext, const AtlasPageData& page, const ref<Texture>& pRaw)
+{
+    auto makeOutput = [&]() {
+        return mpDevice->createTexture2D(page.width, page.height, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
+    };
+    auto pFiltered = makeOutput();
+    auto blurVar = mpBlurPass->getRootVar();
+    blurVar["gInput"] = pRaw;
+    blurVar["gPosW"] = mpUVFbo->getColorTexture(0);
+    blurVar["gNormW"] = mpUVFbo->getColorTexture(1);
+    blurVar["gFilterGuide"] = mpUVFbo->getColorTexture(2);
+    blurVar["gOutput"] = pFiltered;
+    blurVar["CB"]["gRadius"] = mBlurRadius;
+    mpBlurPass->execute(pRenderContext, page.width, page.height);
+
+    mpResultTex = makeOutput();
+    auto dilateVar = mpDilatePass->getRootVar();
+    dilateVar["gInput"] = pFiltered;
+    dilateVar["gOutput"] = mpResultTex;
+    dilateVar["CB"]["gPadding"] = kAtlasPadding;
+    mpDilatePass->execute(pRenderContext, page.width, page.height);
+    mpResultTex->captureToFile(0, 0, page.outputPath, Bitmap::FileFormat::ExrFile,
+        Bitmap::ExportFlags::Uncompressed, false);
+    logInfo("Saved filtered atlas page '{}' (blur radius={}, padding={}).", page.outputPath, mBlurRadius, kAtlasPadding);
 }
 
 void BakeLightMapXAtlas::traceOneSample(

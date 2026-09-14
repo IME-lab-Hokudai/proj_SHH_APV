@@ -148,6 +148,8 @@ private:
     );
 
     void traceOneSample(RenderContext* pRenderContext);
+    void filterAndSaveAtlasPage(RenderContext* pRenderContext, const AtlasPageData& page, const ref<Texture>& pRaw);
+    void saveRawAtlasPage(const AtlasPageData& page, const ref<Texture>& pRaw) const;
 
 private:
     ref<Scene> mpScene;
@@ -161,6 +163,8 @@ private:
 
     ref<ComputePass> mpExtractPass;
     ref<ComputePass> mpNormalizePass;
+    ref<ComputePass> mpBlurPass;
+    ref<ComputePass> mpDilatePass;
 
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
@@ -195,16 +199,24 @@ private:
     // Per xatlas documentation this asks xatlas to estimate the texel density
     // so the complete input approximately matches the requested resolution,
     // instead of enforcing a fixed density and creating many atlas pages.
-    uint32_t mAtlasResolution = 1024;
-    uint32_t mBakeSampleCount = 64;
+    uint32_t mAtlasResolution = 2048;
+    uint32_t mBakeSampleCount = 4096;
     //uint32_t mBakeSampleCount = 1;
 
+    // Gaussian radius in atlas texels: 0 disables blur, 2 uses a 5x5 kernel.
+    uint32_t mBlurRadius = 6;
+    // Reuse saved raw lighting (or import an existing page on the first run).
+    // This skips atlas rebuilding and ALL ray tracing. Keep the same scene/mapping.
+    // Enabled for the current smoothing experiment; set false for a fresh ray bake.
+    bool mFilterOnly = true;
+    uint64_t mMappingFingerprint = 0;
+
     // Set false after a successful full atlas build to reuse
-    // Bistro_AtlasMapping.bin and skip xatlas completely on later high-spp runs.
+    // the configured atlas mapping and skip xatlas on later high-spp runs.
     bool mRebuildAtlas = true;
     //bool mRebuildAtlas = false;
 
-    // Temporary validation limit. Leave at max for the complete Bistro scene.
+    // Temporary validation limit. Leave at max for the complete scene.
     uint32_t mTestInstanceCount = std::numeric_limits<uint32_t>::max();
     //uint32_t mTestInstanceCount = 4;
 

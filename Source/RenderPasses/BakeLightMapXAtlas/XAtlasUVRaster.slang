@@ -16,12 +16,14 @@ struct BakeVSOut
     float3 posW : POSW;
     float3 normalW : NORMAL;
     float4 posH : SV_POSITION;
+    nointerpolation uint instanceID : INSTANCE_ID;
 };
 
 struct PSOut
 {
     float4 posW : SV_Target0;
     float4 normW : SV_Target1;
+    float4 filterGuide : SV_Target2;
 };
 
 BakeVSOut vsMain(uint vertexID : SV_VertexID)
@@ -33,6 +35,7 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
 
     const uint sourceInstanceID =
         gInstanceIDs[localTriangleID];
+    o.instanceID = sourceInstanceID;
 
     const uint sourceTriangleID =
         gTriangleIDs[localTriangleID];
@@ -119,6 +122,10 @@ PSOut psMain(BakeVSOut pin)
     //       > 0 : normal points toward camera
     //       < 0 : visible surface is being viewed from its back side
     o.normW = float4(N, facing);
+    // World-space texel footprint and exact instance identity for the blur.
+    // Derivatives are evaluated during rasterization, before atlas gaps exist.
+    o.filterGuide = float4(length(ddx(pin.posW)), length(ddy(pin.posW)),
+        float(pin.instanceID & 0xffffu), float(pin.instanceID >> 16));
 
     return o;
 }

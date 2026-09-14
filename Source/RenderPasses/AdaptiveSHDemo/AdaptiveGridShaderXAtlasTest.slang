@@ -736,7 +736,6 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 
     float3 albedo = baseColorSample.rgb;
     float3 litColor = albedo;
-    emissiveSample *= 10;
     // ------------------------------------------------------------------
     // Bistro xatlas lightmap validation.
     //
