@@ -1,8 +1,11 @@
 // ExtractTexels.cs.slang
+import Scene.Raster;
 #include "BakeDataStructures.slang"
 
 Texture2D<float4> gPosW;
 Texture2D<float4> gNormW;
+Texture2D<float4> gFilterGuide;
+Texture2D<uint> gTriangleID;
 RWStructuredBuffer<TexelSample> gTexelSamples;
 RWStructuredBuffer<uint> gCounter; // Resets to 0 in C++ before execution
 
@@ -25,6 +28,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         TexelSample ts;
         ts.posW = pos.xyz;
         ts.normalW = normalize(gNormW[id.xy].xyz);
+        uint2 instanceParts = uint2(gFilterGuide[id.xy].zw);
+        GeometryInstanceID instanceID = { instanceParts.x | (instanceParts.y << 16) };
+        ts.faceNormalW = gScene.getFaceNormalW(instanceID, gTriangleID[id.xy]);
         ts.texelIndex = id.y * gResolution.x + id.x; // Original pixel address
         
         gTexelSamples[bufferIdx] = ts;

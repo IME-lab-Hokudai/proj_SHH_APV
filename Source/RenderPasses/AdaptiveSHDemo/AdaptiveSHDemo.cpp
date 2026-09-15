@@ -93,6 +93,9 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 
 AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
+    mEnableGlass = props.get<bool>("runtimeGlass", mEnableGlass);
+    mGlassRefractionStrength = std::clamp(props.get<float>("glassRefraction", mGlassRefractionStrength), 0.f, 3.f);
+    mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 0.2f);
     mpFbo = Fbo::create(mpDevice);
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
@@ -113,7 +116,7 @@ namespace
 
     //constexpr const char* kBistroAtlasManifestFile =
     //    "Room_AtlasManifest.txt";
-    constexpr uint32_t kBistroTestMaxPages = 2;
+    constexpr uint32_t kBistroTestMaxPages = 10;
 
 #pragma pack(push, 1)
     struct BistroAtlasMappingHeader
@@ -140,8 +143,7 @@ namespace
     static_assert(sizeof(BistroAtlasMappingHeader) == 36);
     static_assert(sizeof(BistroAtlasMappingRecord) == 40);
 
-    ref<Texture> spBistroAtlasPage0;
-    ref<Texture> spBistroAtlasPage1;
+    std::array<ref<Texture>, kBistroTestMaxPages> spBistroAtlasPages;
 
     ref<Buffer> spBistroInstanceRanges;
     ref<Buffer> spBistroPageIndices;
@@ -264,8 +266,7 @@ namespace
     {
         sBistroLightmapEnabled = false;
 
-        spBistroAtlasPage0 = nullptr;
-        spBistroAtlasPage1 = nullptr;
+        for (auto& page : spBistroAtlasPages) page = nullptr;
         spBistroInstanceRanges = nullptr;
         spBistroPageIndices = nullptr;
         spBistroUV01 = nullptr;
@@ -566,56 +567,20 @@ namespace
         const std::vector<std::string> pageFiles =
             readBistroAtlasPageFiles(header.pageCount);
 
-        spBistroAtlasPage0 =
-            Texture::createFromFile(
-                pDevice,
-                pageFiles[0],
-                true,
-                false,
-                ResourceBindFlags::ShaderResource
-            );
-
-        if (!spBistroAtlasPage0)
+        for (uint32_t pageIndex = 0; pageIndex < header.pageCount; ++pageIndex)
         {
-            FALCOR_THROW(
-                "Failed to load Bistro atlas page 0 from '{}'.",
-                pageFiles[0]
-            );
+            auto& page = spBistroAtlasPages[pageIndex];
+            page = Texture::createFromFile(
+                pDevice, pageFiles[pageIndex], false, false, ResourceBindFlags::ShaderResource);
+            if (!page)
+                FALCOR_THROW("Failed to load atlas page {} from '{}'.", pageIndex, pageFiles[pageIndex]);
+            if (page->getWidth() != header.width || page->getHeight() != header.height)
+                FALCOR_THROW("Atlas page {} dimensions do not match the mapping.", pageIndex);
+            page->setName("BistroXAtlasPage" + std::to_string(pageIndex));
         }
-
-        if (header.pageCount > 1)
-        {
-            spBistroAtlasPage1 =
-                Texture::createFromFile(
-                    pDevice,
-                    pageFiles[1],
-                    true,
-                    false,
-                    ResourceBindFlags::ShaderResource
-                );
-
-            if (!spBistroAtlasPage1)
-            {
-                FALCOR_THROW(
-                    "Failed to load Bistro atlas page 1 from '{}'.",
-                    pageFiles[1]
-                );
-            }
-        }
-        else
-        {
-            // Keep the second shader binding valid for the 1-page case.
-            spBistroAtlasPage1 =
-                spBistroAtlasPage0;
-        }
-
-        spBistroAtlasPage0->setName(
-            "BistroXAtlasPage0"
-        );
-
-        spBistroAtlasPage1->setName(
-            "BistroXAtlasPage1"
-        );
+        // Keep every descriptor valid when the scene uses fewer than ten pages.
+        for (uint32_t pageIndex = header.pageCount; pageIndex < kBistroTestMaxPages; ++pageIndex)
+            spBistroAtlasPages[pageIndex] = spBistroAtlasPages[0];
 
         sBistroPageCount =
             header.pageCount;
@@ -661,11 +626,8 @@ namespace
         if (!sBistroLightmapEnabled)
             return;
 
-        var["gBistroAtlasPage0"] =
-            spBistroAtlasPage0;
-
-        var["gBistroAtlasPage1"] =
-            spBistroAtlasPage1;
+        for (uint32_t pageIndex = 0; pageIndex < kBistroTestMaxPages; ++pageIndex)
+            var["gBistroAtlasPages"][pageIndex] = spBistroAtlasPages[pageIndex];
 
         var["gBistroInstanceRanges"] =
             spBistroInstanceRanges;
@@ -887,7 +849,11 @@ void AdaptiveSHDemo::applyCameraOrbitPose()
 
 Properties AdaptiveSHDemo::getProperties() const
 {
-    return {};
+    Properties props;
+    props["runtimeGlass"] = mEnableGlass;
+    props["glassRefraction"] = mGlassRefractionStrength;
+    props["liquidOpticalDepth"] = mLiquidOpticalDepth;
+    return props;
 }
 
 RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
@@ -896,11 +862,12 @@ RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
     RenderPassReflection reflector;
     const uint2 sz = RenderPassHelpers::calculateIOSize(mOutputSizeSelection, mFixedOutputSize, compileData.defaultTexDims);
     // REMARK MSAA is set via texture sample count. Note that all fbo attachment have to have same sample count.
-    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA32Float);
+    reflector.addOutput("output", "Color").texture2D(sz.x, sz.y, 4).format(ResourceFormat::RGBA32Float)
+        .bindFlags(ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource);
     //reflector.addOutput("output", "Color").texture2D(mLightmapWidth, mLightmapHeight, 4).format(ResourceFormat::RGBA32Float);
     reflector.addOutput("depth", "Depth buffer")
         .format(ResourceFormat::D32Float)
-        .bindFlags(ResourceBindFlags::DepthStencil)
+        .bindFlags(ResourceBindFlags::DepthStencil | ResourceBindFlags::ShaderResource)
         .texture2D(sz.x, sz.y, 4);
 
     reflector.addInternal("dynamicRaw", "Dynamic raw lighting")
@@ -945,6 +912,7 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         auto applyVar = mpStaticVars->getRootVar();
+        applyVar["GlassCB"]["gGlassEnabled"] = mEnableGlass ? 1u : 0u;
         bindBistroXAtlasLightmapTest(
             applyVar,
             mpLinearSampler
@@ -967,6 +935,42 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         mUniformProbeVolume->bindShaderData(applyVar);
 #endif
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
+
+        if (mEnableGlass)
+        {
+            const uint32_t width = pTargetFbo->getWidth(), height = pTargetFbo->getHeight();
+            if (!mpOpaqueColor || mpOpaqueColor->getWidth() != width || mpOpaqueColor->getHeight() != height)
+            {
+                auto flags = ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess;
+                mpOpaqueColor = mpDevice->createTexture2D(width, height, ResourceFormat::RGBA32Float, 1, 1, nullptr, flags);
+                mpOpaqueDepth = mpDevice->createTexture2D(width, height, ResourceFormat::R32Float, 1, 1, nullptr, flags);
+            }
+            for (uint32_t stage = mHasLiquidMaterials ? 0u : 1u; stage < 2; ++stage)
+            {
+                auto resolve = mpOpaqueResolvePass->getRootVar();
+                resolve["gColorMS"] = pTargetFbo;
+                resolve["gDepthMS"] = pDepth;
+                resolve["gColor"] = mpOpaqueColor;
+                resolve["gDepth"] = mpOpaqueDepth;
+                mpOpaqueResolvePass->execute(pRenderContext, width, height);
+                // Release attachment SRVs before they are rebound for glass drawing.
+                resolve["gColorMS"] = ref<Texture>(); resolve["gDepthMS"] = ref<Texture>();
+                auto glass = mpGlassVars->getRootVar();
+                glass["gLiquidMaterials"] = mpLiquidMaterialMask;
+                glass["GlassCB"]["gLiquidStage"] = stage == 0 ? 1u : 0u;
+                glass["GlassCB"]["gLiquidOpticalDepth"] = mLiquidOpticalDepth;
+                bindBistroXAtlasLightmapTest(glass, mpLinearSampler);
+                glass["gOpaqueColor"] = mpOpaqueColor;
+                glass["gOpaqueDepth"] = mpOpaqueDepth;
+                glass["GlassCB"]["gHasEnvironment"] = mpScene->useEnvLight() ? 1u : 0u;
+                glass["GlassCB"]["gSceneScale"] = std::max(mpScene->getSceneBounds().radius(), 1e-3f);
+                glass["GlassCB"]["gRefractionStrength"] = mGlassRefractionStrength;
+                // Stage 0 composites liquid against opaque surfaces. Stage 1
+                // resolves that result again so outer glass sees the liquid.
+                // Depth writes keep the nearest surface within each stage.
+                mpScene->rasterize(pRenderContext, mpGlassState.get(), mpGlassVars.get(), mpRasterState, mpRasterState);
+            }
+        }
 
         auto now = std::chrono::high_resolution_clock::now();
         double frameMs = std::chrono::duration<double, std::milli>(now - lastTime).count();
@@ -1049,6 +1053,9 @@ bool AdaptiveSHDemo::onKeyEvent(
 }
 
 void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
+    widget.checkbox("Runtime glass", mEnableGlass);
+    widget.var("Glass refraction", mGlassRefractionStrength, 0.f, 3.f);
+    widget.var("Liquid color depth", mLiquidOpticalDepth, 0.f, 0.2f, 0.001f);
     widget.text("Loaded probe file: " + loadFromFileName);
 
     if (auto orbitGroup = widget.group("Camera Orbit", true))
@@ -1312,8 +1319,28 @@ void AdaptiveSHDemo::loadLightmaps()
 void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
+    mpLiquidMaterialMask = nullptr;
+    mHasLiquidMaterials = false;
     if (mpScene)
     {
+        // Explicit roles from BistroInterior_Wine.pyscene. Keep containers such
+        // as TransparentGlassWine in the outer-glass stage, not the liquid stage.
+        // Edit this one list when another scene uses different liquid names.
+        const std::array<std::string, 4> liquidNames = {"White_Wine", "Red_Wine", "Beer", "Water"};
+        const auto& materials = mpScene->getMaterials();
+        std::vector<uint32_t> liquidMask(std::max(size_t(1), materials.size()), 0u);
+        for (size_t i = 0; i < materials.size(); ++i)
+        {
+            const auto& name = materials[i]->getName();
+            if (std::find(liquidNames.begin(), liquidNames.end(), name) != liquidNames.end())
+            {
+                liquidMask[i] = 1u;
+                mHasLiquidMaterials = true;
+                logInfo("Runtime liquid material: '{}' (id={}).", name, i);
+            }
+        }
+        mpLiquidMaterialMask = mpDevice->createStructuredBuffer(sizeof(uint32_t), uint32_t(liquidMask.size()), ResourceBindFlags::ShaderResource);
+        mpLiquidMaterialMask->setBlob(liquidMask.data(), 0, liquidMask.size() * sizeof(uint32_t));
         std::ifstream check("AdaptiveSHDemo_RuntimeFPS.csv");
         if (!check.good())
         {
@@ -1370,18 +1397,34 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         RasterizerState::Desc rasterDesc;
         rasterDesc.setFillMode(RasterizerState::FillMode::Solid);
         rasterDesc.setCullMode(RasterizerState::CullMode::None);
-        rasterDesc.setDepthBias(100000, 1.0f);
+        //rasterDesc.setDepthBias(100000, 1.0f);
         mpRasterState = RasterizerState::create(rasterDesc);
 
         // default depth stencil state
         DepthStencilState::Desc dsDesc;
         ref<DepthStencilState> pDsState = DepthStencilState::create(dsDesc);
 
-        mpGraphicsState = GraphicsState::create(mpDevice);
+        mpGraphicsState = GraphicsState::create(mpDevice); 
         mpGraphicsState->setProgram(mpStaticProgram);
         mpGraphicsState->setRasterizerState(mpRasterState);
         mpGraphicsState->setFbo(mpFbo);
         mpGraphicsState->setDepthStencilState(pDsState);
+
+        ProgramDesc glassDesc;
+        glassDesc.addShaderModules(mpScene->getShaderModules());
+        glassDesc.addTypeConformances(mpScene->getTypeConformances());
+        glassDesc.addShaderLibrary(kShaderFile).vsEntry("vsMain").psEntry("psGlass");
+        mpGlassProgram = Program::create(mpDevice, glassDesc, mpScene->getSceneDefines());
+        mpGlassVars = ProgramVars::create(mpDevice, mpGlassProgram->getReflector());
+        mpGlassState = GraphicsState::create(mpDevice);
+        mpGlassState->setProgram(mpGlassProgram);
+        mpGlassState->setFbo(mpFbo);
+        mpGlassState->setRasterizerState(mpRasterState);
+        DepthStencilState::Desc glassDepth;
+        glassDepth.setDepthEnabled(true).setDepthWriteMask(true);
+        mpGlassState->setDepthStencilState(DepthStencilState::create(glassDepth));
+        mpOpaqueResolvePass = ComputePass::create(mpDevice,
+            "RenderPasses/AdaptiveSHDemo/ResolveGlassBackground.cs.slang", "main");
 
         const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
         if (mpScene->useEmissiveLights())

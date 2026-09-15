@@ -38,6 +38,7 @@ struct TexelSample
 {
     float3 posW;
     float3 normalW;
+    float3 faceNormalW; // Geometric front-side normal, separate from smooth shading.
     uint texelIndex; // Flat index into gIrradianceAccum
 };
 
@@ -46,6 +47,14 @@ struct TriangleLightmapUV
     float2 uv0;
     float2 uv1;
     float2 uv2;
+};
+
+// Sparse readback at seams only; never retain complete atlas pages on the CPU.
+struct SeamTexel
+{
+    float4 lighting;
+    float4 normalCoverage;
+    uint2 owner; // Original instance and triangle, valid only when covered.
 };
 
 END_NAMESPACE_FALCOR

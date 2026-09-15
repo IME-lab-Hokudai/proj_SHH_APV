@@ -42,8 +42,8 @@
 #include "ProbeSamplingData.slang"
 #include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-const int numSamplesPerProbe = 4096;
-//const int numSamplesPerProbe = 1024;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 
@@ -68,8 +68,8 @@ const float verificationExtent = 0.25f;
 const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 const bool useIrradianceSpaceMetric = false;
-const bool useResidualCorrection = true;
-//const bool useResidualCorrection = false;
+//const bool useResidualCorrection = true;
+const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -83,9 +83,9 @@ const float residualConfidenceEps = 1e-3f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-const uint3 unifromGridSize = uint3(32, 32, 32);
+//const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-//const uint3 unifromGridSize = uint3(64, 64, 64);
+const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 
@@ -159,7 +159,10 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-const std::string saveToFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
+//const std::string saveToFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
+
+//const std::string saveToFileName = "DirectAbsErr2HessianMetricBistro.txt";
+const std::string saveToFileName = "Test.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -1327,9 +1330,9 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 );
 
             // Separate residual statistics log.
-            mAdaptiveProbeVolume->writeResidualPaperStatsLog(
-                residualLogFileName
-            );
+            //mAdaptiveProbeVolume->writeResidualPaperStatsLog(
+            //    residualLogFileName
+            //);
 
             std::string residualMainStatsFileName =
                 replaceExtensionOrAppend(
@@ -1343,23 +1346,23 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     "_ResidualMainStats.csv"
                 );
 
-            mAdaptiveProbeVolume->writeResidualMainStatsLog(
-                residualMainStatsFileName
-            );
+            //mAdaptiveProbeVolume->writeResidualMainStatsLog(
+            //    residualMainStatsFileName
+            //);
 
-            mAdaptiveProbeVolume->exportResidualMainStatsCSV(
-                residualMainStatsCsvFileName
-            );
-            // Separate residual CSV outputs.
-            mAdaptiveProbeVolume->exportResidualPaperStatsCSV(
-                residualSummaryCsvFileName,
-                residualLevelCsvFileName
-            );
+            //mAdaptiveProbeVolume->exportResidualMainStatsCSV(
+            //    residualMainStatsCsvFileName
+            //);
+            //// Separate residual CSV outputs.
+            //mAdaptiveProbeVolume->exportResidualPaperStatsCSV(
+            //    residualSummaryCsvFileName,
+            //    residualLevelCsvFileName
+            //);
 
 
-            logInfo("Wrote residual statistics log: " + residualLogFileName);
-            logInfo("Wrote residual summary CSV: " + residualSummaryCsvFileName);
-            logInfo("Wrote residual by-level CSV: " + residualLevelCsvFileName);
+            //logInfo("Wrote residual statistics log: " + residualLogFileName);
+            //logInfo("Wrote residual summary CSV: " + residualSummaryCsvFileName);
+            //logInfo("Wrote residual by-level CSV: " + residualLevelCsvFileName);
 
             mAdaptiveProbeVolume->printDebugInfo(debugFileName);
             logInfo("Wrote hierarchy debug file: " + debugFileName);
@@ -1582,7 +1585,8 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     // 1. Initialize
            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-    const uint3 seedResolution = uint3(1, 1, 1);
+    //const uint3 seedResolution = uint3(1, 1, 1);
+    const uint3 seedResolution = uint3(2, 2, 2);
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
     //const uint3 seedResolution = uint3(16, 16, 16);
@@ -1610,8 +1614,24 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     const uint32_t kMaxCornersPerDispatch = 4096; // tune this
     //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
 
+    // 1. Allocate buffers OUTSIDE the loops based on max batch size
+    mpProbePosBuffer = mpDevice->createStructuredBuffer(
+        sizeof(float3), kMaxCornersPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal
+    );
+
+    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
+        sizeof(ProbeSampleData),
+        numSamplesPerProbe * kMaxCornersPerDispatch,
+        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+        MemoryType::DeviceLocal
+    );
+
+    std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * kMaxCornersPerDispatch);
+
     while (mAdaptiveProbeVolume->hasPendingBatch())
     {
+        static int count = 0;
+        count++;
         uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
 
         for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
@@ -1623,15 +1643,14 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
             uint32_t numProbes = (uint32_t)pendingProbePositions.size();
 
-            mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                sizeof(float3), numProbes, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal, pendingProbePositions.data()
-            );
+            // 2. Guard against zero probes
+            if (numProbes == 0) continue;
 
-            mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
-                sizeof(ProbeSampleData),
-                numSamplesPerProbe * numProbes,
-                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
-                MemoryType::DeviceLocal
+            // 3. Update existing buffer instead of creating a new one
+            mpProbePosBuffer->setBlob(
+                pendingProbePositions.data(),
+                0,
+                numProbes * sizeof(float3)
             );
 
             auto rtVar = mpRtVars->getRootVar();
@@ -1646,12 +1665,16 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
             mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
 
-            std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * numProbes);
+            // 4. Force execution to prevent TDR on heavy geometry
+            pRenderContext->submit(true);
+
             mpProbeSamplingResultBuffer->getBlob(
                 allProbeSamplingData.data(),
                 0,
                 numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
             );
+
+            // ... Keep your existing SH gradient/Hessian calculation loop here ...
 
             std::vector<std::vector<float3>> coeffsBatch(numProbes);
             std::vector<std::vector<GradSHCoeff>> gradsBatch(numProbes);

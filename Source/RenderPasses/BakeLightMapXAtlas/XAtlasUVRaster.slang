@@ -15,8 +15,11 @@ struct BakeVSOut
 {
     float3 posW : POSW;
     float3 normalW : NORMAL;
+    float4 tangentW : TANGENT;
+    float2 texC : TEXCRD;
     float4 posH : SV_POSITION;
     nointerpolation uint instanceID : INSTANCE_ID;
+    nointerpolation uint triangleID : TRIANGLE_ID;
 };
 
 struct PSOut
@@ -24,6 +27,7 @@ struct PSOut
     float4 posW : SV_Target0;
     float4 normW : SV_Target1;
     float4 filterGuide : SV_Target2;
+    uint triangleID : SV_Target3;
 };
 
 BakeVSOut vsMain(uint vertexID : SV_VertexID)
@@ -39,6 +43,7 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
 
     const uint sourceTriangleID =
         gTriangleIDs[localTriangleID];
+    o.triangleID = sourceTriangleID;
 
     GeometryInstanceID instanceID =
         { sourceInstanceID };
@@ -75,6 +80,11 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
             vertex.normal
         );
 
+    // Material UVs and tangent handedness are independent of xatlas UVs.
+    // Match Scene.Raster.defaultVS() when transforming the source tangent.
+    o.tangentW = float4(mul((float3x3)worldMat, vertex.tangent.xyz), vertex.tangent.w);
+    o.texC = vertex.texCrd;
+
     const TriangleLightmapUV triUV =
         gTriangleUVs[localTriangleID];
 
@@ -93,35 +103,45 @@ BakeVSOut vsMain(uint vertexID : SV_VertexID)
     return o;
 }
 
-//PSOut psMain(BakeVSOut pin)
-//{
-//    PSOut o;
-//    o.posW = float4(pin.posW, 1.f);
-//    o.normW = float4(normalize(pin.normalW), 1.f);
-//    return o;
-//}
-
 PSOut psMain(BakeVSOut pin)
 {
     PSOut o;
 
-    float3 N = normalize(pin.normalW);
+    // Preserve smooth interpolation; use the mesh front side, never the camera,
+    // to orient the receiver. Falcor accounts for the mesh winding convention.
+    GeometryInstanceID instanceID = { pin.instanceID };
+    float3 Ng = gScene.getFaceNormalW(instanceID, pin.triangleID);
+    float normalLengthSquared = dot(pin.normalW, pin.normalW);
+    float3 N = normalLengthSquared > 1e-20f ? pin.normalW * rsqrt(normalLengthSquared) : Ng;
+    if (dot(N, Ng) < 0.f) N = -N;
 
-    // Current camera is inside the room, so for a visible interior-facing
-    // surface this should normally be positive.
-    float3 V = normalize(
-        gScene.camera.getPosition() - pin.posW
-    );
+    // Filter material textures over the atlas texel footprint.
+    let lod = ExplicitGradientTextureSampler(ddx(pin.texC), ddy(pin.texC));
+    VertexData v = {};
+    v.posW = pin.posW;
+    v.normalW = N;
+    v.faceNormalW = Ng;
+    v.tangentW = float4(pin.tangentW.xyz, sign(pin.tangentW.w));
+    v.texC = pin.texC;
 
-    float facing = dot(N, V);
+    // This bake stores front-side diffuse lighting. A fixed virtual view along
+    // Ng makes material evaluation independent of the camera. Do not enable
+    // the view-dependent AdjustShadingNormal hint for a baked receiver.
+    ShadingData sd = gScene.materials.prepareShadingData(v, gScene.getMaterialID(instanceID), Ng);
+    let mi = gScene.materials.getMaterialInstance(sd, lod, (uint)MaterialInstanceHints::None);
+    let properties = mi.getProperties(sd);
+    // For StandardMaterial, guideNormal is its final normal-mapped shading
+    // normal. Falcor handles texture encoding, sampling and the tangent frame.
+    float3 mappedNormal = properties.guideNormal;
+    float mappedLengthSquared = dot(mappedNormal, mappedNormal);
+    if (all(isfinite(mappedNormal)) && mappedLengthSquared > 1e-20f)
+        N = mappedNormal * rsqrt(mappedLengthSquared);
 
     o.posW = float4(pin.posW, 1.f);
 
-    // XYZ = exact normal that will be sent to the lightmap baker.
-    // W   = normal-camera facing:
-    //       > 0 : normal points toward camera
-    //       < 0 : visible surface is being viewed from its back side
-    o.normW = float4(N, facing);
+    o.normW = float4(N, 1.f);
+    // A compact ID lets extraction recover Ng once, without a full float4 MRT.
+    o.triangleID = pin.triangleID;
     // World-space texel footprint and exact instance identity for the blur.
     // Derivatives are evaluated during rasterization, before atlas gaps exist.
     o.filterGuide = float4(length(ddx(pin.posW)), length(ddy(pin.posW)),

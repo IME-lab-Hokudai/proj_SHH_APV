@@ -32,9 +32,12 @@
 #include "RenderGraph/RenderPassHelpers.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
+#include "Rendering/Lights/EnvMapSampler.h"
+#include "Utils/Sampling/SampleGenerator.h"
 #include "BakeDataStructures.slang"
 
 #include <filesystem>
+#include <array>
 #include <limits>
 #include <unordered_map>
 #include <vector>
@@ -100,6 +103,7 @@ private:
     struct CachedMeshGeometry
     {
         std::vector<float3> positions;
+        std::vector<float3> normals;
         std::vector<uint3> triangles;
         std::vector<uint32_t> indices;
     };
@@ -114,13 +118,9 @@ private:
     std::vector<uint32_t> collectTriangleInstanceIDs() const;
     void buildMeshGeometryCache(const std::vector<uint32_t>& instanceIDs);
 
-    // Build one xatlas object for the complete selected scene. This follows the
-    // official xatlas examples: add all meshes, ComputeCharts once, then
-    // PackCharts once. texelsPerUnit is left at 0 so xatlas estimates a density
-    // that approximately matches targetResolution.
+    // Pack once with fixed texel density and page resolution.
     std::vector<AtlasPageData> buildGlobalAtlas(
         const std::vector<uint32_t>& instanceIDs,
-        uint32_t targetResolution,
         float& outChosenTexelsPerUnit
     );
 
@@ -146,10 +146,27 @@ private:
         RenderContext* pRenderContext,
         AtlasPageData& page
     );
+    void rasterizeAtlasPage(RenderContext* pRenderContext, const AtlasPageData& page);
 
     void traceOneSample(RenderContext* pRenderContext);
     void filterAndSaveAtlasPage(RenderContext* pRenderContext, const AtlasPageData& page, const ref<Texture>& pRaw);
     void saveRawAtlasPage(const AtlasPageData& page, const ref<Texture>& pRaw) const;
+
+    struct SeamStencil
+    {
+        std::array<uint32_t, 4> nodes;
+        std::array<float, 4> weights;
+        uint32_t chartID;
+    };
+    struct SeamConstraint { SeamStencil a, b; };
+    struct SeamPageSamples
+    {
+        std::vector<uint2> pixels;
+        std::vector<uint32_t> nodes;
+    };
+    void prepareAtlasSeams(const std::vector<AtlasPageData>& pages);
+    void gatherAtlasSeams(RenderContext* pRenderContext, const AtlasPageData& page);
+    void stitchAndSaveAtlasSeams(RenderContext* pRenderContext, std::vector<AtlasPageData>& pages);
 
 private:
     ref<Scene> mpScene;
@@ -165,6 +182,13 @@ private:
     ref<ComputePass> mpNormalizePass;
     ref<ComputePass> mpBlurPass;
     ref<ComputePass> mpDilatePass;
+    ref<ComputePass> mpSeamGatherPass;
+    ref<ComputePass> mpSeamSpreadPass;
+    ref<ComputePass> mpSeamApplyPass;
+    std::vector<SeamConstraint> mSeamConstraints;
+    std::vector<SeamPageSamples> mSeamPages;
+    std::vector<SeamTexel> mSeamTexels;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> mSeamTriangleCharts;
 
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
@@ -172,11 +196,16 @@ private:
     EmissiveLightSamplerType mEmissiveSamplerType =
         EmissiveLightSamplerType::Uniform;
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler;
+    std::unique_ptr<EnvMapSampler> mpEnvMapSampler;
+    ref<SampleGenerator> mpSampleGenerator;
     mutable LightBVHSampler::Options mLightBVHOptions;
 
     ref<Buffer> mpTexelBuffer;
     ref<Buffer> mpCounterBuffer;
     ref<Buffer> mpAccumBuffer;
+    // Reused across atlas pages; keep raw, blur, and dilation outputs distinct.
+    ref<Texture> mpRawTex;
+    ref<Texture> mpFilteredTex;
     ref<Texture> mpResultTex;
 
     std::unordered_map<uint32_t, CachedMeshGeometry> mMeshGeometryCache;
@@ -192,29 +221,30 @@ private:
 
     // Atlas/bake settings.
     //
-    // xatlas packing mode:
-    //   resolution      = mAtlasResolution
-    //   texelsPerUnit   = 0
-    //
-    // Per xatlas documentation this asks xatlas to estimate the texel density
-    // so the complete input approximately matches the requested resolution,
-    // instead of enforcing a fixed density and creating many atlas pages.
-    uint32_t mAtlasResolution = 2048;
-    uint32_t mBakeSampleCount = 4096;
+    // Page size, page budget and fixed texel density are configured in the .cpp.
+    //uint32_t mBakeSampleCount = 4096;
+    uint32_t mBakeSampleCount = 1024;
+    //uint32_t mBakeSampleCount = 2048;
     //uint32_t mBakeSampleCount = 1;
 
+    // Falcor PathTracer bounce categories. The diffuse limit includes the
+    // virtual white diffuse receiver; transmission gets a separate budget.
+    uint32_t mMaxDiffuseBounces = 3;
+    uint32_t mMaxSpecularBounces = 3;
+    uint32_t mMaxTransmissionBounces = 10;
+    uint32_t mMaxNestedMaterials = 4;
+
     // Gaussian radius in atlas texels: 0 disables blur, 2 uses a 5x5 kernel.
-    uint32_t mBlurRadius = 6;
+    uint32_t mBlurRadius = 5;
     // Reuse saved raw lighting (or import an existing page on the first run).
     // This skips atlas rebuilding and ALL ray tracing. Keep the same scene/mapping.
-    // Enabled for the current smoothing experiment; set false for a fresh ray bake.
-    bool mFilterOnly = true;
+    // Fresh lighting is required after changing the transport implementation.
+    bool mFilterOnly = false;
     uint64_t mMappingFingerprint = 0;
 
     // Set false after a successful full atlas build to reuse
     // the configured atlas mapping and skip xatlas on later high-spp runs.
     bool mRebuildAtlas = true;
-    //bool mRebuildAtlas = false;
 
     // Temporary validation limit. Leave at max for the complete scene.
     uint32_t mTestInstanceCount = std::numeric_limits<uint32_t>::max();

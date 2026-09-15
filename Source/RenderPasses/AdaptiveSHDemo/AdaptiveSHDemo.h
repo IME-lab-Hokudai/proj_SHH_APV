@@ -97,6 +97,17 @@ private:
     ref<ProgramVars> mpStaticVars;
     ref<GraphicsState> mpGraphicsState;
     ref<RasterizerState> mpRasterState;
+    ref<Program> mpGlassProgram;
+    ref<ProgramVars> mpGlassVars;
+    ref<GraphicsState> mpGlassState;
+    ref<ComputePass> mpOpaqueResolvePass;
+    ref<Texture> mpOpaqueColor;
+    ref<Texture> mpOpaqueDepth;
+    bool mEnableGlass = true;
+    float mGlassRefractionStrength = 1.f;
+    ref<Buffer> mpLiquidMaterialMask;
+    bool mHasLiquidMaterials = false;
+    float mLiquidOpticalDepth = 0.035f; // Approximate travel distance in scene units (Bistro uses meters).
 
 
     ref<Fbo> mpFbo;

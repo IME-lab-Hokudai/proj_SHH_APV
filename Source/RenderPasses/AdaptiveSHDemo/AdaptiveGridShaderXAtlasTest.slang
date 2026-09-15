@@ -4,6 +4,23 @@ import Scene.Raster;
 
 // Lightmaps
 SamplerState gLinearSampler;
+Texture2D<float4> gOpaqueColor;
+Texture2D<float> gOpaqueDepth;
+StructuredBuffer<uint> gLiquidMaterials;
+cbuffer GlassCB
+{
+    uint gGlassEnabled;
+    uint gHasEnvironment;
+    float gSceneScale;
+    float gRefractionStrength;
+    uint gLiquidStage;
+    float gLiquidOpticalDepth;
+};
+
+float transmissionAmount(BasicMaterialData material)
+{
+    return saturate(float(material.specularTransmission) + float(material.diffuseTransmission));
+}
 
 // -----------------------------------------------------------------------------
 // Bistro xatlas lightmap test resources.
@@ -15,8 +32,7 @@ SamplerState gLinearSampler;
 //     page index
 //     xatlas UV at its three original triangle corners
 // -----------------------------------------------------------------------------
-Texture2D gBistroAtlasPage0;
-Texture2D gBistroAtlasPage1;
+Texture2D gBistroAtlasPages[10];
 
 StructuredBuffer<uint2>  gBistroInstanceRanges; // x = offset, y = triangleCount
 StructuredBuffer<uint>   gBistroPageIndices;    // UINT_MAX = not lightmapped
@@ -280,40 +296,10 @@ float3 shadeWithLightmap(float3 albedo, float3 irradiance)
 // Bistro xatlas runtime lookup helpers.
 // -----------------------------------------------------------------------------
 
-float3 computeWorldBarycentrics(
-    float3 p,
-    float3 p0,
-    float3 p1,
-    float3 p2
-)
-{
-    float3 e0 = p1 - p0;
-    float3 e1 = p2 - p0;
-    float3 v  = p  - p0;
-
-    float d00 = dot(e0, e0);
-    float d01 = dot(e0, e1);
-    float d11 = dot(e1, e1);
-    float d20 = dot(v,  e0);
-    float d21 = dot(v,  e1);
-
-    float denom = d00 * d11 - d01 * d01;
-
-    if (abs(denom) < 1e-20f)
-    {
-        return float3(1.0f, 0.0f, 0.0f);
-    }
-
-    float b1 = (d11 * d20 - d01 * d21) / denom;
-    float b2 = (d00 * d21 - d01 * d20) / denom;
-    float b0 = 1.0f - b1 - b2;
-
-    return float3(b0, b1, b2);
-}
-
 bool getBistroLightmapLookup(
     VSOut vsOut,
     uint triangleIndex,
+    float3 barycentrics,
     out uint pageIndex,
     out float2 lightmapUV
 )
@@ -352,35 +338,7 @@ bool getBistroLightmapLookup(
     const float4 uv01 = gBistroUV01[lookupIndex];
     const float2 uv2  = gBistroUV2[lookupIndex];
 
-    // Recover the original source triangle positions.
-    const uint3 vertexIndices =
-        gScene.getIndices(vsOut.instanceID, triangleIndex);
-
-    const StaticVertexData v0 =
-        gScene.getVertex(vertexIndices.x);
-    const StaticVertexData v1 =
-        gScene.getVertex(vertexIndices.y);
-    const StaticVertexData v2 =
-        gScene.getVertex(vertexIndices.z);
-
-    const float4x4 worldMat =
-        gScene.getWorldMatrix(vsOut.instanceID);
-
-    const float3 p0 =
-        mul(worldMat, float4(v0.position, 1.0f)).xyz;
-    const float3 p1 =
-        mul(worldMat, float4(v1.position, 1.0f)).xyz;
-    const float3 p2 =
-        mul(worldMat, float4(v2.position, 1.0f)).xyz;
-
-    const float3 bary =
-        computeWorldBarycentrics(
-            vsOut.posW,
-            p0,
-            p1,
-            p2
-        );
-
+    const float3 bary = barycentrics;
     const float2 uv0 = uv01.xy;
     const float2 uv1 = uv01.zw;
 
@@ -403,21 +361,22 @@ float3 sampleBistroAtlas(
 )
 {
     uv = saturate(uv);
+    if (pageIndex >= gBistroPageCount) return float3(0.f);
 
-    if (pageIndex == 0)
+    // Constant descriptor indices also handle pixels from different pages
+    // within the same wave without requiring non-uniform resource indexing.
+    switch (pageIndex)
     {
-        return gBistroAtlasPage0.Sample(
-            gLinearSampler,
-            uv
-        ).rgb;
-    }
-
-    if (pageIndex == 1)
-    {
-        return gBistroAtlasPage1.Sample(
-            gLinearSampler,
-            uv
-        ).rgb;
+    case 0: return gBistroAtlasPages[0].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 1: return gBistroAtlasPages[1].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 2: return gBistroAtlasPages[2].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 3: return gBistroAtlasPages[3].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 4: return gBistroAtlasPages[4].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 5: return gBistroAtlasPages[5].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 6: return gBistroAtlasPages[6].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 7: return gBistroAtlasPages[7].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 8: return gBistroAtlasPages[8].SampleLevel(gLinearSampler, uv, 0.f).rgb;
+    case 9: return gBistroAtlasPages[9].SampleLevel(gLinearSampler, uv, 0.f).rgb;
     }
 
     return float3(0.0f);
@@ -713,74 +672,198 @@ VSOut vsMain(VSIn vIn)
     return vsOut;
 }
 
-
-float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
+float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
 {
-    float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
-    ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
-    BasicMaterialData baseColorMat = gScene.materials.getBasicMaterialData(vsOut.materialID);
+    let materialLod = ExplicitGradientTextureSampler(ddx(vsOut.texC), ddy(vsOut.texC));
+    if (alphaTest(vsOut, triangleIndex, materialLod)) discard;
 
-    float4 baseColorSample = (float4)baseColorMat.baseColor;
-    float4 emissiveSample = float4(baseColorMat.emissive, 1.0f);
+    BasicMaterialData material = gScene.materials.getBasicMaterialData(vsOut.materialID);
+    if (gGlassEnabled != 0 && transmissionAmount(material) > 0.01f) discard;
+    let header = gScene.materials.getMaterialHeader(vsOut.materialID);
+    SamplerState materialSampler = gScene.materials.getTextureSampler(header.getDefaultTextureSamplerID());
+    float3 albedo = gScene.materials.sampleTexture(
+        material.texBaseColor, materialSampler, vsOut.texC,
+        (float4)material.baseColor, materialLod).rgb;
+    float3 emission = gScene.materials.sampleTexture(
+        material.texEmissive, materialSampler, vsOut.texC,
+        float4(material.emissive, 1.f), materialLod).rgb * material.emissiveFactor;
 
-    float2 quadUV = vsOut.texC;
-    quadUV.y = 1.0f - quadUV.y;
-
-    if (baseColorMat.texBaseColor.getMode() == TextureHandle::Mode::Texture) {
-        baseColorSample = gScene.materials.sampleTexture(baseColorMat.texBaseColor, gLinearSampler, vsOut.texC, 0.f);
-    }
-
-    if (baseColorMat.texEmissive.getMode() == TextureHandle::Mode::Texture) {
-        emissiveSample = gScene.materials.sampleTexture(baseColorMat.texEmissive, gLinearSampler, vsOut.texC, 0.f);
-    }
-
-    float3 albedo = baseColorSample.rgb;
-    float3 litColor = albedo;
-    // ------------------------------------------------------------------
-    // Bistro xatlas lightmap validation.
-    //
-    // Mapped triangles use the baked atlas.
-    // Unmapped geometry is intentionally shown very dark so the 48-instance
-    // validation subset is easy to identify visually.
-    // ------------------------------------------------------------------
-    uint lightmapPage = 0xffffffffu;
-    float2 lightmapUV = float2(0.0f);
-
-    if (getBistroLightmapLookup(
-        vsOut,
-        triangleIndex,
-        lightmapPage,
-        lightmapUV
-    ))
+    uint lightmapPage;
+    float2 lightmapUV;
+    float3 litColor;
+    if (getBistroLightmapLookup(vsOut, triangleIndex, barycentrics, lightmapPage, lightmapUV))
     {
-        const float3 irradiance =
-              M_PI*sampleBistroAtlas(
-                lightmapPage,
-                lightmapUV
-            );
-
-         litColor =
-             shadeWithLightmap(
-                 albedo,
-                 irradiance
-             );
-        //const float3 N =
-        //      sampleBistroAtlas(
-        //        lightmapPage,
-        //        lightmapUV
-        //    );
-        //litColor = N;
+        // Atlas stores E/pi; receiver albedo is applied here.
+        litColor = albedo * sampleBistroAtlas(lightmapPage, lightmapUV);
     }
     else
     {
-        // litColor = albedo * 0.05f;
-        litColor = float3(1, 0, 1);
+        litColor = float3(1.f, 0.f, 1.f); // Missing mapping.
     }
+    return float4(litColor + emission, 1.f);
+}
 
-     litColor += emissiveSample.rgb;
+bool projectGlassPoint(float3 p, out float2 uv, out float depth)
+{
+    float4 clip = mul(gScene.camera.getViewProj(), float4(p, 1.f));
+    if (clip.w <= 1e-5f) { uv = 0.f; depth = 0.f; return false; }
+    float3 ndc = clip.xyz / clip.w;
+    uv = ndc.xy * float2(0.5f, -0.5f) + 0.5f;
+    depth = ndc.z;
+    return all(uv > 0.f) && all(uv < 1.f) && depth > 0.f && depth < 1.f;
+}
 
+float3 glassBackground(float2 uv, float roughness)
+{
+    uint width, height;
+    gOpaqueColor.GetDimensions(width, height);
+    float2 texel = 1.f / float2(width, height);
+    float2 lo = 0.5f * texel, hi = 1.f - lo;
+    float2 radius = texel * (8.f * roughness * roughness);
+    float3 color = 2.f * gOpaqueColor.SampleLevel(gLinearSampler, clamp(uv, lo, hi), 0.f).rgb;
+    color += gOpaqueColor.SampleLevel(gLinearSampler, clamp(uv + float2(radius.x, 0.f), lo, hi), 0.f).rgb;
+    color += gOpaqueColor.SampleLevel(gLinearSampler, clamp(uv - float2(radius.x, 0.f), lo, hi), 0.f).rgb;
+    color += gOpaqueColor.SampleLevel(gLinearSampler, clamp(uv + float2(0.f, radius.y), lo, hi), 0.f).rgb;
+    color += gOpaqueColor.SampleLevel(gLinearSampler, clamp(uv - float2(0.f, radius.y), lo, hi), 0.f).rgb;
+    return color / 6.f;
+}
 
-    //litColor = shadingData.faceN;
-    //litColor = shadingData.posW;
-    return float4(litColor, 1.0f);
+float viewDistanceAt(float2 uv, float depth)
+{
+    float4 p = mul(gScene.camera.data.invViewProj, float4(uv * float2(2.f, -2.f) + float2(-1.f, 1.f), depth, 1.f));
+    return dot(p.xyz / p.w - gScene.camera.getPosition(), normalize(gScene.camera.data.cameraW));
+}
+
+bool traceGlassReflection(float3 origin, float3 direction, out float2 hitUV)
+{
+    uint width, height;
+    gOpaqueDepth.GetDimensions(width, height);
+    float previous = -1.f;
+    float previousT = 0.f;
+    hitUV = float2(0.f);
+    // Deterministic screen-space marching; no stochastic noise or history.
+    for (uint i = 1; i <= 24; ++i)
+    {
+        float s = float(i) / 24.f;
+        float t = gSceneScale * 0.75f * s * s;
+        float2 uv; float depth;
+        float3 p = origin + direction * t;
+        if (!projectGlassPoint(p, uv, depth)) return false;
+        uint2 pixel = min(uint2(uv * float2(width, height)), uint2(width - 1, height - 1));
+        float sceneDepth = gOpaqueDepth[pixel];
+        if (sceneDepth >= 1.f) { previous = -1.f; previousT = t; continue; }
+        float difference = viewDistanceAt(uv, depth) - viewDistanceAt(uv, sceneDepth);
+        if (previous < 0.f && difference >= 0.f && difference < 2.f * (t - previousT) + 0.002f * gSceneScale)
+        {
+            // Refine the crossing to reduce visible marching bands.
+            float lo = previousT, hi = t;
+            for (uint j = 0; j < 4; ++j)
+            {
+                float mid = 0.5f * (lo + hi);
+                float2 q; float z;
+                if (!projectGlassPoint(origin + direction * mid, q, z)) break;
+                uint2 qp = min(uint2(q * float2(width, height)), uint2(width - 1, height - 1));
+                if (z > gOpaqueDepth[qp]) hi = mid; else lo = mid;
+            }
+            float z;
+            return projectGlassPoint(origin + direction * (0.5f * (lo + hi)), hitUV, z);
+        }
+        previous = difference;
+        previousT = t;
+    }
+    return false;
+}
+
+float4 psGlass(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics) : SV_TARGET
+{
+    BasicMaterialData material = gScene.materials.getBasicMaterialData(vsOut.materialID);
+    float transmission = transmissionAmount(material);
+    if (transmission <= 0.01f) discard;
+    uint materialCount, stride;
+    gLiquidMaterials.GetDimensions(materialCount, stride);
+    bool isLiquid = vsOut.materialID < materialCount && gLiquidMaterials[vsOut.materialID] != 0;
+    if (isLiquid != (gLiquidStage != 0)) discard;
+    let lod = ExplicitGradientTextureSampler(ddx(vsOut.texC), ddy(vsOut.texC));
+    if (alphaTest(vsOut, triangleIndex, lod)) discard;
+    float3 V = normalize(gScene.camera.getPosition() - vsOut.posW);
+    ShadingData sd = prepareShadingData(vsOut, triangleIndex, V);
+    let mi = gScene.materials.getMaterialInstance(sd, lod, (uint)MaterialInstanceHints::None);
+    let properties = mi.getProperties(sd);
+    float3 N = properties.guideNormal;
+    if (!all(isfinite(N)) || dot(N, N) < 1e-12f) N = vsOut.normalW;
+    N = normalize(N);
+    if (dot(N, V) < 0.f) N = -N;
+    let header = gScene.materials.getMaterialHeader(vsOut.materialID);
+    SamplerState glassSampler = gScene.materials.getTextureSampler(header.getDefaultTextureSamplerID());
+    float4 spec = gScene.materials.sampleTexture(material.texSpecular, glassSampler, vsOut.texC, (float4)material.specular, lod);
+    float roughness = spec.g;
+#if MATERIAL_SYSTEM_HAS_SPEC_GLOSS_MATERIALS
+    if (material.getShadingModel() == ShadingModel::SpecGloss) roughness = 1.f - spec.a;
+#endif
+    roughness = saturate(roughness + float(material.diffuseTransmission));
+    float3 tint = saturate(gScene.materials.sampleTexture(material.texTransmission, glassSampler,
+        vsOut.texC, float4((float3)material.transmission, 1.f), lod).rgb);
+    // Wine/beer color is encoded as volume absorption in this scene, not as
+    // baseColor or transmission color. Use a stable approximate path length.
+    // This also restores absorption in the wine-bottle glass material.
+    tint *= exp(-max((float3)material.volumeAbsorption, 0.f) * gLiquidOpticalDepth);
+    float ior = max(float(header.getIoR()), 1.f);
+    float f0 = (ior - 1.f) / (ior + 1.f);
+    f0 *= f0;
+    float fresnel = f0 + (1.f - f0) * pow(1.f - saturate(dot(N, V)), 5.f);
+
+    uint width, height;
+    gOpaqueColor.GetDimensions(width, height);
+    float2 uv = vsOut.posH.xy / float2(width, height);
+    float3 incident = -V;
+    float3 transmitted = refract(incident, N, 1.f / ior);
+    float thickness = max(0.001f * gSceneScale, 0.003f * length(vsOut.posW - gScene.camera.getPosition()));
+    float2 refractedUV = uv, a, b;
+    float za, zb;
+    if (projectGlassPoint(vsOut.posW + transmitted * thickness, a, za) &&
+        projectGlassPoint(vsOut.posW + incident * thickness, b, zb))
+        refractedUV += gRefractionStrength * (a - b);
+    // Keep foreground objects from being pulled through the glass silhouette.
+    if (any(refractedUV <= 0.f) || any(refractedUV >= 1.f)) refractedUV = uv;
+    uint2 pixel = min(uint2(refractedUV * float2(width, height)), uint2(width - 1, height - 1));
+    if (gOpaqueDepth[pixel] < vsOut.posH.z) refractedUV = uv;
+    float3 background = glassBackground(refractedUV, roughness);
+    float3 reflectedDirection = reflect(incident, N);
+    uint page; float2 lmUV;
+    float3 incidentLight = float3(0.f);
+    if (getBistroLightmapLookup(vsOut, triangleIndex, barycentrics, page, lmUV))
+        incidentLight = sampleBistroAtlas(page, lmUV);
+    // The baked diffuse incident light is a low-frequency fallback for indoor
+    // regions absent from the screen-space reflection buffer.
+    float3 reflection = incidentLight;
+    if (gHasEnvironment != 0) reflection = gScene.envMap.eval(reflectedDirection, roughness * 6.f);
+    float2 reflectedUV;
+    if (traceGlassReflection(vsOut.posW, reflectedDirection, reflectedUV))
+    {
+        float edgeFade = saturate(15.f * min(min(reflectedUV.x, reflectedUV.y), min(1.f - reflectedUV.x, 1.f - reflectedUV.y)));
+        reflection = lerp(
+            reflection,
+            glassBackground(reflectedUV, roughness),
+            0.35f * edgeFade
+        );
+    }
+    float3 baseColor = gScene.materials.sampleTexture(material.texBaseColor, glassSampler, vsOut.texC, (float4)material.baseColor, lod).rgb;
+    float3 diffuse = baseColor * incidentLight;
+    // Appearance controls for the background demo.
+    float reflectionStrength = 0.45f;
+    float transmissionBrightness = isLiquid ? 0.85f : 0.92f;
+
+    float3 color =
+    reflectionStrength * fresnel * reflection
+    + (1.f - fresnel) * lerp(
+        diffuse,
+        transmissionBrightness * tint * background,
+        transmission
+    );
+    //float3 emission = gScene.materials.sampleTexture(material.texEmissive, glassSampler,
+    //    vsOut.texC, float4(material.emissive, 1.f), lod).rgb * material.emissiveFactor;
+    float3 emission = gScene.materials.sampleTexture(material.texEmissive, glassSampler,
+        vsOut.texC, float4(material.emissive, 1.f), lod).rgb;
+    // Background is already included, so CPU blending stays disabled.
+    return float4(max(color + emission, 0.f), 1.f);
 }

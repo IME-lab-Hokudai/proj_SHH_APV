@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -58,6 +59,9 @@ namespace
     const char kBlurFile[] = "RenderPasses/BakeLightMapXAtlas/BlurLightmap.cs.slang";
     const char kDilateFile[] = "RenderPasses/BakeLightMapXAtlas/DilateLightmap.cs.slang";
     constexpr uint32_t kAtlasPadding = 4;
+    constexpr uint32_t kAtlasPageResolution = 4096;
+    constexpr uint32_t kMaxAtlasPages = 10;
+    constexpr float kAtlasTexelsPerUnit = 120.f;
 
     // Scene output configuration. Page and debug images are derived from the
     // mapping filename and saved beside it, e.g. Room_AtlasMapping.bin produces
@@ -81,13 +85,6 @@ namespace
 
         return mappingPath.parent_path() /
             (sceneName + "_AtlasPage_" + std::to_string(pageIndex) + ".exr");
-    }
-
-    std::filesystem::path getAtlasDebugPath(uint32_t pageIndex, const char* channel)
-    {
-        const std::filesystem::path pagePath = getAtlasPagePath(pageIndex);
-        return pagePath.parent_path() /
-            ("DEBUG_" + pagePath.stem().string() + "_" + channel + ".exr");
     }
 
     std::filesystem::path getAtlasRawPath(uint32_t pageIndex)
@@ -226,6 +223,11 @@ BakeLightMapXAtlas::BakeLightMapXAtlas(
 {
     mBlurRadius = std::min(props.get<uint32_t>("blurRadius", mBlurRadius), 8u);
     mFilterOnly = props.get<bool>("filterOnly", mFilterOnly);
+    mRebuildAtlas = props.get<bool>("rebuildAtlas", mRebuildAtlas);
+    mMaxDiffuseBounces = std::clamp(props.get<uint32_t>("maxDiffuseBounces", mMaxDiffuseBounces), 1u, 64u);
+    mMaxSpecularBounces = std::min(props.get<uint32_t>("maxSpecularBounces", mMaxSpecularBounces), 64u);
+    mMaxTransmissionBounces = std::min(props.get<uint32_t>("maxTransmissionBounces", mMaxTransmissionBounces), 64u);
+    mMaxNestedMaterials = std::clamp(props.get<uint32_t>("maxNestedMaterials", mMaxNestedMaterials), 2u, 16u);
 }
 
 Properties BakeLightMapXAtlas::getProperties() const
@@ -233,6 +235,11 @@ Properties BakeLightMapXAtlas::getProperties() const
     Properties props;
     props["blurRadius"] = mBlurRadius;
     props["filterOnly"] = mFilterOnly;
+    props["rebuildAtlas"] = mRebuildAtlas;
+    props["maxDiffuseBounces"] = mMaxDiffuseBounces;
+    props["maxSpecularBounces"] = mMaxSpecularBounces;
+    props["maxTransmissionBounces"] = mMaxTransmissionBounces;
+    props["maxNestedMaterials"] = mMaxNestedMaterials;
     return props;
 }
 
@@ -310,10 +317,10 @@ void BakeLightMapXAtlas::execute(
 
         logInfo(
             "Starting global xatlas build: instances={} / {} "
-            "targetResolution={} automaticTexelDensity=true.",
+            "pageResolution={} automaticTexelDensity=true.",
             instanceIDs.size(),
             allInstanceIDs.size(),
-            mAtlasResolution
+            kAtlasPageResolution
         );
 
         // Build and finalize the complete persistent mapping BEFORE any RT
@@ -416,6 +423,8 @@ void BakeLightMapXAtlas::resetBakingState()
     mpTexelBuffer = nullptr;
     mpCounterBuffer = nullptr;
     mpAccumBuffer = nullptr;
+    mpRawTex = nullptr;
+    mpFilteredTex = nullptr;
     mpResultTex = nullptr;
 
     mpUVProgram = nullptr;
@@ -428,17 +437,28 @@ void BakeLightMapXAtlas::resetBakingState()
     mpNormalizePass = nullptr;
     mpBlurPass = nullptr;
     mpDilatePass = nullptr;
+    mpSeamGatherPass = nullptr;
+    mpSeamSpreadPass = nullptr;
+    mpSeamApplyPass = nullptr;
+    mSeamConstraints.clear();
+    mSeamPages.clear();
+    mSeamTexels.clear();
+    mSeamTriangleCharts.clear();
 
     mpRtVars = nullptr;
     mpRtProgram = nullptr;
 
     mpEmissiveSampler.reset();
+    mpEnvMapSampler.reset();
+    mpSampleGenerator = nullptr;
 }
 
 void BakeLightMapXAtlas::createUVRasterProgram()
 {
     ProgramDesc desc;
     desc.addShaderModules(mpScene->getShaderModules());
+    // UV rasterization now evaluates the scene's material shading normals.
+    desc.addTypeConformances(mpScene->getTypeConformances());
     desc.addShaderLibrary(kUVRasterFile)
         .vsEntry("vsMain")
         .psEntry("psMain");
@@ -501,40 +521,14 @@ void BakeLightMapXAtlas::createRayTracingProgram(
     ProgramDesc rtDesc;
     rtDesc.addShaderModules(mpScene->getShaderModules());
     rtDesc.addShaderLibrary(kBakingFile);
-    rtDesc.setMaxTraceRecursionDepth(3);
-    rtDesc.setMaxPayloadSize(128);
+    // Rays are traversed inline; material/path logic executes in rayGen.
+    rtDesc.setMaxTraceRecursionDepth(1);
+    rtDesc.setMaxPayloadSize(0);
     rtDesc.setMaxAttributeSize(8);
     rtDesc.addTypeConformances(mpScene->getTypeConformances());
 
-    ref<RtBindingTable> sbt = RtBindingTable::create(
-        2,
-        2,
-        mpScene->getGeometryCount()
-    );
-
+    ref<RtBindingTable> sbt = RtBindingTable::create(0, 0, 0);
     sbt->setRayGen(rtDesc.addRayGen("rayGen"));
-    sbt->setMiss(0, rtDesc.addMiss("primaryMiss"));
-    sbt->setMiss(1, rtDesc.addMiss("shadowMiss"));
-
-    auto primaryHit =
-        rtDesc.addHitGroup("primaryClosestHit");
-    auto shadowHit =
-        rtDesc.addHitGroup("", "shadowAnyHit");
-
-    const auto triangleGeometryIDs =
-        mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh);
-
-    sbt->setHitGroup(
-        0,
-        triangleGeometryIDs,
-        primaryHit
-    );
-
-    sbt->setHitGroup(
-        1,
-        triangleGeometryIDs,
-        shadowHit
-    );
 
     const auto& pLights =
         mpScene->getILightCollection(pRenderContext);
@@ -576,32 +570,53 @@ void BakeLightMapXAtlas::createRayTracingProgram(
         default:
             FALCOR_THROW("Unknown emissive light sampler type.");
         }
+        mpEmissiveSampler->update(pRenderContext, pLights);
     }
 
-    mpRtProgram = Program::create(
-        mpDevice,
-        rtDesc,
-        mpScene->getSceneDefines()
-    );
+    if (mpScene->useEnvLight())
+        mpEnvMapSampler = std::make_unique<EnvMapSampler>(mpDevice, mpScene->getEnvMap());
+    mpSampleGenerator = SampleGenerator::create(mpDevice, SAMPLE_GENERATOR_UNIFORM);
 
-    if (mpEmissiveSampler)
-    {
-        mpRtProgram->addDefines(
-            mpEmissiveSampler->getDefines()
-        );
-    }
+    // Specialize the original PathTracer module for an offline diffuse bake.
+    // These names match PathTracer::StaticParams::getDefines(), including
+    // Falcor's spelling of MAX_TRANSMISSON_BOUNCES.
+    DefineList defines = mpScene->getSceneDefines();
+    defines.add(mpSampleGenerator->getDefines());
+    if (mpEmissiveSampler) defines.add(mpEmissiveSampler->getDefines());
+    defines.add("SAMPLES_PER_PIXEL", "1");
+    defines.add("MAX_SURFACE_BOUNCES", std::to_string(mMaxDiffuseBounces + mMaxSpecularBounces + mMaxTransmissionBounces));
+    defines.add("MAX_DIFFUSE_BOUNCES", std::to_string(mMaxDiffuseBounces));
+    defines.add("MAX_SPECULAR_BOUNCES", std::to_string(mMaxSpecularBounces));
+    defines.add("MAX_TRANSMISSON_BOUNCES", std::to_string(mMaxTransmissionBounces));
+    defines.add("INTERIOR_LIST_SLOT_COUNT", std::to_string(mMaxNestedMaterials));
+    defines.add("USE_BSDF_SAMPLING", "1");
+    defines.add("USE_NEE", "1");
+    defines.add("USE_MIS", "1");
+    defines.add("MIS_HEURISTIC", "0"); // Falcor's default: balance heuristic.
+    defines.add("MIS_POWER_EXPONENT", "2.0");
+    defines.add("USE_RUSSIAN_ROULETTE", "0");
+    defines.add("USE_ALPHA_TEST", "1");
+    defines.add("USE_LIGHTS_IN_DIELECTRIC_VOLUMES", "0");
+    defines.add("DISABLE_CAUSTICS", "0");
+    defines.add("ADJUST_SHADING_NORMALS", "0");
+    defines.add("GBUFFER_ADJUST_SHADING_NORMALS", "0");
+    defines.add("PRIMARY_LOD_MODE", "0"); // Mip0; no camera derivatives in a bake.
+    defines.add("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
+    defines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+    defines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+    defines.add("USE_CURVES", mpScene->hasGeometryType(Scene::GeometryType::Curve) ? "1" : "0");
+    defines.add("USE_SDF_GRIDS", mpScene->hasGeometryType(Scene::GeometryType::SDFGrid) ? "1" : "0");
+    defines.add("USE_HAIR_MATERIAL", mpScene->getMaterialCountByType(MaterialType::Hair) > 0u ? "1" : "0");
+    defines.add("USE_VIEW_DIR", "0");
+    defines.add("USE_RTXDI", "0");
+    defines.add("USE_SER", "0");
+    defines.add("COLOR_FORMAT", "0"); // RGBA32F.
+    defines.add("OUTPUT_GUIDE_DATA", "0");
+    defines.add("OUTPUT_NRD_DATA", "0");
+    defines.add("OUTPUT_NRD_ADDITIONAL_DATA", "0");
+    defines.add("USE_NRD_DEMODULATION", "0");
 
-    DefineList lightDefines;
-    lightDefines.add(
-        "USE_ANALYTIC_LIGHTS",
-        mpScene->useAnalyticLights() ? "1" : "0"
-    );
-    lightDefines.add(
-        "USE_EMISSIVE_LIGHTS",
-        mpScene->useEmissiveLights() ? "1" : "0"
-    );
-
-    mpRtProgram->addDefines(lightDefines);
+    mpRtProgram = Program::create(mpDevice, rtDesc, defines);
 
     mpRtVars = RtProgramVars::create(
         mpDevice,
@@ -758,15 +773,11 @@ void BakeLightMapXAtlas::buildMeshGeometryCache(
 std::vector<BakeLightMapXAtlas::AtlasPageData>
 BakeLightMapXAtlas::buildGlobalAtlas(
     const std::vector<uint32_t>& instanceIDs,
-    uint32_t targetResolution,
     float& outChosenTexelsPerUnit
 )
 {
     if (instanceIDs.empty())
         FALCOR_THROW("Cannot build xatlas from an empty instance list.");
-
-    if (targetResolution == 0)
-        FALCOR_THROW("xatlas target resolution must be greater than zero.");
 
     struct InputMeshInfo
     {
@@ -849,12 +860,7 @@ BakeLightMapXAtlas::buildGlobalAtlas(
             cacheIt->second;
 
         // -------------------------------------------------------------
-        // Transform this particular INSTANCE to world space before giving
-        // its geometry to xatlas.
-        //
-        // geometry.positions is mesh-local.
-        // globalMatrices[instance.globalMatrixID] is the same world
-        // transform Falcor associates with this GeometryInstanceData.
+        // Use this instance's world-space positions for uniform texel density.
         // -------------------------------------------------------------
         const float4x4& worldMat =
             globalMatrices[instance.globalMatrixID];
@@ -881,8 +887,7 @@ BakeLightMapXAtlas::buildGlobalAtlas(
         }
 
         // -------------------------------------------------------------
-        // Same topology/indices as before, only geometry metric supplied
-        // to xatlas is now the actual transformed instance geometry.
+        // Submit the original mesh topology with world-space positions.
         // -------------------------------------------------------------
         xatlas::MeshDecl meshDecl{};
 
@@ -954,25 +959,14 @@ BakeLightMapXAtlas::buildGlobalAtlas(
 
     logInfo(
         "xatlas global ComputeCharts complete. Starting PackCharts() "
-        "with targetResolution={} and automatic texel density...",
-        targetResolution
+        "with pageResolution={} and texel density={}...",
+        kAtlasPageResolution, kAtlasTexelsPerUnit
     );
 
-    // -----------------------------------------------------------------
-    // Important xatlas mode.
-    //
-    // xatlas documentation:
-    // - texelsPerUnit == 0 asks xatlas to estimate the density.
-    // - resolution != 0 provides the resolution that estimate should
-    //   approximately match.
-    //
-    // This is fundamentally different from our old fixed-density mode
-    // (resolution > 0 AND texelsPerUnit > 0), which explicitly allowed
-    // xatlas to create many fixed-resolution sub-atlases.
-    // -----------------------------------------------------------------
+    // Pack once at a fixed density and page resolution.
     xatlas::PackOptions packOptions{};
-    packOptions.resolution = targetResolution;
-    packOptions.texelsPerUnit = 0.0f;
+    packOptions.resolution = kAtlasPageResolution;
+    packOptions.texelsPerUnit = kAtlasTexelsPerUnit;
 
     // Keep lightmap-safe sampling margins.
     packOptions.padding = kAtlasPadding;
@@ -990,6 +984,21 @@ BakeLightMapXAtlas::buildGlobalAtlas(
     packOptions.rotateCharts = true;
 
     xatlas::PackCharts(atlas, packOptions);
+
+    if (atlas->atlasCount > kMaxAtlasPages)
+    {
+        const uint32_t requiredPages = atlas->atlasCount;
+        xatlas::Destroy(atlas);
+        FALCOR_THROW("xatlas requires {} pages of {}x{} at density {}, but this demo supports at most {}. "
+            "Density was not reduced and the existing mapping was not replaced.",
+            requiredPages, kAtlasPageResolution, kAtlasPageResolution, kAtlasTexelsPerUnit, kMaxAtlasPages);
+    }
+
+    if (atlas->width != kAtlasPageResolution || atlas->height != kAtlasPageResolution)
+    {
+        xatlas::Destroy(atlas);
+        FALCOR_THROW("xatlas fixed-size packing did not produce {}x{} pages.", kAtlasPageResolution, kAtlasPageResolution);
+    }
 
     if (atlas->meshCount != inputMeshes.size())
     {
@@ -1276,11 +1285,10 @@ void BakeLightMapXAtlas::buildAndSaveAtlasMapping(
     float chosenTexelsPerUnit = 0.f;
 
     // One global xatlas job, matching the official example structure:
-    // all inputs -> ComputeCharts once -> PackCharts once.
+    // all inputs -> ComputeCharts once -> estimate density -> fixed-size repack.
     std::vector<AtlasPageData> pages =
         buildGlobalAtlas(
             instanceIDs,
-            mAtlasResolution,
             chosenTexelsPerUnit
         );
 
@@ -1615,6 +1623,11 @@ void BakeLightMapXAtlas::releaseAtlasPageGpuBuffers(
     AtlasPageData& page
 )
 {
+    // Shader bindings also hold references to these page-specific buffers.
+    auto var = mpUVVars->getRootVar();
+    var["gInstanceIDs"] = ref<Buffer>();
+    var["gTriangleIDs"] = ref<Buffer>();
+    var["gTriangleUVs"] = ref<Buffer>();
     page.pInstanceIDBuffer = nullptr;
     page.pTriangleIDBuffer = nullptr;
     page.pTriangleUVBuffer = nullptr;
@@ -1626,6 +1639,8 @@ void BakeLightMapXAtlas::bakeSavedAtlasPages(
 {
     std::vector<AtlasPageData> pages =
         loadAtlasPagesFromMapping();
+
+    prepareAtlasSeams(pages);
 
     logInfo(
         "Starting lightmap bake from persistent mapping: pages={} "
@@ -1639,7 +1654,6 @@ void BakeLightMapXAtlas::bakeSavedAtlasPages(
         ++pageIndex)
     {
         AtlasPageData& page = pages[pageIndex];
-
         logInfo(
             "Starting bake for atlas page {}/{} (globalPage={} triangles={})...",
             pageIndex + 1,
@@ -1652,11 +1666,17 @@ void BakeLightMapXAtlas::bakeSavedAtlasPages(
         bakeAtlasPage(pRenderContext, page);
         releaseAtlasPageGpuBuffers(page);
 
-        // This page will never be needed again in this pass. Release its CPU
-        // triangle mapping too, so memory falls as the bake advances.
-        page.triangles.clear();
-        page.triangles.shrink_to_fit();
+        // All pages run in one frame. Reclaim deferred resources between pages
+        // instead of leaving their cleanup until the render pass returns.
+        mpDevice->wait();
+
+        // Retain CPU mapping for the seam correction geometry raster; GPU
+        // triangle buffers are still released between pages.
     }
+
+    // Both sides may live on different pages. Gather sparse seam samples during
+    // filtering, then reconcile them together once all pages have been saved.
+    stitchAndSaveAtlasSeams(pRenderContext, pages);
 
     logInfo(
         "Lightmap processing complete: pages={} tracedSamplesPerPage={}.",
@@ -1665,50 +1685,33 @@ void BakeLightMapXAtlas::bakeSavedAtlasPages(
     );
 }
 
-void BakeLightMapXAtlas::bakeAtlasPage(
-    RenderContext* pRenderContext,
-    AtlasPageData& page
-)
+void BakeLightMapXAtlas::rasterizeAtlasPage(RenderContext* pRenderContext, const AtlasPageData& page)
 {
-    if (page.width == 0 || page.height == 0)
-    {
-        FALCOR_THROW(
-            "Atlas page {} has invalid dimensions {}x{}.",
-            page.pageIndex,
-            page.width,
-            page.height
-        );
-    }
-
     mLightmapWidth = page.width;
     mLightmapHeight = page.height;
-
     // -----------------------------------------------------------------
     // UV-space G-buffer for this one physical xatlas page.
     // -----------------------------------------------------------------
-    ref<Texture> pPosTex =
-        mpDevice->createTexture2D(
-            mLightmapWidth,
-            mLightmapHeight,
-            ResourceFormat::RGBA32Float,
-            1,
-            1,
-            nullptr,
-            ResourceBindFlags::RenderTarget |
-            ResourceBindFlags::ShaderResource
-        );
-
-    ref<Texture> pNormTex =
-        mpDevice->createTexture2D(
-            mLightmapWidth,
-            mLightmapHeight,
-            ResourceFormat::RGBA32Float,
-            1,
-            1,
-            nullptr,
-            ResourceBindFlags::RenderTarget |
-            ResourceBindFlags::ShaderResource
-        );
+    // Fixed-size pages share one G-buffer. Clear it below before each raster.
+    if (!mpUVFbo ||
+        mpUVFbo->getColorTexture(0)->getWidth() != mLightmapWidth ||
+        mpUVFbo->getColorTexture(0)->getHeight() != mLightmapHeight)
+    {
+        mpUVFbo = Fbo::create(mpDevice);
+        for (uint32_t target = 0; target < 4; ++target)
+        {
+            // Target 3 stores a source triangle ID for geometric-normal extraction.
+            const auto format = target == 3 ? ResourceFormat::R32Uint : ResourceFormat::RGBA32Float;
+            auto pTexture = mpDevice->createTexture2D(
+                mLightmapWidth, mLightmapHeight, format, 1, 1, nullptr,
+                ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource
+            );
+            // Target 2: XY = world-space footprint, ZW = two 16-bit ID halves.
+            mpUVFbo->attachColorTarget(pTexture, target);
+        }
+    }
+    auto pPosTex = mpUVFbo->getColorTexture(0);
+    auto pNormTex = mpUVFbo->getColorTexture(1);
 
     pPosTex->setName(
         "XAtlasPage_Pos_" +
@@ -1718,16 +1721,6 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         "XAtlasPage_Normal_" +
         std::to_string(page.pageIndex)
     );
-
-    mpUVFbo = Fbo::create(mpDevice);
-    mpUVFbo->attachColorTarget(pPosTex, 0);
-    mpUVFbo->attachColorTarget(pNormTex, 1);
-    // XY = local world-space texel footprint, ZW = two exact 16-bit ID halves.
-    auto pFilterGuide = mpDevice->createTexture2D(
-        mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr,
-        ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource
-    );
-    mpUVFbo->attachColorTarget(pFilterGuide, 2);
 
     GraphicsState::Viewport viewport(
         0.f,
@@ -1789,21 +1782,6 @@ void BakeLightMapXAtlas::bakeAtlasPage(
             0
         );
 
-        pPosTex->captureToFile(
-            0,
-            0,
-            getAtlasDebugPath(page.pageIndex, "Pos"),
-            Bitmap::FileFormat::ExrFile,
-            Bitmap::ExportFlags::Uncompressed
-        );
-
-        pNormTex->captureToFile(
-            0,
-            0,
-            getAtlasDebugPath(page.pageIndex, "Normal"),
-            Bitmap::FileFormat::ExrFile,
-            Bitmap::ExportFlags::Uncompressed
-        );
     }
 
     logInfo(
@@ -1813,6 +1791,36 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         mLightmapHeight,
         rasterTriangleCount
     );
+
+}
+
+void BakeLightMapXAtlas::bakeAtlasPage(
+    RenderContext* pRenderContext,
+    AtlasPageData& page
+)
+{
+    if (page.width == 0 || page.height == 0)
+    {
+        FALCOR_THROW(
+            "Atlas page {} has invalid dimensions {}x{}.",
+            page.pageIndex,
+            page.width,
+            page.height
+        );
+    }
+
+    mLightmapWidth = page.width;
+    mLightmapHeight = page.height;
+
+    if (!mFilterOnly)
+    {
+        // PathState uses 12 bits per atlas pixel coordinate.
+        if (page.width > 4096 || page.height > 4096)
+            FALCOR_THROW("Falcor PathTracer baking supports atlas pages up to 4096x4096.");
+        mpRtVars->getRootVar()["PerFrameCB"]["pageIndex"] = page.pageIndex;
+    }
+
+    rasterizeAtlasPage(pRenderContext, page);
 
     // -----------------------------------------------------------------
     // Extract valid atlas texels.
@@ -1852,17 +1860,12 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     const uint32_t totalTexels =
         mLightmapWidth * mLightmapHeight;
 
-    mpTexelBuffer =
-        mpDevice->createStructuredBuffer(
-            sizeof(TexelSample),
-            totalTexels
-        );
+    if (!mpTexelBuffer || mpTexelBuffer->getElementCount() != totalTexels)
+        mpTexelBuffer = mpDevice->createStructuredBuffer(sizeof(TexelSample), totalTexels);
 
-    mpCounterBuffer =
-        mpDevice->createBuffer(
-            sizeof(uint32_t),
-            ResourceBindFlags::UnorderedAccess,
-            MemoryType::DeviceLocal
+    if (!mpCounterBuffer)
+        mpCounterBuffer = mpDevice->createBuffer(
+            sizeof(uint32_t), ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal
         );
 
     pRenderContext->clearUAV(
@@ -1877,6 +1880,9 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         mpUVFbo->getColorTexture(0);
     extractVar["gNormW"] =
         mpUVFbo->getColorTexture(1);
+    extractVar["gFilterGuide"] = mpUVFbo->getColorTexture(2);
+    extractVar["gTriangleID"] = mpUVFbo->getColorTexture(3);
+    mpScene->bindShaderData(extractVar["gScene"]);
     extractVar["gTexelSamples"] =
         mpTexelBuffer;
     extractVar["gCounter"] =
@@ -1920,11 +1926,8 @@ void BakeLightMapXAtlas::bakeAtlasPage(
 
     // TexelSample::texelIndex is the original atlas pixel index, so the
     // accumulation buffer must contain one element per atlas pixel.
-    mpAccumBuffer =
-        mpDevice->createStructuredBuffer(
-            sizeof(float4),
-            totalTexels
-        );
+    if (!mpAccumBuffer || mpAccumBuffer->getElementCount() != totalTexels)
+        mpAccumBuffer = mpDevice->createStructuredBuffer(sizeof(float4), totalTexels);
 
     pRenderContext->clearUAV(
         mpAccumBuffer->getUAV().get(),
@@ -1943,20 +1946,14 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     // -----------------------------------------------------------------
     // Normalize and save this physical page.
     // -----------------------------------------------------------------
-    mpResultTex =
-        mpDevice->createTexture2D(
-            mLightmapWidth,
-            mLightmapHeight,
-            ResourceFormat::RGBA32Float,
-            1,
-            1,
-            nullptr,
-            ResourceBindFlags::ShaderResource |
-            ResourceBindFlags::UnorderedAccess
+    if (!mpRawTex || mpRawTex->getWidth() != mLightmapWidth || mpRawTex->getHeight() != mLightmapHeight)
+        mpRawTex = mpDevice->createTexture2D(
+            mLightmapWidth, mLightmapHeight, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
         );
 
     pRenderContext->clearUAV(
-        mpResultTex->getUAV().get(),
+        mpRawTex->getUAV().get(),
         float4(0.f)
     );
 
@@ -1966,7 +1963,7 @@ void BakeLightMapXAtlas::bakeAtlasPage(
     normVar["gAccumBuffer"] =
         mpAccumBuffer;
     normVar["gOutput"] =
-        mpResultTex;
+        mpRawTex;
     normVar["CB"]["gTotalSamples"] =
         mCurrentSample;
     normVar["CB"]["gWidth"] =
@@ -1978,9 +1975,8 @@ void BakeLightMapXAtlas::bakeAtlasPage(
         mLightmapHeight
     );
 
-    const ref<Texture> pRaw = mpResultTex;
-    saveRawAtlasPage(page, pRaw);
-    filterAndSaveAtlasPage(pRenderContext, page, pRaw);
+    saveRawAtlasPage(page, mpRawTex);
+    filterAndSaveAtlasPage(pRenderContext, page, mpRawTex);
 }
 
 void BakeLightMapXAtlas::saveRawAtlasPage(const AtlasPageData& page, const ref<Texture>& pRaw) const
@@ -1996,28 +1992,32 @@ void BakeLightMapXAtlas::saveRawAtlasPage(const AtlasPageData& page, const ref<T
 void BakeLightMapXAtlas::filterAndSaveAtlasPage(
     RenderContext* pRenderContext, const AtlasPageData& page, const ref<Texture>& pRaw)
 {
-    auto makeOutput = [&]() {
-        return mpDevice->createTexture2D(page.width, page.height, ResourceFormat::RGBA32Float, 1, 1, nullptr,
-            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
+    auto ensureOutput = [&](ref<Texture>& pTexture) {
+        if (!pTexture || pTexture->getWidth() != page.width || pTexture->getHeight() != page.height)
+            pTexture = mpDevice->createTexture2D(page.width, page.height, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess);
     };
-    auto pFiltered = makeOutput();
+    ensureOutput(mpFilteredTex);
     auto blurVar = mpBlurPass->getRootVar();
     blurVar["gInput"] = pRaw;
     blurVar["gPosW"] = mpUVFbo->getColorTexture(0);
     blurVar["gNormW"] = mpUVFbo->getColorTexture(1);
     blurVar["gFilterGuide"] = mpUVFbo->getColorTexture(2);
-    blurVar["gOutput"] = pFiltered;
+    blurVar["gOutput"] = mpFilteredTex;
     blurVar["CB"]["gRadius"] = mBlurRadius;
     mpBlurPass->execute(pRenderContext, page.width, page.height);
 
-    mpResultTex = makeOutput();
+    ensureOutput(mpResultTex);
     auto dilateVar = mpDilatePass->getRootVar();
-    dilateVar["gInput"] = pFiltered;
+    dilateVar["gInput"] = mpFilteredTex;
     dilateVar["gOutput"] = mpResultTex;
     dilateVar["CB"]["gPadding"] = kAtlasPadding;
     mpDilatePass->execute(pRenderContext, page.width, page.height);
+    gatherAtlasSeams(pRenderContext, page);
     mpResultTex->captureToFile(0, 0, page.outputPath, Bitmap::FileFormat::ExrFile,
         Bitmap::ExportFlags::Uncompressed, false);
+    // In filter-only mode the input is loaded per page, not part of our cache.
+    blurVar["gInput"] = ref<Texture>();
     logInfo("Saved filtered atlas page '{}' (blur radius={}, padding={}).", page.outputPath, mBlurRadius, kAtlasPadding);
 }
 
@@ -2045,21 +2045,24 @@ void BakeLightMapXAtlas::traceOneSample(
         mCurrentSample;
     rtVar["PerFrameCB"]["numTexels"] =
         mNumExtractedTexels;
-    rtVar["PerFrameCB"]["bias"] =
-        0.01f;
+    rtVar["PerFrameCB"]["atlasWidth"] = mLightmapWidth;
 
+    auto tracerVar = rtVar["gPathTracer"];
+    tracerVar["params"]["lodBias"] = 0.f;
+    tracerVar["params"]["specularRoughnessThreshold"] = 0.25f;
+    tracerVar["params"]["frameDim"] = uint2(mLightmapWidth, mLightmapHeight);
     if (mpEmissiveSampler)
-    {
-        mpEmissiveSampler->bindShaderData(
-            rtVar["PerFrameCB"]["emissiveSampler"]
-        );
-    }
+        mpEmissiveSampler->bindShaderData(tracerVar["emissiveSampler"]);
+    if (mpEnvMapSampler)
+        mpEnvMapSampler->bindShaderData(tracerVar["envMapSampler"]);
+    mpSampleGenerator->bindShaderData(rtVar);
 
-    mpScene->raytrace(
-        pRenderContext,
+    // Inline queries use Falcor's scene traversal without hit-group records.
+    mpScene->bindShaderDataForRaytracing(pRenderContext, rtVar["gScene"]);
+    pRenderContext->raytrace(
         mpRtProgram.get(),
-        mpRtVars,
-        uint3(mNumExtractedTexels, 1, 1)
+        mpRtVars.get(),
+        mNumExtractedTexels, 1, 1
     );
 
     ++mCurrentSample;
