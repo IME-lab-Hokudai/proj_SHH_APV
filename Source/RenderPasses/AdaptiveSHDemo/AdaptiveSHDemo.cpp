@@ -69,8 +69,8 @@
 //const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
-//const std::string loadFromFileName = "Test.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+const std::string loadFromFileName = "TestBistro.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -107,16 +107,16 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
-    //constexpr const char* kBistroAtlasMappingFile =
-    //    "Bistro_AtlasMapping.bin";
-
-    //constexpr const char* kBistroAtlasManifestFile =
-    //    "Bistro_AtlasManifest.txt";
     constexpr const char* kBistroAtlasMappingFile =
-        "Room_AtlasMapping.bin";
+        "Bistro_AtlasMapping.bin";
 
     constexpr const char* kBistroAtlasManifestFile =
-        "Room_AtlasManifest.txt";
+        "Bistro_AtlasManifest.txt";
+    //constexpr const char* kBistroAtlasMappingFile =
+    //    "Room_AtlasMapping.bin";
+
+    //constexpr const char* kBistroAtlasManifestFile =
+    //    "Room_AtlasManifest.txt";
     constexpr uint32_t kBistroTestMaxPages = 10;
 
 #pragma pack(push, 1)

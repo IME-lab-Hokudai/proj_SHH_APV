@@ -27,10 +27,6 @@ struct ProbeVisibilityQuery : IVisibilityQuery
     }
 };
 
-// Fixed offline budget per surface hit, independent of scene triangle count.
-// 1 uses Falcor's original hit/miss handlers; larger values use local multi-sample NEE.
-static const uint kProbeDirectLightSamples = 1;
-
 [shader("raygeneration")]
 void rayGen()
 {
@@ -57,7 +53,14 @@ void rayGen()
     bool firstRay = true;
     SceneRayQuery<kUseAlphaTest> sceneQuery;
     ProbeVisibilityQuery visibility;
-    const uint lightSampleCount = max(1u, kProbeDirectLightSamples);
+    // Match the old emissive-only tracer: N random light samples per hit for
+    // N active emissive triangles, not one guaranteed sample of each triangle.
+    // Keep this count fixed along the path for complementary MIS weights.
+#if USE_EMISSIVE_LIGHTS
+    const uint lightSampleCount = max(1u, gScene.lightCollection.getActiveTriangleCount());
+#else
+    const uint lightSampleCount = 1;
+#endif
 
     // The probe is a point measuring radiance, not a diffuse receiver.
     // Start at vertex zero with unit throughput and no cosine/PDF weighting.

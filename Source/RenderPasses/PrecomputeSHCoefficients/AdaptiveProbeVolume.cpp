@@ -2451,9 +2451,20 @@ void AdaptiveProbeVolume::startBuildSeeded(
     const ref<Scene>& pScene,
     uint3 seedResolution,
     float errorThreshold,
-    bool useRelativeError
+    bool useRelativeError,
+    const AABB* pGridBounds
 )
 {
+    AABB bounds = pGridBounds ? *pGridBounds : pScene->getSceneBounds();
+    for (uint32_t axis = 0; axis < 3; ++axis)
+    {
+        if (!std::isfinite(bounds.minPoint[axis]) || !std::isfinite(bounds.maxPoint[axis]) ||
+            bounds.minPoint[axis] >= bounds.maxPoint[axis])
+            FALCOR_THROW("Adaptive grid bounds must be finite with min < max on every axis.");
+        if (seedResolution[axis] == 0)
+            FALCOR_THROW("Adaptive grid seed resolution must be positive on every axis.");
+    }
+
     resetResidualPaperStats();
     uint32_t cellsPerAxis = 1u << mMaxLevel;
     uint64_t maxNodes = 0;
@@ -2476,24 +2487,31 @@ void AdaptiveProbeVolume::startBuildSeeded(
     mProbesPendingCheck.reserve(size_t(maxNodes));
     mCornerLookup.reserve(size_t(maxCorners * 2));
 
-    //mProbes.clear();
-    //mCorners.clear();
-    //mPendingNewCorners.clear();
-    //mProbesPendingCheck.clear();
-    //mCornerLookup.clear();
+    // A fresh build must not retain cells/corners from a previous grid volume.
+    mProbes.clear();
+    mCorners.clear();
+    mPendingNewCorners.clear();
+    mProbesPendingCheck.clear();
+    mCornerLookup.clear();
 
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
 
-    auto bounds = pScene->getSceneBounds();
-
-    float boundsScale = 0.98f;
-    float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
-    float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
-    halfExtent *= boundsScale;
-
-    float3 scaledMin = center - halfExtent;
-    float3 scaledMax = center + halfExtent;
+    // Preserve the existing inset only for automatic scene bounds.
+    // Explicit bounds define the exact region where probes are constructed;
+    // the scene acceleration structure used for tracing is unchanged.
+    float3 scaledMin = bounds.minPoint;
+    float3 scaledMax = bounds.maxPoint;
+    if (!pGridBounds)
+    {
+        const float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
+        const float3 halfExtent = 0.98f * 0.5f * (bounds.maxPoint - bounds.minPoint);
+        scaledMin = center - halfExtent;
+        scaledMax = center + halfExtent;
+    }
+    logInfo("[Adaptive grid] {} world bounds: min ({:.3f}, {:.3f}, {:.3f}), max ({:.3f}, {:.3f}, {:.3f}).",
+        pGridBounds ? "Manual" : "Automatic", scaledMin.x, scaledMin.y, scaledMin.z,
+        scaledMax.x, scaledMax.y, scaledMax.z);
 
     float3 totalSize = scaledMax - scaledMin;
     float3 cellSize = totalSize / float3(seedResolution);

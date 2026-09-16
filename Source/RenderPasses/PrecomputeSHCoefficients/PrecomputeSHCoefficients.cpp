@@ -41,8 +41,8 @@
 #include <cmath>
 #include "ProbeSamplingData.slang"
 #include <chrono>
-const int numSamplesPerProbe = 4096;
-//const int numSamplesPerProbe = 64;
+//const int numSamplesPerProbe = 4096;
+const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 
@@ -66,6 +66,16 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold =1.5f;//threshold for Erel
 const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
+
+// Adaptive grid placement in Falcor world coordinates (Y-up).
+// Bistro starting volume: central tables and the space above them for dynamic objects.
+// Set false to use the loaded scene bounds with the existing 0.98 inset.
+const bool kUseManualGridBounds = true;
+
+//manual bound for bistro scene
+const float3 kGridMin = float3(3.5f, 0.65f, -6.5f);
+const float3 kGridMax = float3(16.0f, 5.0f, 3.0f);
+
 const bool useIrradianceSpaceMetric = false;
 //const bool useResidualCorrection = true;
 const bool useResidualCorrection = false;
@@ -161,7 +171,8 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 //const std::string saveToFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricBistro.txt";
-const std::string saveToFileName = "Test.txt";
+//const std::string saveToFileName = "Test.txt";
+const std::string saveToFileName = "TestBistro.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -1571,6 +1582,17 @@ float PrecomputeSHCoefficients::calculateCoeffRPrime(std::vector<ProbeSampleData
 
 void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 {
+    using BuildClock = std::chrono::steady_clock;
+    const auto buildStart = BuildClock::now();
+    const auto elapsedSeconds = [&]()
+    {
+        return std::chrono::duration<double>(BuildClock::now() - buildStart).count();
+    };
+    uint32_t roundIndex = 0;
+    uint64_t completedCorners = 0;
+    logInfo("[Adaptive grid] Initializing build: {} directions/probe, threshold {} ({} error).",
+        numSamplesPerProbe, ErrorThreshold, useRelativeError ? "relative" : "absolute");
+
     // 1. Initialize
            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
@@ -1597,11 +1619,17 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
         residualConfidenceEps
     );
 
-    mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
+    const AABB gridBounds(kGridMin, kGridMax);
+    mAdaptiveProbeVolume->startBuildSeeded(
+        mpScene, seedResolution, ErrorThreshold, useRelativeError,
+        kUseManualGridBounds ? &gridBounds : nullptr
+    );
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
     const uint32_t kMaxCornersPerDispatch = 512; // tune this
     //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
+
+    logInfo("[Adaptive grid] Allocating buffers for batches of up to {} corners.", kMaxCornersPerDispatch);
 
     // 1. Allocate buffers OUTSIDE the loops based on max batch size
     mpProbePosBuffer = mpDevice->createStructuredBuffer(
@@ -1620,6 +1648,10 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     while (mAdaptiveProbeVolume->hasPendingBatch())
     {
         uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
+        ++roundIndex;
+        const uint32_t batchTotal = (totalPending + kMaxCornersPerDispatch - 1) / kMaxCornersPerDispatch;
+        logInfo("[Adaptive grid] Round {}: {} pending corners, {} batches, {} cells; elapsed {:.1f}s.",
+            roundIndex, totalPending, batchTotal, mAdaptiveProbeVolume->getProbes().size(), elapsedSeconds());
 
         for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
         {
@@ -1632,6 +1664,11 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
             // 2. Guard against zero probes
             if (numProbes == 0) continue;
+
+            const uint32_t batchIndex = batchStart / kMaxCornersPerDispatch + 1;
+            const auto batchBegin = BuildClock::now();
+            logInfo("[Adaptive grid] Round {}, batch {}/{}: tracing {} corners; elapsed {:.1f}s.",
+                roundIndex, batchIndex, batchTotal, numProbes, elapsedSeconds());
 
             // 3. Update existing buffer instead of creating a new one
             mpProbePosBuffer->setBlob(
@@ -1650,6 +1687,11 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 0,
                 numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
             );
+
+            const auto readbackEnd = BuildClock::now();
+            logInfo("[Adaptive grid] Round {}, batch {}/{}: trace/readback finished in {:.1f}s; computing SH and derivatives.",
+                roundIndex, batchIndex, batchTotal,
+                std::chrono::duration<double>(readbackEnd - batchBegin).count());
 
             // ... Keep your existing SH gradient/Hessian calculation loop here ...
 
@@ -1684,10 +1726,28 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
             }
 
             mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
+            completedCorners += numProbes;
+            logInfo("[Adaptive grid] Round {}, batch {}/{} done: {}/{} corners ({:.1f}% of this round), "
+                    "SH/store {:.1f}s; {} corners processed overall, elapsed {:.1f}s.",
+                roundIndex, batchIndex, batchTotal, batchStart + numProbes, totalPending,
+                100.0 * double(batchStart + numProbes) / double(totalPending),
+                std::chrono::duration<double>(BuildClock::now() - readbackEnd).count(),
+                completedCorners, elapsedSeconds());
         }
+        logInfo("[Adaptive grid] Round {}: evaluating subdivision; elapsed {:.1f}s.", roundIndex, elapsedSeconds());
         mAdaptiveProbeVolume->finishBatch();
         mpDevice->wait();
+        logInfo("[Adaptive grid] Round {} finished: {} cells, {} corners pending for the next round; elapsed {:.1f}s.",
+            roundIndex, mAdaptiveProbeVolume->getProbes().size(),
+            mAdaptiveProbeVolume->getPendingCornerCount(), elapsedSeconds());
     }
+
+    uint64_t leafCount = 0;
+    for (const auto& cell : mAdaptiveProbeVolume->getProbes())
+        if (cell.isLeaf) ++leafCount;
+    logInfo("[Adaptive grid] Construction complete: {} rounds, {} processed corners, {} cells ({} leaves), {:.1f}s. "
+            "Uploading and saving next.",
+        roundIndex, completedCorners, mAdaptiveProbeVolume->getProbes().size(), leafCount, elapsedSeconds());
 }
 
 void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderContext)
@@ -1713,7 +1773,11 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
     mAdaptiveProbeVolume->resetBuildStats();
 
     const uint3 seedResolution = uint3(1, 1, 1);
-    mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
+    const AABB gridBounds(kGridMin, kGridMax);
+    mAdaptiveProbeVolume->startBuildSeeded(
+        mpScene, seedResolution, ErrorThreshold, useRelativeError,
+        kUseManualGridBounds ? &gridBounds : nullptr
+    );
 
     // Reusable buffers.
     mpProbePosBuffer = mpDevice->createStructuredBuffer(

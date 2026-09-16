@@ -432,7 +432,8 @@ public:
         const ref<Scene>& pScene,
         uint3 seedResolution,
         float errorThreshold,
-        bool useRelativeError = false
+        bool useRelativeError = false,
+        const AABB* pGridBounds = nullptr // Optional world-space bounds, used exactly without shrinking.
     );
 
     void getPendingPositionsRange(
@@ -518,7 +519,7 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 6;
+    int mMaxLevel = 1;
     //int mMaxLevel = 5;
     //int mMaxLevel = 0;
     bool mUseRelativeError = false;
