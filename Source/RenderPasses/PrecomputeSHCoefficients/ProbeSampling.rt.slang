@@ -57,7 +57,8 @@ void rayGen()
     // N active emissive triangles, not one guaranteed sample of each triangle.
     // Keep this count fixed along the path for complementary MIS weights.
 #if USE_EMISSIVE_LIGHTS
-    const uint lightSampleCount = max(1u, gScene.lightCollection.getActiveTriangleCount());
+    //const uint lightSampleCount = max(1u, gScene.lightCollection.getActiveTriangleCount());
+    const uint lightSampleCount = 1;
 #else
     const uint lightSampleCount = 1;
 #endif

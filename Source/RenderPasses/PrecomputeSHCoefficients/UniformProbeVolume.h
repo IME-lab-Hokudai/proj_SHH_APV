@@ -13,7 +13,8 @@ public:
     // 1. Initialization
     // resolution = Number of CELLS (e.g. 16x16x16)
     // The actual number of probes will be (17x17x17)
-    void initGrid(const ref<Scene>& pScene, uint3 cellResolution);
+    // Explicit world-space bounds are used exactly, without the automatic inset.
+    void initGrid(const ref<Scene>& pScene, uint3 cellResolution, const AABB* pGridBounds = nullptr);
 
     // 2. Baking Interface
     void getProbePositions(std::vector<float3>& outPositions) const;

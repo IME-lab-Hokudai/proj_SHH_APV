@@ -67,7 +67,7 @@ const float verificationExtent = 0.25f;
 const float ErrorThreshold =2.0f;//threshold for Erel
 const bool useRelativeError = false;
 
-// Adaptive grid placement in Falcor world coordinates (Y-up).
+// Adaptive and uniform grid placement in Falcor world coordinates (Y-up).
 // Bistro starting volume: central tables and the space above them for dynamic objects.
 // Set false to use the loaded scene bounds with the existing 0.98 inset.
 const bool kUseManualGridBounds = true;
@@ -1390,7 +1390,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             using clock = std::chrono::high_resolution_clock;
             auto tStart = clock::now();
             // 1. Initialize Grid Structure (Calculates resolution and total probes)
-            mUniformProbeVolume->initGrid(mpScene, unifromGridSize);
+            const AABB gridBounds(kGridMin, kGridMax);
+            mUniformProbeVolume->initGrid(
+                mpScene, unifromGridSize, kUseManualGridBounds ? &gridBounds : nullptr
+            );
             uint3 probeCountDim = mUniformProbeVolume->getProbeCountDim(); // (N+1) corners
 
             // 2. Prepare reusable buffers for a single Row (X-dimension)
@@ -1687,7 +1690,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 0,
                 numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
             );
-
+            mpDevice->wait();
             const auto readbackEnd = BuildClock::now();
             logInfo("[Adaptive grid] Round {}, batch {}/{}: trace/readback finished in {:.1f}s; computing SH and derivatives.",
                 roundIndex, batchIndex, batchTotal,
@@ -1736,7 +1739,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
         }
         logInfo("[Adaptive grid] Round {}: evaluating subdivision; elapsed {:.1f}s.", roundIndex, elapsedSeconds());
         mAdaptiveProbeVolume->finishBatch();
-        mpDevice->wait();
+        
         logInfo("[Adaptive grid] Round {} finished: {} cells, {} corners pending for the next round; elapsed {:.1f}s.",
             roundIndex, mAdaptiveProbeVolume->getProbes().size(),
             mAdaptiveProbeVolume->getPendingCornerCount(), elapsedSeconds());

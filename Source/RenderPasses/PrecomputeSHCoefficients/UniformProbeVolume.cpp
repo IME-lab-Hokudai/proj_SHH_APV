@@ -1,5 +1,6 @@
 #include "UniformProbeVolume.h"
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 
@@ -13,30 +14,36 @@ UniformProbeVolume::UniformProbeVolume(ref<Device> pDevice)
 {
 }
 
-void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution)
+void UniformProbeVolume::initGrid(const ref<Scene>& pScene, uint3 cellResolution, const AABB* pGridBounds)
 {
+    const AABB bounds = pGridBounds ? *pGridBounds : pScene->getSceneBounds();
+    for (uint32_t axis = 0; axis < 3; ++axis)
+    {
+        if (!std::isfinite(bounds.minPoint[axis]) || !std::isfinite(bounds.maxPoint[axis]) ||
+            bounds.minPoint[axis] >= bounds.maxPoint[axis])
+            FALCOR_THROW("Uniform grid bounds must be finite with min < max on every axis.");
+        if (cellResolution[axis] == 0)
+            FALCOR_THROW("Uniform grid cell resolution must be positive on every axis.");
+    }
+
     mProbeResolution = cellResolution;
 
     // CORRECTION: Probes are at corners, so we need (N + 1)
     mCornerResolution = mProbeResolution + uint3(1, 1, 1);
     mTotalProbes = mCornerResolution.x * mCornerResolution.y * mCornerResolution.z;
 
-    auto bounds = pScene->getSceneBounds();
-
-    float boundsScale = 0.98f;
-
-    // Scale the scene bounds about its center.
-    float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
-    float3 halfExtent = 0.5f * (bounds.maxPoint - bounds.minPoint);
-    halfExtent *= boundsScale;
-
-    float3 scaledMin = center - halfExtent;
-    float3 scaledMax = center + halfExtent;
-
-    //mMinPoint = bounds.minPoint;
-    //mMaxPoint = bounds.maxPoint;
-    mMinPoint = scaledMin;
-    mMaxPoint = scaledMax;
+    mMinPoint = bounds.minPoint;
+    mMaxPoint = bounds.maxPoint;
+    if (!pGridBounds)
+    {
+        const float3 center = 0.5f * (bounds.minPoint + bounds.maxPoint);
+        const float3 halfExtent = 0.98f * 0.5f * (bounds.maxPoint - bounds.minPoint);
+        mMinPoint = center - halfExtent;
+        mMaxPoint = center + halfExtent;
+    }
+    logInfo("[Uniform grid] {} world bounds: min ({:.3f}, {:.3f}, {:.3f}), max ({:.3f}, {:.3f}, {:.3f}).",
+        pGridBounds ? "Manual" : "Automatic", mMinPoint.x, mMinPoint.y, mMinPoint.z,
+        mMaxPoint.x, mMaxPoint.y, mMaxPoint.z);
 
     // Cell size is based on the volume bounds divided by CELL count
     float3 dims = float3(std::max(1u, mProbeResolution.x), std::max(1u, mProbeResolution.y), std::max(1u, mProbeResolution.z));

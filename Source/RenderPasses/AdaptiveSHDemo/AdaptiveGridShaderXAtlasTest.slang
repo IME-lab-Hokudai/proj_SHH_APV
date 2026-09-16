@@ -864,7 +864,7 @@ float4 psGlass(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycent
         reflection = lerp(
             reflection,
             glassBackground(reflectedUV, roughness),
-            0.35f * edgeFade
+            0.8f * edgeFade
         );
     }
     float3 baseColor = gScene.materials.sampleTexture(material.texBaseColor, glassSampler, vsOut.texC, (float4)material.baseColor, lod).rgb;
