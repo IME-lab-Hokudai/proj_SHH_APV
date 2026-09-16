@@ -36,6 +36,8 @@
 #include "RenderGraph/RenderPassHelpers.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
+#include "Rendering/Lights/EnvMapSampler.h"
+#include "Utils/Sampling/SampleGenerator.h"
 
 using namespace Falcor;
 
@@ -90,19 +92,29 @@ private:
     // for probe sampling using ray tracing
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
+    void createProbeTracingProgram(RenderContext* pRenderContext);
+    void traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount);
+
+    // Same transport budgets as the atlas baker, without a virtual receiver bounce.
+    uint32_t mMaxDiffuseBounces = 3;
+    uint32_t mMaxSpecularBounces = 3;
+    uint32_t mMaxTransmissionBounces = 10;
+    uint32_t mMaxNestedMaterials = 4;
 
     bool mbFinishSHPrecompute = false;
     //bool mbFinishSHPrecompute = false;
     //std::string sceneName = "arcade";
     std::string sceneName = "cornell";
-    uint32_t mSampleIndex = 0xdeadbeef;
+    // Fixed across dispatches and builds; batching must not select random streams.
+    static constexpr uint32_t kProbeSamplingSeed = 0xdeadbeef;
 
     // emissive light sampler
     EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform; ///< Emissive light sampler to use for NEE.
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler; ///< Emissive light sampler or nullptr if not used.
     mutable LightBVHSampler::Options mLightBVHOptions; ///< Current options for the light BVH sampler. not used yet. just here to compile the code
     
-    //ref<SampleGenerator> mpSampleGenerator;            ///< GPU pseudo-random sample generator.
+    ref<SampleGenerator> mpSampleGenerator;
+    std::unique_ptr<EnvMapSampler> mpEnvMapSampler;
 
     bool mbVerify = false;
     std::vector<float3> verificationPositions;

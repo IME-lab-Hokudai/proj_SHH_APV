@@ -40,10 +40,9 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include <cmath>
 #include "ProbeSamplingData.slang"
-#include <Scene/Material/StandardMaterial.h>
 #include <chrono>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 64;
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 
@@ -1422,17 +1421,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     mpProbePosBuffer->setBlob(rowPositions.data(), 0, numProbesPerRow * sizeof(float3));
 
                     // C. Dispatch Ray Tracing for this row
-                    auto rtVar = mpRtVars->getRootVar();
-                    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-                    rtVar["gProbePositions"] = mpProbePosBuffer;
-                    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-                    rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-                    rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-
-                    if (mpEmissiveSampler)
-                        mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-                    mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbesPerRow, 1));
+                    traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbesPerRow);
                     pRenderContext->submit(true);
                     // D. Synchronize and Readback row results
                     mpProbeSamplingResultBuffer->getBlob(rowSamplingData.data(), 0, rowSamplingData.size() * sizeof(ProbeSampleData));
@@ -1585,8 +1574,8 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     // 1. Initialize
            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-    //const uint3 seedResolution = uint3(1, 1, 1);
-    const uint3 seedResolution = uint3(2, 2, 2);
+    const uint3 seedResolution = uint3(1, 1, 1);
+    //const uint3 seedResolution = uint3(2, 2, 2);
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
     //const uint3 seedResolution = uint3(16, 16, 16);
@@ -1611,7 +1600,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     mAdaptiveProbeVolume->startBuildSeeded(mpScene, seedResolution, ErrorThreshold, useRelativeError);
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
-    const uint32_t kMaxCornersPerDispatch = 4096; // tune this
+    const uint32_t kMaxCornersPerDispatch = 512; // tune this
     //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
 
     // 1. Allocate buffers OUTSIDE the loops based on max batch size
@@ -1630,8 +1619,6 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
     while (mAdaptiveProbeVolume->hasPendingBatch())
     {
-        static int count = 0;
-        count++;
         uint32_t totalPending = mAdaptiveProbeVolume->getPendingCornerCount();
 
         for (uint32_t batchStart = 0; batchStart < totalPending; batchStart += kMaxCornersPerDispatch)
@@ -1653,20 +1640,10 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 numProbes * sizeof(float3)
             );
 
-            auto rtVar = mpRtVars->getRootVar();
-            rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-            rtVar["gProbePositions"] = mpProbePosBuffer;
-            rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-            if (mpEmissiveSampler)
-                mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-            rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-            rtVar["PerFrameCB"]["numSamplePerProbe"] = numSamplesPerProbe;
-
-            mpScene->raytrace(pRenderContext, mpRtProgram.get(), mpRtVars, uint3(numSamplesPerProbe, numProbes, 1));
+            traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbes);
 
             // 4. Force execution to prevent TDR on heavy geometry
-            pRenderContext->submit(true);
+            //pRenderContext->submit(true);
 
             mpProbeSamplingResultBuffer->getBlob(
                 allProbeSamplingData.data(),
@@ -1709,6 +1686,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
             mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
         }
         mAdaptiveProbeVolume->finishBatch();
+        mpDevice->wait();
     }
 }
 
@@ -1799,23 +1777,7 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
                     numCorners * sizeof(float3)
                 );
 
-                auto rtVar = mpRtVars->getRootVar();
-                rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
-                rtVar["gProbePositions"] = mpProbePosBuffer;
-                rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
-
-                rtVar["PerFrameCB"]["numSamplePerProbe"] = stage.spp;
-                rtVar["PerFrameCB"]["sampleIndex"] = mSampleIndex++;
-
-                if (mpEmissiveSampler)
-                    mpEmissiveSampler->bindShaderData(rtVar["PerFrameCB"]["emissiveSampler"]);
-
-                mpScene->raytrace(
-                    pRenderContext,
-                    mpRtProgram.get(),
-                    mpRtVars,
-                    uint3(stage.spp, numCorners, 1)
-                );
+                traceProbeBatch(pRenderContext, stage.spp, numCorners);
 
                 mAdaptiveProbeVolume->recordTraceBatch(numCorners, stage.spp);
 
@@ -1998,10 +1960,154 @@ void PrecomputeSHCoefficients::renderUI(
     }
 }
 
+void PrecomputeSHCoefficients::createProbeTracingProgram(
+    RenderContext* pRenderContext
+)
+{
+    ProgramDesc rtDesc;
+    rtDesc.addShaderModules(mpScene->getShaderModules());
+    rtDesc.addShaderLibrary(kProbeSamplingFile);
+    // Rays are traversed inline; material/path logic executes in rayGen.
+    rtDesc.setMaxTraceRecursionDepth(1);
+    rtDesc.setMaxPayloadSize(0);
+    rtDesc.setMaxAttributeSize(8);
+    rtDesc.addTypeConformances(mpScene->getTypeConformances());
+
+    ref<RtBindingTable> sbt = RtBindingTable::create(0, 0, 0);
+    sbt->setRayGen(rtDesc.addRayGen("rayGen"));
+
+    const auto& pLights =
+        mpScene->getILightCollection(pRenderContext);
+
+    if (mpScene->useEmissiveLights())
+    {
+        FALCOR_ASSERT(
+            pLights &&
+            pLights->getActiveLightCount(pRenderContext) > 0
+        );
+
+        switch (mEmissiveSamplerType)
+        {
+        case EmissiveLightSamplerType::Uniform:
+            mpEmissiveSampler =
+                std::make_unique<EmissiveUniformSampler>(
+                    pRenderContext,
+                    pLights
+                );
+            break;
+
+        case EmissiveLightSamplerType::LightBVH:
+            mpEmissiveSampler =
+                std::make_unique<LightBVHSampler>(
+                    pRenderContext,
+                    pLights,
+                    mLightBVHOptions
+                );
+            break;
+
+        case EmissiveLightSamplerType::Power:
+            mpEmissiveSampler =
+                std::make_unique<EmissivePowerSampler>(
+                    pRenderContext,
+                    pLights
+                );
+            break;
+
+        default:
+            FALCOR_THROW("Unknown emissive light sampler type.");
+        }
+        mpEmissiveSampler->update(pRenderContext, pLights);
+    }
+
+    if (mpScene->useEnvLight())
+        mpEnvMapSampler = std::make_unique<EnvMapSampler>(mpDevice, mpScene->getEnvMap());
+    mpSampleGenerator = SampleGenerator::create(mpDevice, SAMPLE_GENERATOR_UNIFORM);
+
+    // Use the same Falcor transport configuration as the atlas baker.
+    // These names match PathTracer::StaticParams::getDefines(), including
+    // Falcor's spelling of MAX_TRANSMISSON_BOUNCES.
+    DefineList defines = mpScene->getSceneDefines();
+    defines.add(mpSampleGenerator->getDefines());
+    if (mpEmissiveSampler) defines.add(mpEmissiveSampler->getDefines());
+    defines.add("SAMPLES_PER_PIXEL", "1");
+    defines.add("MAX_SURFACE_BOUNCES", std::to_string(mMaxDiffuseBounces + mMaxSpecularBounces + mMaxTransmissionBounces));
+    defines.add("MAX_DIFFUSE_BOUNCES", std::to_string(mMaxDiffuseBounces));
+    defines.add("MAX_SPECULAR_BOUNCES", std::to_string(mMaxSpecularBounces));
+    defines.add("MAX_TRANSMISSON_BOUNCES", std::to_string(mMaxTransmissionBounces));
+    defines.add("INTERIOR_LIST_SLOT_COUNT", std::to_string(mMaxNestedMaterials));
+    defines.add("USE_BSDF_SAMPLING", "1");
+    defines.add("USE_NEE", "1");
+    defines.add("USE_MIS", "1");
+    defines.add("MIS_HEURISTIC", "0"); // Falcor's default: balance heuristic.
+    defines.add("MIS_POWER_EXPONENT", "2.0");
+    defines.add("USE_RUSSIAN_ROULETTE", "0");
+    defines.add("USE_ALPHA_TEST", "1");
+    defines.add("USE_LIGHTS_IN_DIELECTRIC_VOLUMES", "0");
+    defines.add("DISABLE_CAUSTICS", "0");
+    defines.add("ADJUST_SHADING_NORMALS", "0");
+    defines.add("GBUFFER_ADJUST_SHADING_NORMALS", "0");
+    defines.add("PRIMARY_LOD_MODE", "0"); // Mip0; probe rays have no camera derivatives.
+    defines.add("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
+    defines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+    defines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
+    defines.add("USE_CURVES", mpScene->hasGeometryType(Scene::GeometryType::Curve) ? "1" : "0");
+    defines.add("USE_SDF_GRIDS", mpScene->hasGeometryType(Scene::GeometryType::SDFGrid) ? "1" : "0");
+    defines.add("USE_HAIR_MATERIAL", mpScene->getMaterialCountByType(MaterialType::Hair) > 0u ? "1" : "0");
+    defines.add("USE_VIEW_DIR", "0");
+    defines.add("USE_RTXDI", "0");
+    defines.add("USE_SER", "0");
+    defines.add("COLOR_FORMAT", "0"); // RGBA32F.
+    defines.add("OUTPUT_GUIDE_DATA", "0");
+    defines.add("OUTPUT_NRD_DATA", "0");
+    defines.add("OUTPUT_NRD_ADDITIONAL_DATA", "0");
+    defines.add("USE_NRD_DEMODULATION", "0");
+
+    mpRtProgram = Program::create(mpDevice, rtDesc, defines);
+
+    mpRtVars = RtProgramVars::create(
+        mpDevice,
+        mpRtProgram,
+        sbt
+    );
+}
+
+void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount)
+{
+    if (samplesPerProbe == 0 || probeCount == 0) return;
+    const uint64_t pathCount = uint64_t(samplesPerProbe) * probeCount;
+    if (pathCount > (1u << 24))
+        FALCOR_THROW("Probe trace batch exceeds Falcor's 12-bit X/Y path ID capacity.");
+
+    auto rtVar = mpRtVars->getRootVar();
+    rtVar["gProbeDirSamples"] = mpProbeDirSamplesBuffer;
+    rtVar["gProbePositions"] = mpProbePosBuffer;
+    rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
+    rtVar["PerFrameCB"]["probeSamplingSeed"] = kProbeSamplingSeed;
+    rtVar["PerFrameCB"]["numSamplePerProbe"] = samplesPerProbe;
+
+    auto tracerVar = rtVar["gPathTracer"];
+    tracerVar["params"]["lodBias"] = 0.f;
+    tracerVar["params"]["specularRoughnessThreshold"] = 0.25f;
+    tracerVar["params"]["frameDim"] = uint2(4096u, uint32_t((pathCount + 4095u) / 4096u));
+    if (mpEmissiveSampler)
+        mpEmissiveSampler->bindShaderData(tracerVar["emissiveSampler"]);
+    if (mpEnvMapSampler)
+        mpEnvMapSampler->bindShaderData(tracerVar["envMapSampler"]);
+    mpSampleGenerator->bindShaderData(rtVar);
+
+    mpScene->bindShaderDataForRaytracing(pRenderContext, rtVar["gScene"]);
+    pRenderContext->raytrace(mpRtProgram.get(), mpRtVars.get(), samplesPerProbe, probeCount, 1);
+}
+
 void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     // Set new scene.
     mpScene = pScene;
+    mpRtVars = nullptr;
+    mpRtProgram = nullptr;
+    mpEmissiveSampler.reset();
+    mpEnvMapSampler.reset();
+    mpSampleGenerator = nullptr;
     if (mpScene)
     {
         
@@ -2079,107 +2185,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
                );
            }
 #endif
-            ProgramDesc rtProgDesc;
-            rtProgDesc.addShaderModules(mpScene->getShaderModules());
-            rtProgDesc.addShaderLibrary(kProbeSamplingFile);
-            rtProgDesc.setMaxTraceRecursionDepth(3); // 1 for calling TraceRay from RayGen, 1 for calling it from the
-                                                     // primary-ray ClosestHit shader for reflections, 1 for reflection ray
-                                                     // tracing a shadow ray
-            rtProgDesc.setMaxPayloadSize(128);        // The largest ray payload struct (PrimaryRayData) is 24 bytes. The payload size
-                                                     // should be set as small as possible for maximum performance.
-            rtProgDesc.setMaxAttributeSize(8);
-            // Add global type conformances.
-            rtProgDesc.addTypeConformances(mpScene->getTypeConformances());
-
-            ref<RtBindingTable> sbt = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
-            sbt->setRayGen(rtProgDesc.addRayGen("rayGen"));
-            sbt->setMiss(0, rtProgDesc.addMiss("primaryMiss"));
-             sbt->setMiss(1, rtProgDesc.addMiss("shadowMiss"));
-            auto primary = rtProgDesc.addHitGroup("primaryClosestHit");
-             auto shadow = rtProgDesc.addHitGroup("", "shadowAnyHit");
-
-            sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), primary);
-            sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), shadow);
-
-            const auto& pLights = mpScene->getILightCollection(pRenderContext); //REMARK weird design that light collection is createdupon first call to this.
-            if (mpScene->useEmissiveLights())
-            {
-                if (!mpEmissiveSampler)
-                {
-                    FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
-                    FALCOR_ASSERT(!mpEmissiveSampler);
-
-                    switch (mEmissiveSamplerType)
-                    {
-                        case EmissiveLightSamplerType::Uniform: // use uniform sampling as default for now
-                            mpEmissiveSampler =
-                                std::make_unique<EmissiveUniformSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                            break;
-                        case EmissiveLightSamplerType::LightBVH:
-                            mpEmissiveSampler = std::make_unique<LightBVHSampler>(
-                                pRenderContext, mpScene->getILightCollection(pRenderContext), mLightBVHOptions
-                            );
-                            break;
-                        case EmissiveLightSamplerType::Power:
-                            mpEmissiveSampler =
-                                std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene->getILightCollection(pRenderContext));
-                            break;
-                        default:
-                            FALCOR_THROW("Unknown emissive light sampler type");
-                    }
-                }
-            }
-
-           mpRtProgram = Program::create(mpDevice, rtProgDesc, mpScene->getSceneDefines());
-        
-            if (mpEmissiveSampler)
-            {
-                auto defines = mpEmissiveSampler->getDefines();
-                mpRtProgram->addDefines(defines);
-            }
-
-            DefineList lightRelatedDefines;
-            lightRelatedDefines.add("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
-            lightRelatedDefines.add("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
-
-            mpRtProgram->addDefines(lightRelatedDefines);
-
-            mpRtVars = RtProgramVars::create(mpDevice, mpRtProgram, sbt);
-            //REMARK :  set all materials to diffuse for SH testing
-            auto allMat = pScene->getMaterials();
-
-            for (auto& pMat : allMat)
-            {
-                // STEP 1: Handle the Base properties (Legacy & Common)
-                // Since StandardMaterial inherits BasicMaterial, this runs for EVERYONE.
-                auto pBasicMat = pMat->toBasicMaterial();
-
-                if (pBasicMat)
-                {
-                    // 1. Kill the Specular Color / Shininess
-                    // For Legacy OBJ: This makes it matte.
-                    // For PBR: This ensures the "F0" (Reflectivity at 0 degrees) is black.
-                    pBasicMat->setSpecularParams(float4(0.0f));
-
-                    // 2. Kill Transmission (Glass/Ghosting)
-                    pBasicMat->setTransmissionColor(float3(0.0f));
-                    pBasicMat->setSpecularTransmission(0.0f);
-                    pBasicMat->setDiffuseTransmission(0.0f);
-                }
-
-                // STEP 2: Handle the PBR-specific properties
-                // This ONLY runs if the material is actually the modern StandardMaterial type.
-                StandardMaterial* pStdMat = dynamic_cast<StandardMaterial*>(pMat.get());
-
-                if (pStdMat)
-                {
-                    // 3. Force PBR Roughness (The most important setting for modern renderers)
-                    pStdMat->setRoughness(1.0f);   // 1.0 = Chalk
-                    pStdMat->setMetallic(0.0f);    // 0.0 = Dielectric
-                    pStdMat->setSpecularTransmission(0.0f);
-                    pStdMat->setTransmissionColor(float3(0.0f));
-                }
-            }
+           createProbeTracingProgram(pRenderContext);
     }
 }
 

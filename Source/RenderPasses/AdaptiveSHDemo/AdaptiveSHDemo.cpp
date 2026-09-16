@@ -70,6 +70,7 @@
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+//const std::string loadFromFileName = "Test.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -95,7 +96,7 @@ AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : R
 {
     mEnableGlass = props.get<bool>("runtimeGlass", mEnableGlass);
     mGlassRefractionStrength = std::clamp(props.get<float>("glassRefraction", mGlassRefractionStrength), 0.f, 3.f);
-    mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 0.2f);
+    mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 10.0f);
     mpFbo = Fbo::create(mpDevice);
     Sampler::Desc samplerDesc;
     samplerDesc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
@@ -106,16 +107,16 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
-    constexpr const char* kBistroAtlasMappingFile =
-        "Bistro_AtlasMapping.bin";
-
-    constexpr const char* kBistroAtlasManifestFile =
-        "Bistro_AtlasManifest.txt";
     //constexpr const char* kBistroAtlasMappingFile =
-    //    "Room_AtlasMapping.bin";
+    //    "Bistro_AtlasMapping.bin";
 
     //constexpr const char* kBistroAtlasManifestFile =
-    //    "Room_AtlasManifest.txt";
+    //    "Bistro_AtlasManifest.txt";
+    constexpr const char* kBistroAtlasMappingFile =
+        "Room_AtlasMapping.bin";
+
+    constexpr const char* kBistroAtlasManifestFile =
+        "Room_AtlasManifest.txt";
     constexpr uint32_t kBistroTestMaxPages = 10;
 
 #pragma pack(push, 1)
@@ -1055,7 +1056,7 @@ bool AdaptiveSHDemo::onKeyEvent(
 void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     widget.checkbox("Runtime glass", mEnableGlass);
     widget.var("Glass refraction", mGlassRefractionStrength, 0.f, 3.f);
-    widget.var("Liquid color depth", mLiquidOpticalDepth, 0.f, 0.2f, 0.001f);
+    widget.var("Liquid color depth", mLiquidOpticalDepth, 0.f, 10.0f, 0.001f);
     widget.text("Loaded probe file: " + loadFromFileName);
 
     if (auto orbitGroup = widget.group("Camera Orbit", true))
@@ -1369,9 +1370,9 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 
-        //mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
-        //mAdaptiveProbeVolume->uploadToGPU();
-        //mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+        mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+        mAdaptiveProbeVolume->uploadToGPU();
+        mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
         mUniformProbeVolume->loadFromFile(loadFromFileName);

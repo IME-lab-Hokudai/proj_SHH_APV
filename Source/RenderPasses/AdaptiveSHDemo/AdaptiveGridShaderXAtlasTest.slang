@@ -677,6 +677,9 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentr
     let materialLod = ExplicitGradientTextureSampler(ddx(vsOut.texC), ddy(vsOut.texC));
     if (alphaTest(vsOut, triangleIndex, materialLod)) discard;
 
+    float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
+    ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
+
     BasicMaterialData material = gScene.materials.getBasicMaterialData(vsOut.materialID);
     if (gGlassEnabled != 0 && transmissionAmount(material) > 0.01f) discard;
     let header = gScene.materials.getMaterialHeader(vsOut.materialID);
@@ -698,7 +701,24 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentr
     }
     else
     {
-        litColor = float3(1.f, 0.f, 1.f); // Missing mapping.
+        // Geometry added after the atlas bake (for example, the test bunnies)
+        // has no xatlas entry. Shade it from the adaptive SH volume.
+        int probeIdx = traverseOctree(shadingData.posW);
+        if (probeIdx >= 0)
+        {
+            float3 finalSH[MAX_SH_BASIS];
+            fetchHermiteInterpolatedSH(probeIdx, shadingData.posW, finalSH);
+            float3 irradiance = max(
+                evaluateIrradiance(shadingData.frame.N, finalSH),
+                float3(0.f)
+            );
+            litColor = albedo * irradiance / M_PI;
+        }
+        else
+        {
+            // Preserve the diagnostic color for geometry outside the grid.
+            litColor = float3(1.f, 0.f, 1.f);
+        }
     }
     return float4(litColor + emission, 1.f);
 }

@@ -1,5 +1,8 @@
 add_plugin(PrecomputeSHCoefficients)
 
+# Probe tracing imports Falcor's original PathTracer shader modules.
+add_dependencies(PrecomputeSHCoefficients PathTracer)
+
 target_sources(PrecomputeSHCoefficients PRIVATE
     CommonDefines.h
     PrecomputeSHCoefficients.cpp
@@ -20,6 +23,7 @@ target_sources(PrecomputeSHCoefficients PRIVATE
 	ProbeGridVisualizeShader.slang
 	ProbeSamplingData.slang
 	ProbeSampling.rt.slang
+    ProbePathTracer.slang
     SHAdaptiveProbeShader.slang
 )
 

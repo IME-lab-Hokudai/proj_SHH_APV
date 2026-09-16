@@ -107,7 +107,7 @@ private:
     float mGlassRefractionStrength = 1.f;
     ref<Buffer> mpLiquidMaterialMask;
     bool mHasLiquidMaterials = false;
-    float mLiquidOpticalDepth = 0.035f; // Approximate travel distance in scene units (Bistro uses meters).
+    float mLiquidOpticalDepth = 0.5f; // Approximate travel distance in scene units (Bistro uses meters).
 
 
     ref<Fbo> mpFbo;

@@ -66,11 +66,11 @@ namespace
     // Scene output configuration. Page and debug images are derived from the
     // mapping filename and saved beside it, e.g. Room_AtlasMapping.bin produces
     // Room_AtlasPage_0.exr. Relative paths are relative to the working directory.
-    const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
-    const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
+    //const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
+    //const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
 
-    //const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
-    //const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
+    const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
+    const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
 
     std::filesystem::path getAtlasPagePath(uint32_t pageIndex)
     {
