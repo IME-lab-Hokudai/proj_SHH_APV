@@ -519,7 +519,7 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
-    int mMaxLevel = 1;
+    int mMaxLevel = 4;
     //int mMaxLevel = 5;
     //int mMaxLevel = 0;
     bool mUseRelativeError = false;

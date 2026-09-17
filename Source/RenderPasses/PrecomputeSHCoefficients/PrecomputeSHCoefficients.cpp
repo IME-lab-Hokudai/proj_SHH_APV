@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -41,8 +41,8 @@
 #include <cmath>
 #include "ProbeSamplingData.slang"
 #include <chrono>
-//const int numSamplesPerProbe = 4096;
-const int numSamplesPerProbe = 64;
+const int numSamplesPerProbe = 4096;
+//const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
 

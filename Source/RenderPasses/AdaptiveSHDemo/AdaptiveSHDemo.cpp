@@ -70,7 +70,8 @@
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
-const std::string loadFromFileName = "TestBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistro.txt";
+const std::string loadFromFileName = "DirectAbsErr50HessianMetricBistro.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -80,7 +81,8 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U32CornellShadowBoundaryScene.txt";
 //const std::string loadFromFileName = "U64DataScene.txt";
-const std::string loadFromFileName = "U64DataScene_4096spp.txt";
+//const std::string loadFromFileName = "U64DataScene_4096spp.txt";
+const std::string loadFromFileName = "U64Bistro.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
 
@@ -918,9 +920,7 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
             applyVar,
             mpLinearSampler
         );
-        //bindDataSceneData(applyVar);
-        // Test shader uses only the Bistro xatlas lightmap lookup.
-        // The adaptive/uniform probe buffers are intentionally not bound here.
+        // Atlas-mapped geometry uses lightmaps; unmapped geometry uses the selected SH grid.
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
         applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
@@ -1268,55 +1268,6 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     }
 }
 
-void AdaptiveSHDemo::loadLightmaps()
-{
-    // Load as a 2D texture. Falcor handles EXR (HDR) automatically.
-    // We set loadAsSrgb to false because lightmaps contain linear radiance data.
-    //auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
-    //    {
-    //        if (idx >= mBakeTargets.size())
-    //        {
-    //            logWarning("Bake target index {} is out of range.", idx);
-    //            return;
-    //        }
-
-    //        const auto& target = mBakeTargets[idx];
-
-    //        dst = Texture::createFromFile(
-    //            mpDevice,
-    //            target.outputPath,
-    //            true,
-    //            false,
-    //            ResourceBindFlags::ShaderResource
-    //        );
-
-    //        if (dst)
-    //        {
-    //            dst->setName(debugName);
-    //            logInfo("Successfully loaded lightmap '{}' from {}", target.name, target.outputPath);
-    //        }
-    //        else
-    //        {
-    //            logWarning("Failed to load lightmap '{}' from {}", target.name, target.outputPath);
-    //        }
-    //    };
-
-    //loadOne(0, mpFloorLightmap, "FloorLightmap");
-    //loadOne(1, mpLeftWallLightmap, "LeftWallLightmap");
-    //loadOne(2, mpRightWallLightmap, "RightWallLightmap");
-    //loadOne(3, mpRoofLeftLightmap, "RoofLeftLightmap");
-    //loadOne(4, mpRoofRightLightmap, "RoofRightLightmap");
-
-    //loadOne(5, mpPillar0Lightmap, "Pillar0Lightmap");
-    //loadOne(6, mpPillar1Lightmap, "Pillar1Lightmap");
-    //loadOne(7, mpPillar2Lightmap, "Pillar2Lightmap");
-    //loadOne(8, mpPillar3Lightmap, "Pillar3Lightmap");
-    //loadOne(9, mpPillar4Lightmap, "Pillar4Lightmap");
-    //loadOne(10, mpPillar5Lightmap, "Pillar5Lightmap");
-    //loadOne(11, mpPillar6Lightmap, "Pillar6Lightmap");
-    //loadOne(12, mpPillar7Lightmap, "Pillar7Lightmap");
-}
-
 void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
@@ -1349,9 +1300,6 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             out << "Mode,ProbeFile,ProbeCount,WarmupFrames,MeasuredFrames,MeanFrameMs,StdFrameMs,MeanFPS\n";
         }
 
-        //setupDataSceneBakeTargets();
-        //setupCornellBakeTargets();
-        //setupCornellVisibilitySlabBakeTargets();
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
         //Re-apply the visibility masks from our member variables
@@ -1509,14 +1457,10 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpEmptyVao = Vao::create(Vao::Topology::TriangleStrip);
         mpCompositeState->setVao(mpEmptyVao);
 
-        //loadLightmaps();
         loadBistroXAtlasLightmapTest(
             mpDevice,
             mpScene
         );
-        //loadDataSceneLightmaps();
-        //loadCornellLightmaps();
-        //loadCornellVisibilitySlabLightmaps();
         //REMARK :  set all materials to diffuse for SH testing
         //auto allMat = pScene->getMaterials();
 
@@ -1553,304 +1497,4 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         //    }
         //}
     }
-}
-
-void AdaptiveSHDemo::loadDataSceneLightmaps()
-{
-    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
-        {
-            if (idx >= mBakeTargets.size())
-            {
-                logWarning("Bake target index {} is out of range.", idx);
-                return;
-            }
-
-            const auto& target = mBakeTargets[idx];
-
-            dst = Texture::createFromFile(
-                mpDevice,
-                target.outputPath,
-                true,
-                false,
-                ResourceBindFlags::ShaderResource
-            );
-
-            if (dst)
-            {
-                dst->setName(debugName);
-                logInfo("Successfully loaded data-scene lightmap '{}' from {}", target.name, target.outputPath);
-            }
-            else
-            {
-                logWarning("Failed to load data-scene lightmap '{}' from {}", target.name, target.outputPath);
-            }
-        };
-
-    loadOne(0, mpDataFloorLightmap, "DataFloorLightmap");
-    loadOne(1, mpDataCeilingLightmap, "DataCeilingLightmap");
-    loadOne(2, mpDataLeftWallLightmap, "DataLeftWallLightmap");
-    loadOne(3, mpDataRightWallLightmap, "DataRightWallLightmap");
-    loadOne(4, mpDataBackWallLightmap, "DataBackWallLightmap");
-    loadOne(5, mpDataFrontWallLightmap, "DataFrontWallLightmap");
-
-    loadOne(6, mpDataTallBoxALightmap, "DataTallBoxALightmap");
-    loadOne(7, mpDataWideBoxBLightmap, "DataWideBoxBLightmap");
-    loadOne(8, mpDataBlockCLightmap, "DataBlockCLightmap");
-    loadOne(9, mpDataLowBoxDLightmap, "DataLowBoxDLightmap");
-    loadOne(10, mpDataThinSlabELightmap, "DataThinSlabELightmap");
-    loadOne(11, mpDataThinSlabFLightmap, "DataThinSlabFLightmap");
-    loadOne(12, mpDataTallBoxJLightmap, "DataTallBoxJLightmap");
-    loadOne(13, mpDataShortBoxLLightmap, "DataShortBoxLLightmap");
-}
-
-void AdaptiveSHDemo::bindDataSceneData(ShaderVar applyVar)
-{
-    applyVar["gLinearSampler"] = mpLinearSampler;
-
-    applyVar["gFloorLightmap"] = mpDataFloorLightmap;
-    applyVar["gCeilingLightmap"] = mpDataCeilingLightmap;
-    applyVar["gLeftWallLightmap"] = mpDataLeftWallLightmap;
-    applyVar["gRightWallLightmap"] = mpDataRightWallLightmap;
-    applyVar["gBackWallLightmap"] = mpDataBackWallLightmap;
-    applyVar["gFrontWallLightmap"] = mpDataFrontWallLightmap;
-
-    applyVar["gTallBoxALightmap"] = mpDataTallBoxALightmap;
-    applyVar["gWideBoxBLightmap"] = mpDataWideBoxBLightmap;
-    applyVar["gBlockCLightmap"] = mpDataBlockCLightmap;
-    applyVar["gLowBoxDLightmap"] = mpDataLowBoxDLightmap;
-    applyVar["gThinSlabELightmap"] = mpDataThinSlabELightmap;
-    applyVar["gThinSlabFLightmap"] = mpDataThinSlabFLightmap;
-    applyVar["gTallBoxJLightmap"] = mpDataTallBoxJLightmap;
-    applyVar["gShortBoxLLightmap"] = mpDataShortBoxLLightmap;
-
-    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
-    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
-    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 2;
-    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 3;
-    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 4;
-    applyVar["PerFrameCB"]["gFrontWallInstanceID"] = 5;
-
-    applyVar["PerFrameCB"]["gTallBoxAInstanceID"] = 6;
-    applyVar["PerFrameCB"]["gWideBoxBInstanceID"] = 7;
-    applyVar["PerFrameCB"]["gBlockCInstanceID"] = 8;
-    applyVar["PerFrameCB"]["gLowBoxDInstanceID"] = 9;
-    applyVar["PerFrameCB"]["gThinSlabEInstanceID"] = 10;
-    applyVar["PerFrameCB"]["gThinSlabFInstanceID"] = 11;
-    applyVar["PerFrameCB"]["gTallBoxJInstanceID"] = 12;
-    applyVar["PerFrameCB"]["gShortBoxLInstanceID"] = 13;
-
-    applyVar["PerFrameCB"]["gTallBoxACenterW"] = float3(-3.8f, 1.3f, -2.8f);
-    applyVar["PerFrameCB"]["gWideBoxBCenterW"] = float3(-1.9f, 0.5f, 2.2f);
-    applyVar["PerFrameCB"]["gBlockCCenterW"] = float3(2.8f, 0.8f, -2.6f);
-    applyVar["PerFrameCB"]["gLowBoxDCenterW"] = float3(1.4f, 0.35f, 2.8f);
-    applyVar["PerFrameCB"]["gThinSlabECenterW"] = float3(-0.4f, 1.5f, -0.8f);
-    applyVar["PerFrameCB"]["gThinSlabFCenterW"] = float3(3.4f, 1.2f, 0.8f);
-    applyVar["PerFrameCB"]["gTallBoxJCenterW"] = float3(-4.2f, 1.5f, 2.8f);
-    applyVar["PerFrameCB"]["gShortBoxLCenterW"] = float3(-0.8f, 0.45f, -3.3f);
-
-    applyVar["PerFrameCB"]["gTallBoxAHalfExtentW"] = float3(0.45f, 1.30f, 0.45f);
-    applyVar["PerFrameCB"]["gWideBoxBHalfExtentW"] = float3(0.90f, 0.50f, 0.60f);
-    applyVar["PerFrameCB"]["gBlockCHalfExtentW"] = float3(0.72f, 0.80f, 0.72f);
-    applyVar["PerFrameCB"]["gLowBoxDHalfExtentW"] = float3(1.05f, 0.35f, 1.00f);
-    applyVar["PerFrameCB"]["gThinSlabEHalfExtentW"] = float3(0.175f, 1.50f, 0.70f);
-    applyVar["PerFrameCB"]["gThinSlabFHalfExtentW"] = float3(0.36f, 1.20f, 0.85f);
-    applyVar["PerFrameCB"]["gTallBoxJHalfExtentW"] = float3(0.75f, 1.25f, 0.75f);
-    applyVar["PerFrameCB"]["gShortBoxLHalfExtentW"] = float3(0.75f, 0.45f, 0.75f);
-}
-
-void AdaptiveSHDemo::setupDataSceneBakeTargets()
-{
-    mBakeTargets =
-    {
-        // Room shell.
-        //{ "Floor",     0, 1024, 1024, "BakedData_Floor.exr"     },
-        { "Floor",     0, 2048, 2048, "BakedData_Floor.exr"     },
-        { "Ceiling",   1, 1024, 1024, "BakedData_Ceiling.exr"   },
-        { "LeftWall",  2, 1024,  512, "BakedData_LeftWall.exr"  },
-        { "RightWall", 3, 1024,  512, "BakedData_RightWall.exr" },
-        { "BackWall",  4, 1024,  512, "BakedData_BackWall.exr"  },
-        { "FrontWall", 5, 1024,  512, "BakedData_FrontWall.exr" },
-
-        //Box targets.
-        //halfExtent = scaling * 0.5
-        //rotationEulerDeg = same as SceneForData.pyscene
-
-       { "TallBoxA", 6, 512, 512, "BakedData_TallBoxA.exr",
-           BakeTargetType::Pillar,
-           float3(-3.8f, 1.3f, -2.8f),
-           float3(0.45f, 1.30f, 0.45f),
-           float3(0.0f, 0.0f, 0.0f) },
-
-       { "WideBoxB", 7, 1024, 1024, "BakedData_WideBoxB.exr",
-           BakeTargetType::Pillar,
-           float3(-1.9f, 0.5f, 2.2f),
-           float3(0.90f, 0.50f, 0.60f),
-           float3(0.0f, 0.0f, 0.0f) },
-
-       { "BlockC", 8, 512, 512, "BakedData_BlockC.exr",
-           BakeTargetType::Pillar,
-           float3(2.8f, 0.8f, -2.6f),
-           float3(0.55f, 0.80f, 0.55f),
-           float3(0.0f, 18.0f, 0.0f) },
-
-       { "LowBoxD", 9, 512, 512, "BakedData_LowBoxD.exr",
-           BakeTargetType::Pillar,
-           float3(1.4f, 0.35f, 2.8f),
-           float3(0.80f, 0.35f, 0.70f),
-           float3(0.0f, -22.0f, 0.0f) },
-
-       { "ThinSlabE", 10, 512, 512, "BakedData_ThinSlabE.exr",
-           BakeTargetType::Pillar,
-           float3(-0.4f, 1.5f, -0.8f),
-           float3(0.175f, 1.50f, 0.70f),
-           float3(0.0f, 0.0f, 0.0f) },
-
-       { "ThinSlabF", 11, 512, 512, "BakedData_ThinSlabF.exr",
-           BakeTargetType::Pillar,
-           float3(3.4f, 1.2f, 0.8f),
-           float3(0.175f, 1.20f, 0.80f),
-           float3(0.0f, 12.0f, 0.0f) },
-
-       { "TallBoxJ", 12, 512, 512, "BakedData_TallBoxJ.exr",
-           BakeTargetType::Pillar,
-           float3(-4.2f, 1.5f, 2.8f),
-           float3(0.35f, 1.10f, 0.35f),
-           float3(0.0f, -18.0f, 8.0f) },
-
-       { "ShortBoxL", 13, 512, 512, "BakedData_ShortBoxL.exr",
-           BakeTargetType::Pillar,
-           float3(-0.8f, 0.45f, -3.3f),
-           float3(0.50f, 0.45f, 0.50f),
-           float3(0.0f, 40.0f, 0.0f) },
-    };
-}
-
-void AdaptiveSHDemo::setupCornellBakeTargets()
-{
-    mBakeTargets =
-    {
-        // Room shell targets (Quads)
-        { "Floor",     0, 1024, 1024, "BakedCornell_Floor.exr"     },
-        { "Ceiling",   1, 1024, 1024, "BakedCornell_Ceiling.exr"   },
-        { "BackWall",  2, 1024, 1024, "BakedCornell_BackWall.exr"  },
-        { "LeftWall",  3, 1024, 1024, "BakedCornell_LeftWall.exr"  },
-        { "RightWall", 4, 1024, 1024, "BakedCornell_RightWall.exr" },
-
-        // Light is instance ID 5; we skip baking the emissive light source.
-
-        // Visibility-discontinuity test slab (Cube/Pillar)
-        { "VisibilitySlab", 6, 512, 512, "BakedCornell_VisibilitySlab.exr",
-            BakeTargetType::Pillar,
-            float3(0.12f, 0.28f, 0.00f),       // translation
-            float3(0.15f, 0.0175f, 0.11f),     // half extent (scaling * 0.5)
-            float3(0.0f, 0.0f, 0.0f)           // rotation
-        }
-    };
-}
-
-void AdaptiveSHDemo::loadCornellLightmaps()
-{
-    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
-        {
-            if (idx >= mBakeTargets.size()) return;
-            const auto& target = mBakeTargets[idx];
-            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
-            if (dst) dst->setName(debugName);
-        };
-
-    loadOne(0, mpCornellFloorLightmapShadowBoundaryTestScene, "CornellFloorLightmap");
-    loadOne(1, mpCornellCeilingLightmapShadowBoundaryTestScene, "CornellCeilingLightmap");
-    loadOne(2, mpCornellBackWallLightmapShadowBoundaryTestScene, "CornellBackWallLightmap");
-    loadOne(3, mpCornellLeftWallLightmapShadowBoundaryTestScene, "CornellLeftWallLightmap");
-    loadOne(4, mpCornellRightWallLightmapShadowBoundaryTestScene, "CornellRightWallLightmap");
-    loadOne(5, mpCornellThinSlabLightmapShadowBoundaryTestScene, "CornellVisibilitySlabLightmap");
-}
-
-void AdaptiveSHDemo::bindCornellData(ShaderVar applyVar)
-{
-    applyVar["gLinearSampler"] = mpLinearSampler;
-
-    // Bind Textures
-    applyVar["gFloorLightmap"] = mpCornellFloorLightmapShadowBoundaryTestScene;
-    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapShadowBoundaryTestScene;
-    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapShadowBoundaryTestScene;
-    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapShadowBoundaryTestScene;
-    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapShadowBoundaryTestScene;
-    applyVar["gVisibilitySlabLightmap"] = mpCornellThinSlabLightmapShadowBoundaryTestScene;
-
-    // Bind Instance IDs
-    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
-    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
-    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
-    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
-    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
-    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
-
-    // Bind Pillar Data for Slab
-    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.12f, 0.28f, 0.00f);
-    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.15f, 0.0175f, 0.11f);
-}
-
-void AdaptiveSHDemo::setupCornellVisibilitySlabBakeTargets()
-{
-    mBakeTargets =
-    {
-        // Room shell targets (Quads)
-        { "Floor",     0, 1024, 1024, "BakedCornellSlab_Floor.exr"     },
-        { "Ceiling",   1, 1024, 1024, "BakedCornellSlab_Ceiling.exr"   },
-        { "BackWall",  2, 1024, 1024, "BakedCornellSlab_BackWall.exr"  },
-        { "LeftWall",  3, 1024, 1024, "BakedCornellSlab_LeftWall.exr"  },
-        { "RightWall", 4, 1024, 1024, "BakedCornellSlab_RightWall.exr" },
-
-        // Visibility-discontinuity test slab (Cube/Pillar)
-        { "VisibilitySlab", 6, 512, 512, "BakedCornellSlab_VisibilitySlab.exr",
-            BakeTargetType::Pillar,
-            float3(0.0f, 0.21f, -0.02f),       // Center (slabX, slabY, slabZ)
-            float3(0.01f, 0.21f, 0.18f),       // Half extent (scaling * 0.5)
-            float3(0.0f, 0.0f, 0.0f)           // Rotation
-        }
-    };
-}
-
-void AdaptiveSHDemo::loadCornellVisibilitySlabLightmaps()
-{
-    auto loadOne = [&](size_t idx, ref<Texture>& dst, const std::string& debugName)
-        {
-            if (idx >= mBakeTargets.size()) return;
-            const auto& target = mBakeTargets[idx];
-            dst = Texture::createFromFile(mpDevice, target.outputPath, true, false, ResourceBindFlags::ShaderResource);
-            if (dst) dst->setName(debugName);
-        };
-
-    loadOne(0, mpCornellFloorLightmapVisibilitySlab, "CornellFloorLightmapSlab");
-    loadOne(1, mpCornellCeilingLightmapVisibilitySlab, "CornellCeilingLightmapSlab");
-    loadOne(2, mpCornellBackWallLightmapVisibilitySlab, "CornellBackWallLightmapSlab");
-    loadOne(3, mpCornellLeftWallLightmapVisibilitySlab, "CornellLeftWallLightmapSlab");
-    loadOne(4, mpCornellRightWallLightmapVisibilitySlab, "CornellRightWallLightmapSlab");
-    loadOne(5, mpCornellSlabLightmapVisibilitySlab, "CornellVisibilitySlabLightmapSlab");
-}
-
-void AdaptiveSHDemo::bindCornellVisibilitySlabData(ShaderVar applyVar)
-{
-    applyVar["gLinearSampler"] = mpLinearSampler;
-
-    // Bind Textures
-    applyVar["gFloorLightmap"] = mpCornellFloorLightmapVisibilitySlab;
-    applyVar["gCeilingLightmap"] = mpCornellCeilingLightmapVisibilitySlab;
-    applyVar["gBackWallLightmap"] = mpCornellBackWallLightmapVisibilitySlab;
-    applyVar["gLeftWallLightmap"] = mpCornellLeftWallLightmapVisibilitySlab;
-    applyVar["gRightWallLightmap"] = mpCornellRightWallLightmapVisibilitySlab;
-    applyVar["gVisibilitySlabLightmap"] = mpCornellSlabLightmapVisibilitySlab;
-
-    // Bind Instance IDs
-    applyVar["PerFrameCB"]["gFloorInstanceID"] = 0;
-    applyVar["PerFrameCB"]["gCeilingInstanceID"] = 1;
-    applyVar["PerFrameCB"]["gBackWallInstanceID"] = 2;
-    applyVar["PerFrameCB"]["gLeftWallInstanceID"] = 3;
-    applyVar["PerFrameCB"]["gRightWallInstanceID"] = 4;
-    applyVar["PerFrameCB"]["gVisibilitySlabInstanceID"] = 6;
-
-    // Bind Pillar Data for Slab
-    applyVar["PerFrameCB"]["gVisibilitySlabCenterW"] = float3(0.0f, 0.21f, -0.02f);
-    applyVar["PerFrameCB"]["gVisibilitySlabHalfExtentW"] = float3(0.01f, 0.21f, 0.18f);
 }

@@ -16,6 +16,8 @@ target_sources(AdaptiveSHDemo PRIVATE
 	ProbeVisualizePass.cpp
 	UniformGridShader.slang
     AdaptiveGridShaderXAtlasTest.slang
+    XAtlasSceneShader.slang
+    UniformGridSampling.slang
     ResolveGlassBackground.cs.slang
 )
 
