@@ -42,8 +42,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -70,8 +70,9 @@
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
-//const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistro.txt";
-const std::string loadFromFileName = "DirectAbsErr50HessianMetricBistro.txt";
+const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr50HessianMetricBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr100EGCMetricBistro.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 

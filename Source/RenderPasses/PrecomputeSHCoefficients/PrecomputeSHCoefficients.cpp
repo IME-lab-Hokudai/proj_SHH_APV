@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -64,7 +64,7 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 1.0f;
 //const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
-const float ErrorThreshold =2.0f;//threshold for Erel
+const float ErrorThreshold =100.0f;//threshold for Erel
 const bool useRelativeError = false;
 
 // Adaptive and uniform grid placement in Falcor world coordinates (Y-up).
@@ -77,8 +77,8 @@ const float3 kGridMin = float3(3.5f, 0.65f, -6.5f);
 const float3 kGridMax = float3(16.0f, 5.0f, 3.0f);
 
 const bool useIrradianceSpaceMetric = false;
-//const bool useResidualCorrection = true;
-const bool useResidualCorrection = false;
+const bool useResidualCorrection = true;
+//const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -172,7 +172,8 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricBistro.txt";
 //const std::string saveToFileName = "Test.txt";
-const std::string saveToFileName = "TestBistro.txt";
+const std::string saveToFileName = "DirectAbsErr100EGCMetricBistro.txt";
+//const std::string saveToFileName = "DirectAbsErr100HessianMetricBistro.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -1629,7 +1630,8 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     );
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
-    const uint32_t kMaxCornersPerDispatch = 512; // tune this
+    //const uint32_t kMaxCornersPerDispatch = 512; // tune this
+    const uint32_t kMaxCornersPerDispatch = 4096; // tune this
     //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
 
     logInfo("[Adaptive grid] Allocating buffers for batches of up to {} corners.", kMaxCornersPerDispatch);
