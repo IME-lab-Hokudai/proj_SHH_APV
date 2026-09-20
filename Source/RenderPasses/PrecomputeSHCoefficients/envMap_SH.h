@@ -103,6 +103,21 @@ void calculateSHCoeffs(
     uint32_t sampleCount
 );
 
+// Adds the explicit direct-light samples (written by ProbeSampling.rt.slang after
+// the direction samples) to already computed SH coefficients / gradients /
+// luminance Hessians. Each sample is a patch on an emitter with area dA (Li.w),
+// so Omega_i = dA * cosXi / r^2 varies per sample (Eq. 3) and the SH basis is
+// evaluated at the per-probe direction omega_i = (s - x) / r.
+// coeffs must already hold 9 entries; grads / hessiansLum may be nullptr.
+void accumulateDirectLightSamples(
+    std::vector<float3>& coeffs,
+    std::vector<GradSHCoeff>* grads,
+    std::vector<float3x3>* hessiansLum,
+    const float3& xPolar,
+    const ProbeSampleData* lightSamples,
+    uint32_t lightSampleCount
+);
+
 void calculateSHBuildMetricsOnly(
     float& coeffVecL2,
     float& maxLambdaVecL2,

@@ -6,6 +6,8 @@ import RenderPasses.PathTracer.PathTracer;
 import RenderPasses.PathTracer.LoadShadingData;
 import ProbePathTracer;
 import ProbeSamplingData;
+import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Utils.Geometry.GeometryHelpers;
 
 ParameterBlock<PathTracer> gPathTracer;
 StructuredBuffer<ProbeDirSample> gProbeDirSamples;
@@ -15,7 +17,8 @@ RWStructuredBuffer<ProbeSampleData> gProbeSamplingOutput;
 cbuffer PerFrameCB
 {
     uint probeSamplingSeed;
-    uint numSamplePerProbe;
+    uint numSamplePerProbe;      // direction samples (path traced), indices [0, numSamplePerProbe)
+    uint numLightSamplePerProbe; // explicit emissive light samples, indices [numSamplePerProbe, numSamplePerProbe + numLightSamplePerProbe)
 };
 
 struct ProbeVisibilityQuery : IVisibilityQuery
@@ -27,18 +30,96 @@ struct ProbeVisibilityQuery : IVisibilityQuery
     }
 };
 
+// ---------------------------------------------------------------------------
+// Direct light at the probe via explicit emissive light sampling.
+//
+// The probe position is the path origin, not a scattering vertex, so Falcor's
+// NEE never runs there. Without this, direct light from small emitters is only
+// found when one of the fixed directions happens to hit the emitter, which
+// aliases spatially (on/off per probe). Here each probe instead takes
+// numLightSamplePerProbe light samples. The sample generator is seeded by the
+// sample index only (common random numbers), and the Uniform/Power emissive
+// samplers pick triangles/points independently of the probe position, so every
+// probe integrates over the SAME set of points on the lights. The result varies
+// smoothly with probe position except at true visibility changes.
+//
+// Output record (consumed by accumulateDirectLightSamples on the CPU):
+//   Li.rgb = emitted radiance Le (0 if occluded), Li.w = dA = 1 / (M * pdfArea)
+//   s, n   = light point / light normal (polar Z-up, same .zxy convention)
+//   hitT   = distance if visible, -1 if invalid or occluded (skipped on CPU)
+// The CPU forms Omega_i = dA * cosXi / r^2, i.e. exactly the patch model of
+// Eq. (3), so SH, gradient and Hessian use the same formulas as the ray samples.
+// ---------------------------------------------------------------------------
+void writeProbeLightSample(const uint lightSampleIdx, const uint outIdx, const float3 probePosW)
+{
+    ProbeSampleData o;
+    o.Li = float4(0.f);
+    o.s = float4(0.f);
+    o.n = float4(0.f);
+    o.hitT = -1.f;
+
+#if USE_EMISSIVE_LIGHTS
+    // Same stream for every probe: depends on the sample index only.
+    SampleGenerator sg = SampleGenerator(uint2(numSamplePerProbe + lightSampleIdx, 1), probeSamplingSeed);
+
+    TriangleLightSample tls;
+    // The probe has no normal; Uniform/Power samplers ignore normal/hemisphere.
+    if (gPathTracer.emissiveSampler.sampleLight(probePosW, float3(0.f, 1.f, 0.f), true, sg, tls) && tls.pdf > 0.f)
+    {
+        const float cosLight = dot(tls.normalW, -tls.dir);
+        const float dist2 = tls.distance * tls.distance;
+        if (cosLight > 1e-6f && dist2 > 1e-12f)
+        {
+            // Solid-angle pdf -> area pdf (position independent for Uniform/Power).
+            const float pdfArea = tls.pdf * cosLight / dist2;
+            const float dA = 1.f / (float(numLightSamplePerProbe) * pdfArea);
+
+            const float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+            const float3 toLight = lightPos - probePosW;
+            const float visDist = length(toLight);
+
+            SceneRayQuery<kUseAlphaTest> query;
+            const bool visible = visDist > 0.f && query.traceVisibilityRay(Ray(probePosW, toLight / visDist, 0.f, visDist));
+
+            o.s = float4(tls.posW.zxy, 1.f);
+            o.n = float4(tls.normalW.zxy, 1.f);
+            if (visible)
+            {
+                o.Li = float4(tls.Le, dA);
+                o.hitT = tls.distance;
+            }
+        }
+    }
+#endif
+
+    gProbeSamplingOutput[outIdx] = o;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
     const uint dirIdx = DispatchRaysIndex().x;
     const uint probeIdx = DispatchRaysIndex().y;
-    const uint outIdx = probeIdx * numSamplePerProbe + dirIdx;
+    const uint strideSamples = numSamplePerProbe + numLightSamplePerProbe;
+    const uint outIdx = probeIdx * strideSamples + dirIdx;
+
+    // Threads past the direction samples take explicit light samples.
+    if (dirIdx >= numSamplePerProbe)
+    {
+        writeProbeLightSample(dirIdx - numSamplePerProbe, outIdx, gProbePositions[probeIdx]);
+        return;
+    }
+
+    // With explicit light samples, emission seen directly by the probe (primary
+    // hit) is already covered by them and must not be counted again.
+    const bool includePrimaryEmission = (numLightSamplePerProbe == 0);
 
     PathState path = {};
     path.setActive();
-    // Pack the linear sample index into Falcor's 12-bit X/Y pixel fields.
+    // Pack the linear DIRECTION-sample index into Falcor's 12-bit X/Y pixel fields
+    // (light samples do not use PathState, so they don't count toward the limit).
     // This also supports batches with more than 4096 probes.
-    path.id = outIdx;
+    path.id = probeIdx * numSamplePerProbe + dirIdx;
     path.thp = float3(1.f);
     path.origin = gProbePositions[probeIdx];
     // Preserve the grid's polar Z-up -> Falcor Y-up permutation.
@@ -91,7 +172,7 @@ void rayGen()
                 firstHitT = hitT;
             }
             path.setHit(hit);
-            gPathTracer.handleProbeHit(path, visibility, lightSampleCount);
+            gPathTracer.handleProbeHit(path, visibility, lightSampleCount, includePrimaryEmission);
         }
         else
         {

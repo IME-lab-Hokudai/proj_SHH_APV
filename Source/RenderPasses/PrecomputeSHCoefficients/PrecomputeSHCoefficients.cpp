@@ -42,6 +42,12 @@
 #include "ProbeSamplingData.slang"
 #include <chrono>
 const int numSamplesPerProbe = 4096;
+// Explicit emissive light samples per probe for DIRECT light at the probe
+// (see writeProbeLightSample in ProbeSampling.rt.slang). The probe position is
+// not a scattering vertex, so Falcor's NEE never covers it; without these,
+// direct light from small emitters aliases between neighbouring probes.
+// 0 = old behaviour (direct light only via the direction samples).
+const uint32_t numLightSamplesPerProbe = 1024;
 //const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
@@ -1400,6 +1406,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             // 2. Prepare reusable buffers for a single Row (X-dimension)
             uint32_t numProbesPerRow = probeCountDim.x;
 
+            // Per probe: [direction samples | explicit light samples]
+            const uint32_t lightSamplesPerProbe = getLightSamplesPerProbe();
+            const uint32_t samplesStride = numSamplesPerProbe + lightSamplesPerProbe;
+
             // Position Buffer for one row
             mpProbePosBuffer = mpDevice->createStructuredBuffer(
                 sizeof(float3), numProbesPerRow, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal
@@ -1408,13 +1418,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             // Sampling result buffer for one row
             mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeSampleData),
-                numSamplesPerProbe * numProbesPerRow,
+                samplesStride * numProbesPerRow,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
                 MemoryType::DeviceLocal
             );
 
             // Temp storage for CPU readback of one row
-            std::vector<ProbeSampleData> rowSamplingData(numSamplesPerProbe * numProbesPerRow);
+            std::vector<ProbeSampleData> rowSamplingData(size_t(samplesStride) * numProbesPerRow);
             std::vector<float3> rowPositions(numProbesPerRow);
 
             // --------------------------------------------------------------------------
@@ -1436,7 +1446,7 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                     mpProbePosBuffer->setBlob(rowPositions.data(), 0, numProbesPerRow * sizeof(float3));
 
                     // C. Dispatch Ray Tracing for this row
-                    traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbesPerRow);
+                    traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbesPerRow, lightSamplesPerProbe);
                     pRenderContext->submit(true);
                     // D. Synchronize and Readback row results
                     mpProbeSamplingResultBuffer->getBlob(rowSamplingData.data(), 0, rowSamplingData.size() * sizeof(ProbeSampleData));
@@ -1455,13 +1465,17 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
                         std::vector<float3> coeffs;
                         std::vector<GradSHCoeff> grads;
-                        size_t offset = size_t(x) * size_t(numSamplesPerProbe);
+                        size_t offset = size_t(x) * size_t(samplesStride);
                         const ProbeSampleData* samples =
                             rowSamplingData.data() + offset;
 
                         // Perform Physics Calculations
+                        // Direction samples: indirect light (+ direct only if no light samples).
                         calculateSHCoeffsGradients(grads, xPolar, samples, numSamplesPerProbe, samplingDirs);
                         calculateSHCoeffs(coeffs, samples, numSamplesPerProbe);
+                        // Explicit light samples: direct light at the probe.
+                        accumulateDirectLightSamples(coeffs, &grads, nullptr, xPolar,
+                            samples + numSamplesPerProbe, lightSamplesPerProbe);
 
                         // Store in the Volume object
                         mUniformProbeVolume->setProbeData(probeIdx, coeffs, grads);
@@ -1631,7 +1645,8 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
     //const uint32_t kMaxCornersPerDispatch = 512; // tune this
-    const uint32_t kMaxCornersPerDispatch = 4096; // tune this
+    //const uint32_t kMaxCornersPerDispatch = 4096; // tune this
+    const uint32_t kMaxCornersPerDispatch = 2048; // tune this
     //const uint32_t kMaxCornersPerDispatch = 1024; // tune this
 
     logInfo("[Adaptive grid] Allocating buffers for batches of up to {} corners.", kMaxCornersPerDispatch);
@@ -1641,14 +1656,18 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
         sizeof(float3), kMaxCornersPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal
     );
 
+    // Per probe: [direction samples | explicit light samples]
+    const uint32_t lightSamplesPerProbe = getLightSamplesPerProbe();
+    const uint32_t samplesStride = numSamplesPerProbe + lightSamplesPerProbe;
+
     mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
         sizeof(ProbeSampleData),
-        numSamplesPerProbe * kMaxCornersPerDispatch,
+        samplesStride * kMaxCornersPerDispatch,
         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
         MemoryType::DeviceLocal
     );
 
-    std::vector<ProbeSampleData> allProbeSamplingData(numSamplesPerProbe * kMaxCornersPerDispatch);
+    std::vector<ProbeSampleData> allProbeSamplingData(size_t(samplesStride) * kMaxCornersPerDispatch);
 
     while (mAdaptiveProbeVolume->hasPendingBatch())
     {
@@ -1682,7 +1701,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 numProbes * sizeof(float3)
             );
 
-            traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbes);
+            traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbes, lightSamplesPerProbe);
 
             // 4. Force execution to prevent TDR on heavy geometry
             //pRenderContext->submit(true);
@@ -1690,7 +1709,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
             mpProbeSamplingResultBuffer->getBlob(
                 allProbeSamplingData.data(),
                 0,
-                numSamplesPerProbe * numProbes * sizeof(ProbeSampleData)
+                size_t(samplesStride) * numProbes * sizeof(ProbeSampleData)
             );
             mpDevice->wait();
             const auto readbackEnd = BuildClock::now();
@@ -1706,7 +1725,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
 
             for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
             {
-                int offset = probeIdx * numSamplesPerProbe;
+                size_t offset = size_t(probeIdx) * size_t(samplesStride);
                 //std::vector<ProbeSampleData> probeSamplingResults;
                 //probeSamplingResults.reserve(numSamplesPerProbe);
                 //for (int sampleIdx = 0; sampleIdx < numSamplesPerProbe; ++sampleIdx)
@@ -1728,6 +1747,9 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                     samplingDirs
                 );
                 calculateSHCoeffs(coeffsBatch[probeIdx], samples, numSamplesPerProbe);
+                // Direct light at the probe from the explicit light samples.
+                accumulateDirectLightSamples(coeffsBatch[probeIdx], &gradsBatch[probeIdx], &hessiansBatch[probeIdx],
+                    xPolar, samples + numSamplesPerProbe, lightSamplesPerProbe);
             }
 
             mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
@@ -2140,9 +2162,24 @@ void PrecomputeSHCoefficients::createProbeTracingProgram(
     );
 }
 
-void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount)
+uint32_t PrecomputeSHCoefficients::getLightSamplesPerProbe() const
+{
+    // Explicit light samples only make sense with emissive lights and a
+    // position-independent sampler (Uniform/Power). LightBVH selects lights based
+    // on the probe position, which breaks the common-random-number smoothness.
+    if (!mpScene || !mpScene->useEmissiveLights()) return 0;
+    if (mEmissiveSamplerType == EmissiveLightSamplerType::LightBVH)
+    {
+        logWarning("[Probe sampling] LightBVH sampler is position dependent; explicit probe light samples disabled.");
+        return 0;
+    }
+    return numLightSamplesPerProbe;
+}
+
+void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount, uint32_t lightSamplesPerProbe)
 {
     if (samplesPerProbe == 0 || probeCount == 0) return;
+    // Only direction samples use PathState (and its packed path ID).
     const uint64_t pathCount = uint64_t(samplesPerProbe) * probeCount;
     if (pathCount > (1u << 24))
         FALCOR_THROW("Probe trace batch exceeds Falcor's 12-bit X/Y path ID capacity.");
@@ -2153,6 +2190,7 @@ void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, ui
     rtVar["gProbeSamplingOutput"] = mpProbeSamplingResultBuffer;
     rtVar["PerFrameCB"]["probeSamplingSeed"] = kProbeSamplingSeed;
     rtVar["PerFrameCB"]["numSamplePerProbe"] = samplesPerProbe;
+    rtVar["PerFrameCB"]["numLightSamplePerProbe"] = lightSamplesPerProbe;
 
     auto tracerVar = rtVar["gPathTracer"];
     tracerVar["params"]["lodBias"] = 0.f;
@@ -2165,7 +2203,8 @@ void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, ui
     mpSampleGenerator->bindShaderData(rtVar);
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, rtVar["gScene"]);
-    pRenderContext->raytrace(mpRtProgram.get(), mpRtVars.get(), samplesPerProbe, probeCount, 1);
+    // X: [0, samplesPerProbe) direction samples, then lightSamplesPerProbe light samples.
+    pRenderContext->raytrace(mpRtProgram.get(), mpRtVars.get(), samplesPerProbe + lightSamplesPerProbe, probeCount, 1);
 }
 
 void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)

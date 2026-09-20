@@ -558,6 +558,102 @@ void calculateSHCoeffs(std::vector<float3>& out, const ProbeSampleData* samples,
     }
 }
 
+void accumulateDirectLightSamples(
+    std::vector<float3>& coeffs,
+    std::vector<GradSHCoeff>* grads,
+    std::vector<float3x3>* hessiansLum,
+    const float3& xPolar,
+    const ProbeSampleData* lightSamples,
+    uint32_t lightSampleCount
+)
+{
+    constexpr int numBasis = 9;
+    if (lightSamples == nullptr || lightSampleCount == 0) return;
+    if (coeffs.size() < numBasis) coeffs.resize(numBasis, float3(0.f));
+    if (grads && grads->size() < numBasis) grads->resize(numBasis, GradSHCoeff{ float3(0.f), float3(0.f), float3(0.f) });
+    if (hessiansLum && hessiansLum->size() < numBasis) hessiansLum->resize(numBasis, float3x3::zeros());
+
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+
+    std::array<float, 9> ylm;
+    std::array<float3, 9> glm;
+    std::array<float3x3, 9> hlm;
+
+    for (uint32_t i = 0; i < lightSampleCount; ++i)
+    {
+        const ProbeSampleData& sd = lightSamples[i];
+        if (sd.hitT < 0.0f) continue; // invalid or occluded
+
+        const float3 L = float3(sd.Li.x, sd.Li.y, sd.Li.z);
+        const float dA = sd.Li.w;
+        if (dA <= 0.0f) continue;
+
+        const float3 s = float3(sd.s.x, sd.s.y, sd.s.z);
+        const float3 n = float3(sd.n.x, sd.n.y, sd.n.z);
+
+        // q = s - x, all in polar (Z-up) coordinates like the ray samples.
+        const float3 q = s - xPolar;
+        const float r = length(q);
+        if (r < 1e-6f) continue;
+
+        const float rInv = 1.0f / r;
+        const float rInvSq = rInv * rInv;
+        const float cosXi = -(dot(n, q)) * rInv;
+        if (cosXi <= 0.0f) continue;
+
+        // Per-sample solid angle of the light patch, Eq. (3).
+        const float Omega_i = dA * cosXi * rInvSq;
+        const float3 omega = q * rInv;
+
+        // Basis (and derivatives) at this probe's direction to the light point.
+        if (hessiansLum) SHGradientAndHessianL2(omega, ylm, glm, hlm);
+        else SHGradientL2(omega, ylm, glm);
+
+        for (int b = 0; b < numBasis; ++b)
+            coeffs[b] += L * (ylm[b] * Omega_i);
+
+        if (!grads && !hessiansLum) continue;
+
+        const float3 gradOmega = gradientOmega(q, n, rInv, cosXi, Omega_i);
+
+        if (grads)
+        {
+            for (int b = 0; b < numBasis; ++b)
+            {
+                // Same as the ray samples: grad(Omega) Y - Omega / r grad_omega(Y)
+                const float3 contrib = gradOmega * ylm[b] - Omega_i * rInv * glm[b];
+                (*grads)[b].r += L.x * contrib;
+                (*grads)[b].g += L.y * contrib;
+                (*grads)[b].b += L.z * contrib;
+            }
+        }
+
+        if (hessiansLum)
+        {
+            const float L_lum = dot(L, kLuma);
+            const float3x3 H_Omega = hessianOmega(q, n, rInv, cosXi, Omega_i);
+
+            for (int b = 0; b < numBasis; ++b)
+            {
+                float3x3& H = (*hessiansLum)[b];
+                for (int j = 0; j < 3; ++j)
+                {
+                    for (int k = j; k < 3; ++k)
+                    {
+                        const float term1 = H_Omega[j][k] * ylm[b];
+                        const float term2 = -rInv * (gradOmega[j] * glm[b][k] + gradOmega[k] * glm[b][j]);
+                        const float term3 = Omega_i * rInvSq * hlm[b][j][k];
+                        const float hessContrib = L_lum * (term1 + term2 + term3);
+
+                        H[j][k] += hessContrib;
+                        if (j != k) H[k][j] += hessContrib;
+                    }
+                }
+            }
+        }
+    }
+}
+
 void calculateSHBuildMetricsOnly(float& coeffVecL2, float& maxLambdaVecL2, const float3& xPolar, const ProbeSampleData* samples, uint32_t sampleCount, const std::vector<ProbeDirSample>& samplingDirs, bool useRelativeMetric)
 {
     constexpr int numBasis = 9;

@@ -42,10 +42,15 @@ extension PathTracer
     // lightSampleCount must be >= 1 and fixed along the entire path, including
     // hits rejected by nested-dielectric handling. Thus the emitter/miss MIS
     // weights use the same count as NEE at the preceding scattering vertex.
+    // includePrimaryEmission: false when direct light at the probe is computed by
+    // explicit light samples (ProbeSampling.rt.slang). Emission seen by the probe
+    // ray itself (vertex 1) is then skipped to avoid double counting; emission
+    // reached after a bounce is kept (MIS with NEE as before).
     void handleProbeHit<VisibilityQuery : IVisibilityQuery>(
-        inout PathState path, inout VisibilityQuery vq, uint lightSampleCount)
+        inout PathState path, inout VisibilityQuery vq, uint lightSampleCount, bool includePrimaryEmission)
     {
-        if (lightSampleCount == 1)
+        // Original behaviour: Falcor's camera-style handleHit (always adds primary emission).
+        if (lightSampleCount == 1 && includePrimaryEmission)
         {
             handleHit(path, vq);
             return;
@@ -80,8 +85,9 @@ extension PathTracer
 
         // Emission belongs to this hit once; it is not averaged with NEE.
         const bool isLightSamplable = path.isLightSamplable();
-        const bool computeEmissive = isPrimaryHit ||
-            (kUseEmissiveLights && (!kUseNEE || kUseMIS || !path.isLightSampled() || !isLightSamplable));
+        const bool computeEmissive = isPrimaryHit
+            ? includePrimaryEmission
+            : (kUseEmissiveLights && (!kUseNEE || kUseMIS || !path.isLightSampled() || !isLightSamplable));
         if (computeEmissive && any(bsdfProperties.emission > 0.f))
         {
             float misWeight = 1.f;

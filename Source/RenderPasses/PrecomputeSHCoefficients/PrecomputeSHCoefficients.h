@@ -93,7 +93,11 @@ private:
     ref<Program> mpRtProgram;
     ref<RtProgramVars> mpRtVars;
     void createProbeTracingProgram(RenderContext* pRenderContext);
-    void traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount);
+    // lightSamplesPerProbe > 0: also take explicit emissive light samples per probe
+    // (direct light at the probe) and skip primary-hit emission in the direction samples.
+    // Output layout per probe: [samplesPerProbe direction samples | lightSamplesPerProbe light samples].
+    void traceProbeBatch(RenderContext* pRenderContext, uint32_t samplesPerProbe, uint32_t probeCount, uint32_t lightSamplesPerProbe = 0);
+    uint32_t getLightSamplesPerProbe() const;
 
     // Same transport budgets as the atlas baker, without a virtual receiver bounce.
     uint32_t mMaxDiffuseBounces = 3;
@@ -109,7 +113,10 @@ private:
     static constexpr uint32_t kProbeSamplingSeed = 0xdeadbeef;
 
     // emissive light sampler
-    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Uniform; ///< Emissive light sampler to use for NEE.
+    // Power: picks lights by emitted power, independent of the probe position, so the
+    // explicit probe light samples stay common across probes and concentrate on the
+    // bright bulbs. (Was Uniform; LightBVH would disable the probe light samples.)
+    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Power; ///< Emissive light sampler to use for NEE.
     std::unique_ptr<EmissiveLightSampler> mpEmissiveSampler; ///< Emissive light sampler or nullptr if not used.
     mutable LightBVHSampler::Options mLightBVHOptions; ///< Current options for the light BVH sampler. not used yet. just here to compile the code
     
