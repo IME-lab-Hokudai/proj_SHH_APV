@@ -378,6 +378,7 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
     int probeIdx = traverseOctree(pos);
     if (probeIdx < 0) return false;
     fetchHermiteInterpolatedSH(probeIdx, pos, coeffs);
+    //fetchTrilinearInterpolatedSH(pos, coeffs);
     return true;
 }
 #endif
@@ -445,8 +446,8 @@ float3 evaluateIrradiance(float3 n, float3 shCoeffs[MAX_SH_BASIS])
         shCoeffs[8] * Y8 * A[2];
 
     // Clamp negative lighting
-    // return max(result, float3(0.f));
-    return result;
+     return max(result, float3(0.f));
+    //return result;
 }
 
 VSOut vsMain(VSIn vIn)

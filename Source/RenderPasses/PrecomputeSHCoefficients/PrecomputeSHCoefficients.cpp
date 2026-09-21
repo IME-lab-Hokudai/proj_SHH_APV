@@ -47,7 +47,15 @@ const int numSamplesPerProbe = 4096;
 // not a scattering vertex, so Falcor's NEE never covers it; without these,
 // direct light from small emitters aliases between neighbouring probes.
 // 0 = old behaviour (direct light only via the direction samples).
-const uint32_t numLightSamplesPerProbe = 1024;
+const uint32_t numLightSamplesPerProbe = 4096;
+// Paths per direction sample (option 2). All paths share the direction's first
+// hit (s_i, n_i), so the SH gradient/Hessian patch geometry is unchanged; only
+// the radiance leaving that patch is averaged over K continuations.
+// 1 = original single-path behaviour. Cost of the direction samples scales ~K.
+const uint32_t numPathsPerDirection = 1;
+// NEE light samples at every surface hit along a path (option 1).
+// 1 = Falcor default / original behaviour.
+const uint32_t numNeeSamplesPerHit = 1;
 //const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
@@ -79,12 +87,14 @@ const bool useRelativeError = false;
 const bool kUseManualGridBounds = true;
 
 //manual bound for bistro scene
-const float3 kGridMin = float3(3.5f, 0.65f, -6.5f);
-const float3 kGridMax = float3(16.0f, 5.0f, 3.0f);
-
+//const float3 kGridMin = float3(3.5f, 0.65f, -6.5f);
+//const float3 kGridMax = float3(16.0f, 5.0f, 3.0f);
+// Cube grid around the sphere-loop demo. Centre (9.52, 3.4, -1.08), side 4.9 m.
+const float3 kGridMin = float3(7.07f, 0.65f, -3.53f);
+const float3 kGridMax = float3(11.97f, 5.55f, 1.37f);
 const bool useIrradianceSpaceMetric = false;
-const bool useResidualCorrection = true;
-//const bool useResidualCorrection = false;
+//const bool useResidualCorrection = true;
+const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -178,8 +188,11 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricBistro.txt";
 //const std::string saveToFileName = "Test.txt";
-const std::string saveToFileName = "DirectAbsErr100EGCMetricBistro.txt";
-//const std::string saveToFileName = "DirectAbsErr100HessianMetricBistro.txt";
+//const std::string saveToFileName = "U64BistroNew.txt";
+//const std::string saveToFileName = "DirectAbsErr100EGCMetricBistroNew.txt";
+//const std::string saveToFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
+//const std::string saveToFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
+const std::string saveToFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -2134,7 +2147,7 @@ void PrecomputeSHCoefficients::createProbeTracingProgram(
     defines.add("USE_RUSSIAN_ROULETTE", "0");
     defines.add("USE_ALPHA_TEST", "1");
     defines.add("USE_LIGHTS_IN_DIELECTRIC_VOLUMES", "0");
-    defines.add("DISABLE_CAUSTICS", "0");
+    defines.add("DISABLE_CAUSTICS", "1");
     defines.add("ADJUST_SHADING_NORMALS", "0");
     defines.add("GBUFFER_ADJUST_SHADING_NORMALS", "0");
     defines.add("PRIMARY_LOD_MODE", "0"); // Mip0; probe rays have no camera derivatives.
@@ -2191,6 +2204,8 @@ void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, ui
     rtVar["PerFrameCB"]["probeSamplingSeed"] = kProbeSamplingSeed;
     rtVar["PerFrameCB"]["numSamplePerProbe"] = samplesPerProbe;
     rtVar["PerFrameCB"]["numLightSamplePerProbe"] = lightSamplesPerProbe;
+    rtVar["PerFrameCB"]["numPathsPerDirection"] = numPathsPerDirection;
+    rtVar["PerFrameCB"]["numNeeSamplesPerHit"] = numNeeSamplesPerHit;
 
     auto tracerVar = rtVar["gPathTracer"];
     tracerVar["params"]["lodBias"] = 0.f;

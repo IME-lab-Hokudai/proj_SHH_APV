@@ -7,6 +7,7 @@ import RenderPasses.PathTracer.LoadShadingData;
 import ProbePathTracer;
 import ProbeSamplingData;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Rendering.Lights.EmissiveLightSampler;
 import Utils.Geometry.GeometryHelpers;
 
 ParameterBlock<PathTracer> gPathTracer;
@@ -19,6 +20,8 @@ cbuffer PerFrameCB
     uint probeSamplingSeed;
     uint numSamplePerProbe;      // direction samples (path traced), indices [0, numSamplePerProbe)
     uint numLightSamplePerProbe; // explicit emissive light samples, indices [numSamplePerProbe, numSamplePerProbe + numLightSamplePerProbe)
+    uint numPathsPerDirection;   // K continuations per direction sharing the first hit (1 = single path, original behaviour)
+    uint numNeeSamplesPerHit;    // NEE light samples at every surface hit along a path (1 = Falcor default)
 };
 
 struct ProbeVisibilityQuery : IVisibilityQuery
@@ -114,79 +117,98 @@ void rayGen()
     // hit) is already covered by them and must not be counted again.
     const bool includePrimaryEmission = (numLightSamplePerProbe == 0);
 
-    PathState path = {};
-    path.setActive();
-    // Pack the linear DIRECTION-sample index into Falcor's 12-bit X/Y pixel fields
-    // (light samples do not use PathState, so they don't count toward the limit).
-    // This also supports batches with more than 4096 probes.
-    path.id = probeIdx * numSamplePerProbe + dirIdx;
-    path.thp = float3(1.f);
-    path.origin = gProbePositions[probeIdx];
-    // Preserve the grid's polar Z-up -> Falcor Y-up permutation.
-    path.dir = gProbeDirSamples[dirIdx].dir.yzx;
-    // Common random numbers across ALL probes, independent of batch boundaries
-    // and probe ordering. Each direction still initializes a distinct stream.
-    path.sg = SampleGenerator(uint2(dirIdx, 0), probeSamplingSeed);
-
-    float3 firstHitPos = float3(0.f);
-    float3 firstHitNormal = float3(0.f);
-    float firstHitT = -1.f;
-    bool firstRay = true;
-    SceneRayQuery<kUseAlphaTest> sceneQuery;
-    ProbeVisibilityQuery visibility;
-    // Match the old emissive-only tracer: N random light samples per hit for
-    // N active emissive triangles, not one guaranteed sample of each triangle.
-    // Keep this count fixed along the path for complementary MIS weights.
+    // NEE light samples per surface hit. Must stay fixed along a path so the
+    // emitter-hit MIS weights match the NEE at the previous vertex.
 #if USE_EMISSIVE_LIGHTS
     //const uint lightSampleCount = max(1u, gScene.lightCollection.getActiveTriangleCount());
-    const uint lightSampleCount = 1;
+    const uint lightSampleCount = max(1u, numNeeSamplesPerHit);
 #else
     const uint lightSampleCount = 1;
 #endif
 
-    // The probe is a point measuring radiance, not a diffuse receiver.
-    // Start at vertex zero with unit throughput and no cosine/PDF weighting.
-    while (path.isActive())
-    {
-        path.incrementVertexIndex();
-        Ray ray = path.getScatterRay();
-        if (firstRay)
-        {
-            ray.tMin = 0.001f;
-            ray.tMax = 10000.f;
-        }
-        float hitT;
-        // Preserve first-ray culling; secondary rays must be able to exit glass.
-        const uint rayFlags = firstRay
-            ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES
-            : RAY_FLAG_NONE;
+    // K paths per direction. All K start with the SAME primary ray, so they share
+    // the first hit (s_i, n_i) that the SH gradient/Hessian patch model uses; only
+    // what happens after that hit (NEE, BSDF continuation) is resampled. The
+    // stored L_i is their average, i.e. a lower-variance estimate of the radiance
+    // leaving patch i toward the probe. K = 1 reproduces the single-path result.
+    const uint pathCount = max(1u, numPathsPerDirection);
 
-        const HitInfo hit = sceneQuery.traceRay(ray, hitT, rayFlags);
-        if (hit.isValid())
+    float3 firstHitPos = float3(0.f);
+    float3 firstHitNormal = float3(0.f);
+    float firstHitT = -1.f;
+    float3 Lsum = float3(0.f);
+    SceneRayQuery<kUseAlphaTest> sceneQuery;
+    ProbeVisibilityQuery visibility;
+
+    for (uint k = 0; k < pathCount; ++k)
+    {
+        PathState path = {};
+        path.setActive();
+        // Pack the linear DIRECTION-sample index into Falcor's 12-bit X/Y pixel fields
+        // (light samples do not use PathState, so they don't count toward the limit).
+        // This also supports batches with more than 4096 probes.
+        path.id = probeIdx * numSamplePerProbe + dirIdx;
+        path.thp = float3(1.f);
+        path.origin = gProbePositions[probeIdx];
+        // Preserve the grid's polar Z-up -> Falcor Y-up permutation.
+        path.dir = gProbeDirSamples[dirIdx].dir.yzx;
+        // Common random numbers across ALL probes, independent of batch boundaries
+        // and probe ordering. Each direction (and each continuation k) initializes
+        // a distinct stream; k = 0 is exactly the original stream.
+        // (Light-sample threads use y = 1 with x >= numSamplePerProbe, so no overlap.)
+        path.sg = SampleGenerator(uint2(dirIdx, k == 0 ? 0u : k + 1u), probeSamplingSeed);
+
+        bool firstRay = true;
+
+        // The probe is a point measuring radiance, not a diffuse receiver.
+        // Start at vertex zero with unit throughput and no cosine/PDF weighting.
+        while (path.isActive())
         {
+            path.incrementVertexIndex();
+            Ray ray = path.getScatterRay();
             if (firstRay)
             {
-                const ShadingData sd = loadShadingData(hit, path.origin, path.dir);
-                firstHitPos = sd.posW;
-                firstHitNormal = normalize(sd.faceN);
-                firstHitT = hitT;
+                ray.tMin = 0.001f;
+                ray.tMax = 10000.f;
             }
-            path.setHit(hit);
-            gPathTracer.handleProbeHit(path, visibility, lightSampleCount, includePrimaryEmission);
+            float hitT;
+            // Preserve first-ray culling; secondary rays must be able to exit glass.
+            const uint rayFlags = firstRay
+                ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES
+                : RAY_FLAG_NONE;
+
+            const HitInfo hit = sceneQuery.traceRay(ray, hitT, rayFlags);
+            if (hit.isValid())
+            {
+                // The primary ray is identical for all k; record its hit once.
+                if (firstRay && k == 0)
+                {
+                    const ShadingData sd = loadShadingData(hit, path.origin, path.dir);
+                    firstHitPos = sd.posW;
+                    firstHitNormal = normalize(sd.faceN);
+                    firstHitT = hitT;
+                }
+                path.setHit(hit);
+                gPathTracer.handleProbeHit(path, visibility, lightSampleCount, includePrimaryEmission);
+            }
+            else
+            {
+                path.clearHit();
+                gPathTracer.handleProbeMiss(path, lightSampleCount);
+            }
+            // Capture only the first intersection, even when later hits are rejected
+            // by Falcor's nested dielectric logic or the ray transmits through glass.
+            firstRay = false;
         }
-        else
-        {
-            path.clearHit();
-            gPathTracer.handleProbeMiss(path, lightSampleCount);
-        }
-        // Capture only the first intersection, even when later hits are rejected
-        // by Falcor's nested dielectric logic or the ray transmits through glass.
-        firstRay = false;
+
+        Lsum += path.L;
     }
+
+    const float3 L = Lsum / float(pathCount);
 
     // Preserve ProbeSampleData, output indexing, miss sentinel, and the inverse
     // coordinate permutation used by the existing SH/gradient/Hessian code.
-    gProbeSamplingOutput[outIdx].Li = float4(path.L, 1.f);
+    gProbeSamplingOutput[outIdx].Li = float4(L, 1.f);
     gProbeSamplingOutput[outIdx].s = float4(firstHitPos.zxy, 1.f);
     gProbeSamplingOutput[outIdx].n = float4(firstHitNormal.zxy, 1.f);
     gProbeSamplingOutput[outIdx].hitT = firstHitT;
