@@ -2,6 +2,15 @@ import Scene.Raster;
 #include "AdaptiveGridData.slang"
 #include "Utils/Math/MathConstants.slangh"
 
+// ---- SH windowing test switch (see evaluateIrradiance) ----
+#ifndef SH_WINDOW
+#define SH_WINDOW 0       // 0 = off (original), 1 = Hanning, 2 = Lanczos
+#endif
+#ifndef SH_WINDOW_WIDTH
+#define SH_WINDOW_WIDTH 4  // larger = weaker windowing
+#endif
+
+
 // Shared material, xatlas, and glass rendering for both probe layouts.
 SamplerState gLinearSampler;
 Texture2D<float4> gOpaqueColor;
@@ -433,21 +442,43 @@ float3 evaluateIrradiance(float3 n, float3 shCoeffs[MAX_SH_BASIS])
     // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
     float A[3] = { 3.141593f, 2.094395f, 0.785398f };
 
+    // SH windowing (de-ringing test). Scales band l by sigma_l before evaluation.
+    // Per-band constants, so this equals windowing every probe's coefficients
+    // and gradients: consistent with the Hermite/trilinear interpolation.
+    // No rebake needed. Band 0 is untouched (mean irradiance preserved).
+    //   SH_WINDOW 0 = off (original), 1 = Hanning, 2 = Lanczos
+    //   SH_WINDOW_WIDTH w: larger = weaker. Hanning w=4: (1, 0.854, 0.5); w=3: (1, 0.75, 0.25)
+    //                                        Lanczos w=3: (1, 0.827, 0.413)
+#if SH_WINDOW != 0
+    [unroll]
+    for (int l = 1; l < 3; ++l)
+    {
+        const float t = M_PI * float(l) / float(SH_WINDOW_WIDTH);
+#if SH_WINDOW == 1
+        const float sigma = 0.5f * (1.f + cos(t));
+#else
+        const float sigma = sin(t) / t;
+#endif
+        A[l] *= sigma;
+    }
+#endif
+
+
     // Dot product: coeffs · basis
     float3 result =
         shCoeffs[0] * Y0 * A[0] +
         shCoeffs[1] * Y1 * A[1] +
         shCoeffs[2] * Y2 * A[1] +
-                    shCoeffs[3] * Y3 * A[1] +
+        shCoeffs[3] * Y3 * A[1] +
         shCoeffs[4] * Y4 * A[2] +
         shCoeffs[5] * Y5 * A[2] +
-                    shCoeffs[6] * Y6 * A[2] +
+        shCoeffs[6] * Y6 * A[2] +
         shCoeffs[7] * Y7 * A[2] +
         shCoeffs[8] * Y8 * A[2];
 
     // Clamp negative lighting
-     return max(result, float3(0.f));
-    //return result;
+     //return max(result, float3(0.f));
+    return result;
 }
 
 VSOut vsMain(VSIn vIn)

@@ -37,6 +37,17 @@ import Rendering.Utils.PixelStats;
 #error ProbePathTracer requires RTXDI and camera guide outputs to be disabled.
 #endif
 
+// Diffuse-only probe transport, as in production light baking: at every surface
+// hit only the diffuse lobes (reflection and transmission) are active. For the
+// standard material the diffuse albedo is ~BaseColor * (1 - metallic), so metals
+// come out dark; sharp specular transport (glossy reflections of lamps, caustics)
+// is excluded. Clear transmissive surfaces are skipped separately
+// (PROBE_IGNORE_TRANSMISSIVE). 0 = original transport.
+#ifndef PROBE_DIFFUSE_ONLY
+#define PROBE_DIFFUSE_ONLY 1
+#endif
+static const bool kProbeDiffuseOnly = PROBE_DIFFUSE_ONLY != 0;
+
 extension PathTracer
 {
     // lightSampleCount must be >= 1 and fixed along the entire path, including
@@ -50,7 +61,7 @@ extension PathTracer
         inout PathState path, inout VisibilityQuery vq, uint lightSampleCount, bool includePrimaryEmission)
     {
         // Original behaviour: Falcor's camera-style handleHit (always adds primary emission).
-        if (lightSampleCount == 1 && includePrimaryEmission)
+        if (lightSampleCount == 1 && includePrimaryEmission && !kProbeDiffuseOnly)
         {
             handleHit(path, vq);
             return;
@@ -78,7 +89,9 @@ extension PathTracer
         const IMaterialInstance mi = gScene.materials.getMaterialInstance(sd, lod, hints);
         BSDFProperties bsdfProperties = mi.getProperties(sd);
         const bool isSpecular = bsdfProperties.roughness <= params.specularRoughnessThreshold;
-        if (kDisableCaustics && path.getBounces(BounceType::Diffuse) > 0 && isSpecular)
+        // Diffuse-only probe transport at every hit (including the first one),
+        // or Falcor's caustic suppression after a diffuse bounce otherwise.
+        if (kProbeDiffuseOnly || (kDisableCaustics && path.getBounces(BounceType::Diffuse) > 0 && isSpecular))
             sd.mtl.setActiveLobes((uint)LobeType::Diffuse);
         if (!kUseLightsInDielectricVolumes && path.isInsideDielectricVolume())
             bsdfProperties.emission = float3(0.f);

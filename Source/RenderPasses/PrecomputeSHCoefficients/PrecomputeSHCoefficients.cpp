@@ -52,10 +52,17 @@ const uint32_t numLightSamplesPerProbe = 4096;
 // hit (s_i, n_i), so the SH gradient/Hessian patch geometry is unchanged; only
 // the radiance leaving that patch is averaged over K continuations.
 // 1 = original single-path behaviour. Cost of the direction samples scales ~K.
-const uint32_t numPathsPerDirection = 1;
+const uint32_t numPathsPerDirection = 4;
 // NEE light samples at every surface hit along a path (option 1).
 // 1 = Falcor default / original behaviour.
-const uint32_t numNeeSamplesPerHit = 1;
+const uint32_t numNeeSamplesPerHit = 8;
+// Glass, bottles, liquids and ice (specular transmission > 0, non-emissive)
+// are invisible to probe path rays and visibility rays. false = trace them as before.
+const bool kProbeIgnoreTransmissive = true;
+// Diffuse-only probe transport (production-style bake): only diffuse lobes at every
+// hit, i.e. albedo ~ BaseColor*(1-metallic), no glossy reflections or caustics.
+// false = full Falcor material transport as before.
+const bool kProbeDiffuseOnly = true;
 //const int numSamplesPerProbe = 64;
 //const int numSamplesPerProbe = 2048;
 const uint32_t kMaxSamplesPerProbe = 1024; //used in abandoned progressive build test.
@@ -2148,6 +2155,8 @@ void PrecomputeSHCoefficients::createProbeTracingProgram(
     defines.add("USE_ALPHA_TEST", "1");
     defines.add("USE_LIGHTS_IN_DIELECTRIC_VOLUMES", "0");
     defines.add("DISABLE_CAUSTICS", "1");
+    defines.add("PROBE_IGNORE_TRANSMISSIVE", kProbeIgnoreTransmissive ? "1" : "0");
+    defines.add("PROBE_DIFFUSE_ONLY", kProbeDiffuseOnly ? "1" : "0");
     defines.add("ADJUST_SHADING_NORMALS", "0");
     defines.add("GBUFFER_ADJUST_SHADING_NORMALS", "0");
     defines.add("PRIMARY_LOD_MODE", "0"); // Mip0; probe rays have no camera derivatives.

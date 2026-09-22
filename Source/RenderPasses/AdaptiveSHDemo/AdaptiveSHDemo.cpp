@@ -32,7 +32,6 @@
 #include <cstring>
 #include <limits>
 #include <string>
-#include <unordered_set>
 #include <vector>
 #include "AdaptiveSHDemo.h"
 #include "Rendering/Lights/EmissivePowerSampler.h"
@@ -71,11 +70,11 @@
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
-const std::string loadFromFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";
 //const std::string loadFromFileName = "DirectAbsErr100EGCMetricBistroNew.txt";
 //const std::string loadFromFileName = "DirectAbsErr50HessianMetricBistro.txt";
-//const std::string loadFromFileName = "DirectAbsErr100EGCMetricBistroNew.txt";
+const std::string loadFromFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -87,8 +86,8 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64DataScene.txt";
 //const std::string loadFromFileName = "U64DataScene_4096spp.txt";
 //const std::string loadFromFileName = "U64Bistro.txt";
-//const std::string loadFromFileName = "U64BistroNewBuildLogic.txt";
-const std::string loadFromFileName = "U64BistroCubeGridAllDiffuse.txt";
+const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
+//const std::string loadFromFileName = "U64BistroCubeGridKPathAllDiffuse.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
 

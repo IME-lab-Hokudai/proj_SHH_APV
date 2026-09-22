@@ -24,12 +24,76 @@ cbuffer PerFrameCB
     uint numNeeSamplesPerHit;    // NEE light samples at every surface hit along a path (1 = Falcor default)
 };
 
+// ---------------------------------------------------------------------------
+// Clear transmissive materials (glass, bottles, liquids, ice) are invisible to probe
+// rays. Probes store low-frequency diffuse irradiance: small refractive props
+// contribute almost nothing to it, but traced as real glass they produce glints
+// and refracted bulbs that only the fixed directions can find (spatial
+// aliasing), act black after a diffuse bounce with caustics disabled, and block
+// every shadow ray. Skipping them in BOTH the path rays and the visibility rays
+// keeps NEE and BSDF sampling consistent (same geometry for MIS).
+// Emissive materials are never skipped, even if transmissive.
+// PROBE_IGNORE_TRANSMISSIVE = 0 restores the original behaviour.
+// ---------------------------------------------------------------------------
+#ifndef PROBE_IGNORE_TRANSMISSIVE
+#define PROBE_IGNORE_TRANSMISSIVE 1
+#endif
+
+static const uint kMaxInvisibleSkips = 32;
+
+bool isProbeInvisible(const HitInfo hit)
+{
+#if PROBE_IGNORE_TRANSMISSIVE
+    if (hit.getType() != HitType::Triangle) return false;
+    const TriangleHit th = hit.getTriangleHit();
+    const uint materialID = gScene.getMaterialID(th.instanceID);
+    if (gScene.materials.getMaterialType(materialID) != MaterialType::Standard) return false;
+    const BasicMaterialData md = gScene.materials.getBasicMaterialData(materialID);
+    const bool isEmissive = any(md.emissive > 0.f) || md.texEmissive.getMode() == TextureHandle::Mode::Texture;
+    if (isEmissive) return false;
+    // Clear (specular) transmission only. Diffuse-transmissive materials (thin
+    // fabric, paper, leaves) scatter and block light and stay physical.
+    return float(md.specularTransmission) > 0.f;
+#else
+    return false;
+#endif
+}
+
+// Closest hit along the ray, ignoring invisible (transmissive) surfaces.
+HitInfo traceSkippingInvisible(inout SceneRayQuery<kUseAlphaTest> query, Ray ray, out float hitT, uint rayFlags)
+{
+    hitT = 0.f;
+    for (uint i = 0; i <= kMaxInvisibleSkips; ++i)
+    {
+        const HitInfo hit = query.traceRay(ray, hitT, rayFlags);
+        if (!hit.isValid() || !isProbeInvisible(hit)) return hit;
+        // Continue the same ray just past the skipped surface.
+        ray.tMin = hitT * (1.f + 1e-5f) + 1e-4f;
+        if (ray.tMin >= ray.tMax) break;
+    }
+    HitInfo miss = {};
+    return miss;
+}
+
+// Visibility that lets light pass through invisible (transmissive) surfaces.
+bool traceVisibilitySkippingInvisible(const Ray ray)
+{
+    SceneRayQuery<kUseAlphaTest> query;
+    if (query.traceVisibilityRay(ray)) return true; // fast path: nothing in the way
+#if PROBE_IGNORE_TRANSMISSIVE
+    float hitT;
+    const HitInfo hit = traceSkippingInvisible(query, ray, hitT, RAY_FLAG_NONE);
+    return !hit.isValid();
+#else
+    return false;
+#endif
+}
+
 struct ProbeVisibilityQuery : IVisibilityQuery
 {
     bool traceVisibilityRay(const Ray ray)
     {
-        SceneRayQuery<kUseAlphaTest> query;
-        return query.traceVisibilityRay(ray);
+        return traceVisibilitySkippingInvisible(ray);
     }
 };
 
@@ -81,8 +145,7 @@ void writeProbeLightSample(const uint lightSampleIdx, const uint outIdx, const f
             const float3 toLight = lightPos - probePosW;
             const float visDist = length(toLight);
 
-            SceneRayQuery<kUseAlphaTest> query;
-            const bool visible = visDist > 0.f && query.traceVisibilityRay(Ray(probePosW, toLight / visDist, 0.f, visDist));
+            const bool visible = visDist > 0.f && traceVisibilitySkippingInvisible(Ray(probePosW, toLight / visDist, 0.f, visDist));
 
             o.s = float4(tls.posW.zxy, 1.f);
             o.n = float4(tls.normalW.zxy, 1.f);
@@ -177,7 +240,9 @@ void rayGen()
                 ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES
                 : RAY_FLAG_NONE;
 
-            const HitInfo hit = sceneQuery.traceRay(ray, hitT, rayFlags);
+            // Transmissive surfaces are skipped (see isProbeInvisible), so the
+            // first hit s_i is the first non-transmissive surface.
+            const HitInfo hit = traceSkippingInvisible(sceneQuery, ray, hitT, rayFlags);
             if (hit.isValid())
             {
                 // The primary ray is identical for all k; record its hit once.
