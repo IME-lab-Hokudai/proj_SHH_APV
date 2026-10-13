@@ -41,6 +41,9 @@
 #include <cmath>
 #include "ProbeSamplingData.slang"
 #include <chrono>
+#include <filesystem>
+#include <ctime>
+#include <iomanip>
 const int numSamplesPerProbe = 4096;
 // Explicit emissive light samples per probe for DIRECT light at the probe
 // (see writeProbeLightSample in ProbeSampling.rt.slang). The probe position is
@@ -82,7 +85,7 @@ const float verificationExtent = 0.25f;
 //const float ErrorThreshold = 4.25f;
 //const float ErrorThreshold = 3.0f;
 //const float ErrorThreshold = 5.0f;
-//const float ErrorThreshold = 1.0f;
+//const float ErrorThreshold = 2.0f;
 //const float ErrorThreshold =3.5f;//threshold for Erel
 //const float ErrorThreshold =1.5f;//threshold for Erel
 const float ErrorThreshold =100.0f;//threshold for Erel
@@ -91,7 +94,8 @@ const bool useRelativeError = false;
 // Adaptive and uniform grid placement in Falcor world coordinates (Y-up).
 // Bistro starting volume: central tables and the space above them for dynamic objects.
 // Set false to use the loaded scene bounds with the existing 0.98 inset.
-const bool kUseManualGridBounds = true;
+//const bool kUseManualGridBounds = true;
+const bool kUseManualGridBounds = false;
 
 //manual bound for bistro scene
 //const float3 kGridMin = float3(3.5f, 0.65f, -6.5f);
@@ -100,8 +104,8 @@ const bool kUseManualGridBounds = true;
 const float3 kGridMin = float3(7.07f, 0.65f, -3.53f);
 const float3 kGridMax = float3(11.97f, 5.55f, 1.37f);
 const bool useIrradianceSpaceMetric = false;
-//const bool useResidualCorrection = true;
-const bool useResidualCorrection = false;
+const bool useResidualCorrection = true;
+//const bool useResidualCorrection = false;
 
 const float residualPruneStrength = 0.00f;
 const float residualRefineStrength = 0.50f;
@@ -191,7 +195,8 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 //const std::string saveToFileName = "DirectAbsErr5ResidualScaleMetric.txt";
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlab.txt";
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-//const std::string saveToFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
+//const std::string saveToFileName = "DirectAbsErr2EGCShadowBoundary.txt";
+//const std::string saveToFileName = "DirectAbsErr2HessianShadowBoundary.txt";
 
 //const std::string saveToFileName = "DirectAbsErr2HessianMetricBistro.txt";
 //const std::string saveToFileName = "Test.txt";
@@ -199,7 +204,9 @@ const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV
 //const std::string saveToFileName = "DirectAbsErr100EGCMetricBistroNew.txt";
 //const std::string saveToFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
 //const std::string saveToFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
-const std::string saveToFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
+//const std::string saveToFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
+//const std::string saveToFileName = "DirectAbsErr50EGCMetricCubeBistro.txt";
+const std::string saveToFileName = "DirectAbsErr100EGCMetricBistroWholeScene.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -1628,14 +1635,19 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     };
     uint32_t roundIndex = 0;
     uint64_t completedCorners = 0;
+
+    // Timing of the subdivision-decision pass and of the EGC signal inside it.
+    double subdivisionEvalMs = 0.0;
+    mAdaptiveProbeVolume->resetEGCProfiling();
+
     logInfo("[Adaptive grid] Initializing build: {} directions/probe, threshold {} ({} error).",
         numSamplesPerProbe, ErrorThreshold, useRelativeError ? "relative" : "absolute");
 
     // 1. Initialize
            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-    const uint3 seedResolution = uint3(1, 1, 1);
-    //const uint3 seedResolution = uint3(2, 2, 2);
+    //const uint3 seedResolution = uint3(1, 1, 1);
+    const uint3 seedResolution = uint3(2, 2, 2);
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
     //const uint3 seedResolution = uint3(16, 16, 16);
@@ -1782,7 +1794,22 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 completedCorners, elapsedSeconds());
         }
         logInfo("[Adaptive grid] Round {}: evaluating subdivision; elapsed {:.1f}s.", roundIndex, elapsedSeconds());
+
+        const double egcMsBefore = mAdaptiveProbeVolume->getEGCTimeMs();
+        const auto subdivisionStart = BuildClock::now();
+
         mAdaptiveProbeVolume->finishBatch();
+
+        const double roundSubdivisionMs =
+            std::chrono::duration<double, std::milli>(BuildClock::now() - subdivisionStart).count();
+        subdivisionEvalMs += roundSubdivisionMs;
+
+        logInfo("[Adaptive grid] Round {}: subdivision pass {:.2f} ms, of which EGC {:.2f} ms ({:.2f}%).",
+            roundIndex, roundSubdivisionMs,
+            mAdaptiveProbeVolume->getEGCTimeMs() - egcMsBefore,
+            roundSubdivisionMs > 0.0
+                ? 100.0 * (mAdaptiveProbeVolume->getEGCTimeMs() - egcMsBefore) / roundSubdivisionMs
+                : 0.0);
         
         logInfo("[Adaptive grid] Round {} finished: {} cells, {} corners pending for the next round; elapsed {:.1f}s.",
             roundIndex, mAdaptiveProbeVolume->getProbes().size(),
@@ -1795,6 +1822,97 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     logInfo("[Adaptive grid] Construction complete: {} rounds, {} processed corners, {} cells ({} leaves), {:.1f}s. "
             "Uploading and saving next.",
         roundIndex, completedCorners, mAdaptiveProbeVolume->getProbes().size(), leafCount, elapsedSeconds());
+
+    // --- EGC cost summary (for the paper) ------------------------------
+    {
+        const double totalBuildSeconds = elapsedSeconds();
+        const double egcMs = mAdaptiveProbeVolume->getEGCTimeMs();
+        const uint64_t egcCalls = mAdaptiveProbeVolume->getEGCCallCount();
+        const uint64_t egcEdges = mAdaptiveProbeVolume->getEGCEdgeCount();
+
+        logInfo("[EGC timing] Total {:.2f} ms over {} cell evaluations ({} valid edges), "
+                "{:.4f} us per cell.",
+            egcMs, egcCalls, egcEdges,
+            egcCalls > 0 ? 1000.0 * egcMs / double(egcCalls) : 0.0);
+
+        logInfo("[EGC timing] Subdivision-decision pass {:.2f} ms total; EGC is {:.2f}% of it "
+                "and {:.4f}% of the {:.1f}s build.",
+            subdivisionEvalMs,
+            subdivisionEvalMs > 0.0 ? 100.0 * egcMs / subdivisionEvalMs : 0.0,
+            totalBuildSeconds > 0.0 ? 100.0 * (egcMs / 1000.0) / totalBuildSeconds : 0.0,
+            totalBuildSeconds);
+
+        // Append one row per build to a CSV, so timings from several runs
+        // and settings can be collected and plotted directly.
+        const std::string egcTimingCsv = "EGCTimingSummary.csv";
+
+        const bool csvExists = std::ifstream(egcTimingCsv).good();
+
+        std::ofstream csv(egcTimingCsv, std::ios::app);
+        if (csv)
+        {
+            if (!csvExists)
+            {
+                csv << "timestamp,"
+                       "egcEnabled,"
+                       "samplesPerProbe,"
+                       "errorThreshold,"
+                       "rounds,"
+                       "cells,"
+                       "leaves,"
+                       "egcCellEvaluations,"
+                       "egcValidEdges,"
+                       "egcTotalMs,"
+                       "egcUsPerCell,"
+                       "subdivisionPassMs,"
+                       "egcShareOfSubdivisionPct,"
+                       "buildSeconds,"
+                       "egcShareOfBuildPct\n";
+            }
+
+            const std::time_t nowTime =
+                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+            std::tm nowTm{};
+#ifdef _WIN32
+            localtime_s(&nowTm, &nowTime);
+#else
+            localtime_r(&nowTime, &nowTm);
+#endif
+            char timeBuf[32] = {};
+            std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &nowTm);
+
+            csv << timeBuf << ","
+                << (useResidualCorrection ? 1 : 0) << ","
+                << numSamplesPerProbe << ","
+                << ErrorThreshold << ","
+                << roundIndex << ","
+                << mAdaptiveProbeVolume->getProbes().size() << ","
+                << leafCount << ","
+                << egcCalls << ","
+                << egcEdges << ","
+                << std::fixed << std::setprecision(4) << egcMs << ","
+                << (egcCalls > 0 ? 1000.0 * egcMs / double(egcCalls) : 0.0) << ","
+                << subdivisionEvalMs << ","
+                << (subdivisionEvalMs > 0.0 ? 100.0 * egcMs / subdivisionEvalMs : 0.0)
+                << "," << std::setprecision(2) << totalBuildSeconds << ","
+                << std::setprecision(6)
+                << (totalBuildSeconds > 0.0 ? 100.0 * (egcMs / 1000.0) / totalBuildSeconds : 0.0)
+                << "\n";
+
+            csv.close();
+
+            logInfo("[EGC timing] Appended a row to {} (absolute path: {}).",
+                egcTimingCsv,
+                std::filesystem::absolute(egcTimingCsv).string());
+        }
+        else
+        {
+            logWarning("[EGC timing] Could not open {} for writing (absolute path: {}).",
+                egcTimingCsv,
+                std::filesystem::absolute(egcTimingCsv).string());
+        }
+    }
 }
 
 void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderContext)

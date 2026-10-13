@@ -69,8 +69,10 @@ namespace
     //const char kAtlasMappingFile[] = "Bistro_AtlasMapping.bin";
     //const char kAtlasManifestFile[] = "Bistro_AtlasManifest.txt";
 
-    const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
-    const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
+    //const char kAtlasMappingFile[] = "Room_AtlasMapping.bin";
+    //const char kAtlasManifestFile[] = "Room_AtlasManifest.txt";
+    const char kAtlasMappingFile[] = "ShadowBoundary_AtlasMapping.bin";
+    const char kAtlasManifestFile[] = "ShadowBoundary_AtlasManifest.txt";
 
     std::filesystem::path getAtlasPagePath(uint32_t pageIndex)
     {

@@ -41,8 +41,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -70,11 +70,14 @@
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
-//const std::string loadFromFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
+
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";
 //const std::string loadFromFileName = "DirectAbsErr100EGCMetricBistroNew.txt";
 //const std::string loadFromFileName = "DirectAbsErr50HessianMetricBistro.txt";
-const std::string loadFromFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
+//const std::string loadFromFileName = "DirectAbsErr2EGCShadowBoundary.txt";
+const std::string loadFromFileName = "DirectAbsErr2HessianShadowBoundary.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -86,7 +89,8 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64DataScene.txt";
 //const std::string loadFromFileName = "U64DataScene_4096spp.txt";
 //const std::string loadFromFileName = "U64Bistro.txt";
-const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
+//const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
+const std::string loadFromFileName = "U64Shadowboundary.txt"; 
 //const std::string loadFromFileName = "U64BistroCubeGridKPathAllDiffuse.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
@@ -114,16 +118,23 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
-    constexpr const char* kBistroAtlasMappingFile =
-        "Bistro_AtlasMapping.bin";
+    //constexpr const char* kBistroAtlasMappingFile =
+    //    "Bistro_AtlasMapping.bin";
 
-    constexpr const char* kBistroAtlasManifestFile =
-        "Bistro_AtlasManifest.txt";
+    //constexpr const char* kBistroAtlasManifestFile =
+    //    "Bistro_AtlasManifest.txt";
     //constexpr const char* kBistroAtlasMappingFile =
     //    "Room_AtlasMapping.bin";
 
     //constexpr const char* kBistroAtlasManifestFile =
     //    "Room_AtlasManifest.txt";
+    
+    
+    constexpr const char* kBistroAtlasMappingFile =
+        "ShadowBoundary_AtlasMapping.bin";
+
+    constexpr const char* kBistroAtlasManifestFile =
+        "ShadowBoundary_AtlasManifest.txt";
     constexpr uint32_t kBistroTestMaxPages = 10;
 
 #pragma pack(push, 1)

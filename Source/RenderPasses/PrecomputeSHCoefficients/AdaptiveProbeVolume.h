@@ -556,6 +556,30 @@ private:
         const float3& position
     ) const;
 
+public:
+    // ------------------------------------------------------------------
+    // EGC profiling
+    // ------------------------------------------------------------------
+    // Accumulated wall-clock time spent inside
+    // computeEdgeGradientConsistencyScale(), i.e. the Edge-Gradient
+    // Consistency signal itself. Counters are mutable so the timing can be
+    // collected from the const scale function.
+    void resetEGCProfiling() const
+    {
+        mEGCTimeMs = 0.0;
+        mEGCCallCount = 0;
+        mEGCEdgeCount = 0;
+    }
+
+    double getEGCTimeMs() const { return mEGCTimeMs; }
+    uint64_t getEGCCallCount() const { return mEGCCallCount; }
+    uint64_t getEGCEdgeCount() const { return mEGCEdgeCount; }
+
+private:
+    mutable double mEGCTimeMs = 0.0;      // total ms inside the EGC signal
+    mutable uint64_t mEGCCallCount = 0;   // number of cells evaluated
+    mutable uint64_t mEGCEdgeCount = 0;   // number of valid voxel edges tested
+
 private:
         ResidualPaperStats mResidualPaperStats;
         float computeEdgeGradientConsistencyScale(int probeIdx) const;

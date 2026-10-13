@@ -1,5 +1,6 @@
 #include "AdaptiveProbeVolume.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -724,6 +725,27 @@ float AdaptiveProbeVolume::computeEdgeGradientConsistencyScale(
     int probeIdx
 ) const
 {
+    // --- EGC profiling -------------------------------------------------
+    // Scoped so every return path (including the early ones) is counted.
+    struct EGCScopedTimer
+    {
+        std::chrono::steady_clock::time_point start;
+        double& accumMs;
+        uint64_t& calls;
+
+        EGCScopedTimer(double& ms, uint64_t& n)
+            : start(std::chrono::steady_clock::now()), accumMs(ms), calls(n)
+        {
+        }
+
+        ~EGCScopedTimer()
+        {
+            accumMs += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            calls++;
+        }
+    } egcScopedTimer(mEGCTimeMs, mEGCCallCount);
+
     if (probeIdx < 0 || probeIdx >= int(mProbes.size()))
         return 1.0f;
 
@@ -864,6 +886,8 @@ float AdaptiveProbeVolume::computeEdgeGradientConsistencyScale(
         if (dampedRatio < edgePruneTau)
             lowRatioEdgeCount++;
     }
+
+    mEGCEdgeCount += uint64_t(validEdgeCount);
 
     if (validEdgeCount == 0)
         return 1.0f;
