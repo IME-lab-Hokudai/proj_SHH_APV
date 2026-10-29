@@ -103,6 +103,15 @@ const bool kUseManualGridBounds = false;
 // Cube grid around the sphere-loop demo. Centre (9.52, 3.4, -1.08), side 4.9 m.
 const float3 kGridMin = float3(7.07f, 0.65f, -3.53f);
 const float3 kGridMax = float3(11.97f, 5.55f, 1.37f);
+
+// FD check at load. Anything other than None runs that check as soon as the scene is loaded and
+// turns everything else off: no grid file is loaded, no grid is built, nothing is rendered.
+// The FD buttons in the UI still work. None = normal operation.
+// Where the probes go: Plane / PlaneRetraced -> every enabled area in FDPlaneSettings.h, one CSV per area
+// (AdaptiveSHDemo "Show FD areas" draws them);
+// FixedPatch / Retraced -> random probes inside kGridMin/kGridMax (if kUseManualGridBounds) or the scene bounds.
+const PrecomputeSHCoefficients::FDCheck kFDCheckOnLoad = PrecomputeSHCoefficients::FDCheck::PlaneRetraced;
+const bool kFDOnly = kFDCheckOnLoad != PrecomputeSHCoefficients::FDCheck::None;
 const bool useIrradianceSpaceMetric = false;
 const bool useResidualCorrection = true;
 //const bool useResidualCorrection = false;
@@ -123,7 +132,8 @@ const float residualConfidenceEps = 1e-3f;
 //const uint3 unifromGridSize = uint3(8, 8, 8);
 const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
-const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
+//const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
+const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 
 //const std::string saveToFileName = "Seeded16DirectAbsErr3SubwayCorridorNoOpen.txt";
 //const std::string saveToFileName = "Seeded16DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -1073,6 +1083,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
 
     if (mpScene)
     {
+        // FD verification (FDVerification.cpp), triggered from the UI.
+        if (mFDCheck != FDCheck::None)
+        {
+            runFDVerification(pRenderContext, getFDBounds(), mFDCheck);
+            mFDCheck = FDCheck::None;
+        }
+        if (kFDOnly) return; // FD-only session: no grid build, no rendering
 #pragma region  ====Finite difference verification code block (Row-by-Row)===
 //if (mbVerify)
 //{
@@ -2103,10 +2120,20 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
     }
 }
 
+AABB PrecomputeSHCoefficients::getFDBounds() const
+{
+    return kUseManualGridBounds ? AABB(kGridMin, kGridMax) : mpScene->getSceneBounds();
+}
+
 void PrecomputeSHCoefficients::renderUI(
     Gui::Widgets& widget
 )
 {
+    if (widget.button("FD check: fixed-patch, random probes (E1a)")) mFDCheck = FDCheck::FixedPatch;
+    if (widget.button("FD check: fixed-patch + re-traced (E1c)")) mFDCheck = FDCheck::Retraced;
+    if (widget.button("FD check: fixed-patch on areas")) mFDCheck = FDCheck::Plane;
+    if (widget.button("FD check: re-traced on areas")) mFDCheck = FDCheck::PlaneRetraced;
+
     if (widget.checkbox(
         "Show Reconstructed Env Map",
         mbShowReconstructedEnvMap
@@ -2292,6 +2319,10 @@ void PrecomputeSHCoefficients::createProbeTracingProgram(
     defines.add("OUTPUT_NRD_DATA", "0");
     defines.add("OUTPUT_NRD_ADDITIONAL_DATA", "0");
     defines.add("USE_NRD_DEMODULATION", "0");
+    // Lambertian secondary surfaces: the analytic derivatives assume the radiance leaving a hit
+    // point does not depend on the direction to the probe. Falcor's default diffuse lobe
+    // (Frostbite) is view dependent. Remove this line to restore the default.
+    defines.add("DiffuseBrdf", "DiffuseBrdfLambert");
 
     mpRtProgram = Program::create(mpDevice, rtDesc, defines);
 
@@ -2360,7 +2391,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     mpSampleGenerator = nullptr;
     if (mpScene)
     {
-        
+            mFDCheck = kFDCheckOnLoad; // FD-only session: run the check on the first frame
             generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
             //generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
 
@@ -2418,14 +2449,14 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
            mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-           if (!mNeedRebuildProbeVolume) {
+           if (!mNeedRebuildProbeVolume && !kFDOnly) {
                mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
                mAdaptiveProbeVolume->uploadToGPU();
                mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
            }
 #else
            mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-           if (!mNeedRebuildProbeVolume) {
+           if (!mNeedRebuildProbeVolume && !kFDOnly) {
                mUniformProbeVolume->loadFromFile(loadFromFileName);
                mUniformProbeVolume->uploadToGPU();
                mpProbeVisualizePass->setUniformVolumeData(

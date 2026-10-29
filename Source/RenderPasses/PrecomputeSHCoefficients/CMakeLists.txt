@@ -7,6 +7,9 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     CommonDefines.h
     PrecomputeSHCoefficients.cpp
     PrecomputeSHCoefficients.h
+    FDVerificationCore.h
+    FDPlaneSettings.h
+    FDVerification.cpp
 	sphericalHarmonics.h
 	sphericalHarmonics.cpp
     envMap_SH.h

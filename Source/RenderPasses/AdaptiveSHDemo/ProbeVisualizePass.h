@@ -42,6 +42,16 @@ public:
     {
         mShowNormal = b;
     }
+
+    // Small cubes at the given positions (e.g. the FD area probes), replacing any previous data.
+    struct PointGroup
+    {
+        std::vector<float3> points;
+        float halfSize;
+        float3 color;
+    };
+    void setPointGroups(const std::vector<PointGroup>& groups);
+    void setPoints(const std::vector<float3>& points, float halfSize, const float3& color) { setPointGroups({ { points, halfSize, color } }); }
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 

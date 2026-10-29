@@ -44,6 +44,13 @@ using namespace Falcor;
 class PrecomputeSHCoefficients : public RenderPass
 {
 public:
+    // FD verification of the analytic derivatives (FDVerification.cpp):
+    //   FixedPatch: random probes, analytic vs fixed-patch FD (E1a)
+    //   Retraced:   the same, plus re-traced FD and fixed-patch FD at the re-trace step (E1c)
+    //   Plane:      a horizontal square of probes, analytic vs fixed-patch FD, all coefficients
+    //   PlaneRetraced: the same square on a coarser grid, plus re-traced FD and fixed-patch FD at the re-trace step
+    enum class FDCheck { None, FixedPatch, Retraced, Plane, PlaneRetraced };
+
     FALCOR_PLUGIN_CLASS(PrecomputeSHCoefficients, "PrecomputeSHCoefficients", "Insert pass description here.");
 
     static ref<PrecomputeSHCoefficients> create(ref<Device> pDevice, const Properties& props)
@@ -128,10 +135,17 @@ private:
     std::vector<ProbeDirSample> samplingDirs;
     float calculateCoeffRPrime(std::vector<ProbeSampleData> probeSamplingResults, float3 xPolar, float3 xPolarXPrime, int numBasis, int basisIdx);
 
+    // FD verification of the analytic derivatives (FDVerification.cpp), triggered from the UI.
+    //   (FDCheck is declared in the public section.)
+    void runFDVerification(RenderContext* pRenderContext, const AABB& worldBounds, FDCheck check);
+    FDCheck mFDCheck = FDCheck::None;
+    // Bounds for the FD checks: the manual grid bounds or the scene bounds.
+    AABB getFDBounds() const;
+
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
     ref<UniformProbeVolume> mUniformProbeVolume;
-    //bool mNeedRebuildProbeVolume = false;
-    bool mNeedRebuildProbeVolume = true;
+    bool mNeedRebuildProbeVolume = false;
+    //bool mNeedRebuildProbeVolume = true;
 
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };

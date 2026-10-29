@@ -211,3 +211,43 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
     mpState->setVao(pVao);
 }
+
+void ProbeVisualizePass::setPointGroups(const std::vector<PointGroup>& groups)
+{
+    mVertices.clear();
+    size_t count = 0;
+    for (const PointGroup& g : groups) count += g.points.size();
+    mVertices.reserve(count * 72);
+    // Cube faces as quads (corner order around the face); each face is emitted with both windings
+    // so the dots show regardless of the cull mode.
+    const float3 c[8] = { float3(-1, -1, -1), float3(1, -1, -1), float3(1, 1, -1), float3(-1, 1, -1),
+                          float3(-1, -1, 1),  float3(1, -1, 1),  float3(1, 1, 1),  float3(-1, 1, 1) };
+    const int faces[6][4] = { { 0, 1, 2, 3 }, { 4, 5, 6, 7 }, { 0, 1, 5, 4 }, { 3, 2, 6, 7 }, { 0, 3, 7, 4 }, { 1, 2, 6, 5 } };
+    for (const PointGroup& g : groups)
+    {
+        const float s = g.halfSize;
+        for (const float3& p : g.points)
+        {
+            for (const auto& f : faces)
+            {
+                const float3 a = p + s * c[f[0]], b = p + s * c[f[1]], d = p + s * c[f[2]], e = p + s * c[f[3]];
+                for (const float3& v : { a, b, d, a, d, e, a, d, b, a, e, d }) mVertices.push_back({ v, g.color, 0u, 1u, 0u });
+            }
+        }
+    }
+    if (mVertices.empty()) return; // execute() draws nothing then
+
+    const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
+    pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
+    ref<VertexLayout> pLayout = VertexLayout::create();
+    ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
+    pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("EDGE_ADDED", 32, ResourceFormat::R32Uint, 1, 0);
+    pLayout->addBufferLayout(0, pBufLayout);
+    Vao::BufferVec buffers{ pVertexBuffer };
+    pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
+    mpState->setVao(pVao);
+}

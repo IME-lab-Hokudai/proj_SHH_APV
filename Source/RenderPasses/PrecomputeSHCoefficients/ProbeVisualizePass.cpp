@@ -211,3 +211,40 @@ void ProbeVisualizePass::setUniformVolumeData(const float3& minPoint, const floa
     pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
     mpState->setVao(pVao);
 }
+
+void ProbeVisualizePass::setSegments(const std::vector<Segment>& segments, const float3& color)
+{
+    mVertices.clear();
+    for (const Segment& s : segments)
+    {
+        const float3 dir = normalize(s.b - s.a);
+        float3 up = (abs(dir.y) < 0.99f) ? float3(0, 1, 0) : float3(1, 0, 0);
+        const float3 right = normalize(cross(dir, up)) * s.thickness;
+        up = normalize(cross(right, dir)) * s.thickness;
+        const float3 v0 = s.a - right - up, v1 = s.a + right - up, v2 = s.a + right + up, v3 = s.a - right + up;
+        const float3 v4 = s.b - right - up, v5 = s.b + right - up, v6 = s.b + right + up, v7 = s.b - right + up;
+        auto pushQuad = [&](float3 a, float3 b, float3 c, float3 d)
+        {
+            for (const float3& p : { a, b, c, a, c, d }) mVertices.push_back({ p, color, 0u, 1u, 0u });
+        };
+        pushQuad(v0, v1, v5, v4);
+        pushQuad(v1, v2, v6, v5);
+        pushQuad(v2, v3, v7, v6);
+        pushQuad(v3, v0, v4, v7);
+    }
+    if (mVertices.empty()) return;
+
+    const uint32_t vbSize = (uint32_t)(sizeof(ProbeVertex) * mVertices.size());
+    pVertexBuffer = mpDevice->createBuffer(vbSize, ResourceBindFlags::Vertex, MemoryType::Upload, mVertices.data());
+    ref<VertexLayout> pLayout = VertexLayout::create();
+    ref<VertexBufferLayout> pBufLayout = VertexBufferLayout::create();
+    pBufLayout->addElement("WORLD_POSITION", 0, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("COLOR", 12, ResourceFormat::RGB32Float, 1, 0);
+    pBufLayout->addElement("LEVEL_ID", 24, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("IS_LEAF", 28, ResourceFormat::R32Uint, 1, 0);
+    pBufLayout->addElement("EDGE_ADDED", 32, ResourceFormat::R32Uint, 1, 0);
+    pLayout->addBufferLayout(0, pBufLayout);
+    Vao::BufferVec buffers{ pVertexBuffer };
+    pVao = Vao::create(Vao::Topology::TriangleList, pLayout, buffers);
+    mpState->setVao(pVao);
+}

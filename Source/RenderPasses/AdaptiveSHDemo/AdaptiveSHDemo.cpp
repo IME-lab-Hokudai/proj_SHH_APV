@@ -37,6 +37,7 @@
 #include "Rendering/Lights/EmissivePowerSampler.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Utils/Logger.h"
+#include "../PrecomputeSHCoefficients/FDPlaneSettings.h"
 
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
@@ -68,7 +69,7 @@
 //const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-//const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
 
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";
@@ -77,7 +78,7 @@
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
 //const std::string loadFromFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EGCShadowBoundary.txt";
-const std::string loadFromFileName = "DirectAbsErr2HessianShadowBoundary.txt";
+//const std::string loadFromFileName = "DirectAbsErr2HessianShadowBoundary.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlasTest.slang";
 //const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShader.slang";
 
@@ -120,21 +121,19 @@ namespace
 
     //constexpr const char* kBistroAtlasMappingFile =
     //    "Bistro_AtlasMapping.bin";
-
     //constexpr const char* kBistroAtlasManifestFile =
     //    "Bistro_AtlasManifest.txt";
-    //constexpr const char* kBistroAtlasMappingFile =
-    //    "Room_AtlasMapping.bin";
-
-    //constexpr const char* kBistroAtlasManifestFile =
-    //    "Room_AtlasManifest.txt";
-    
     
     constexpr const char* kBistroAtlasMappingFile =
-        "ShadowBoundary_AtlasMapping.bin";
-
+        "Room_AtlasMapping.bin";
     constexpr const char* kBistroAtlasManifestFile =
-        "ShadowBoundary_AtlasManifest.txt";
+        "Room_AtlasManifest.txt";
+    
+    
+    //constexpr const char* kBistroAtlasMappingFile =
+    //    "ShadowBoundary_AtlasMapping.bin";
+    //constexpr const char* kBistroAtlasManifestFile =
+    //    "ShadowBoundary_AtlasManifest.txt";
     constexpr uint32_t kBistroTestMaxPages = 10;
 
 #pragma pack(push, 1)
@@ -1051,6 +1050,11 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 
             mpProbeVisualizePass->execute(pRenderContext, mpFbo);
         }
+        if (mbShowFDPlane && mpFDPlaneVisPass)
+        {
+            mpFDPlaneVisPass->setCameraData(mpScene->getCamera()->getViewProjMatrix());
+            mpFDPlaneVisPass->execute(pRenderContext, mpFbo);
+        }
     }
 }
 bool AdaptiveSHDemo::onKeyEvent(
@@ -1067,6 +1071,27 @@ bool AdaptiveSHDemo::onKeyEvent(
     }
 
     return false;
+}
+
+// The probes of every enabled FD area (PrecomputeSHCoefficients/FDPlaneSettings.h) as small cubes in
+// the area's colour, 40% of the probe spacing wide (8 mm for a 2 m area at 100 x 100).
+void AdaptiveSHDemo::updateFDPlaneVis()
+{
+    if (!mpScene || !mpFDPlaneVisPass) return;
+    const uint32_t res = mbFDPlaneRetraceRes ? fdplane::kRetraceRes : fdplane::kRes;
+    std::vector<ProbeVisualizePass::PointGroup> groups;
+    for (const fdplane::Area& a : fdplane::kAreas)
+    {
+        if (!a.enabled) continue;
+        groups.push_back({ fdplane::positions(a, res), 0.2f * fdplane::spacing(a, res), a.color });
+        int u, v;
+        fdplane::planeAxes(a.normal, u, v);
+        const float n = a.centre[3 - u - v];
+        logInfo("FD area {}: {} x {} probes at {} = {}, {} in [{}, {}], {} in [{}, {}].", a.name, res, res,
+                fdplane::normalName(a.normal), n, fdplane::axisName(u), a.centre[u] - a.halfSize, a.centre[u] + a.halfSize,
+                fdplane::axisName(v), a.centre[v] - a.halfSize, a.centre[v] + a.halfSize);
+    }
+    mpFDPlaneVisPass->setPointGroups(groups);
 }
 
 void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
@@ -1216,6 +1241,9 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
 
     if (widget.checkbox("Show SH Grid", mbShowAdaptiveGrid))
         requestRecompile();
+    if (widget.checkbox("Show FD areas", mbShowFDPlane) && mbShowFDPlane) updateFDPlaneVis();
+    const std::string retraceLabel = "FD areas: re-traced grid (" + std::to_string(fdplane::kRetraceRes) + " x " + std::to_string(fdplane::kRetraceRes) + ")";
+    if (mbShowFDPlane && widget.checkbox(retraceLabel.c_str(), mbFDPlaneRetraceRes)) updateFDPlaneVis();
     // Level Visibility Controls
     if (mbShowAdaptiveGrid)
     {
@@ -1318,6 +1346,8 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 
         //init probe visual pass
         mpProbeVisualizePass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+        mpFDPlaneVisPass = ProbeVisualizePass::create(mpDevice, mpScene->getSceneDefines());
+        updateFDPlaneVis();
         //Re-apply the visibility masks from our member variables
         for (int i = 0; i < 8; ++i)
         {

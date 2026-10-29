@@ -113,6 +113,12 @@ private:
     bool mbShowEdgeAddedVoxels = true;
     bool mShowNormalVoxels = true;
 
+    // FD check areas (probe positions from PrecomputeSHCoefficients/FDPlaneSettings.h), drawn as dots.
+    void updateFDPlaneVis();
+    ref<ProbeVisualizePass> mpFDPlaneVisPass;
+    bool mbShowFDPlane = false;
+    bool mbFDPlaneRetraceRes = false; // false: fdplane::kRes (fixed-patch check), true: fdplane::kRetraceRes (re-traced check)
+
     // Camera orbit.
     void startCameraOrbit();
     void stopCameraOrbit();

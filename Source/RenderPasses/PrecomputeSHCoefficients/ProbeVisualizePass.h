@@ -42,6 +42,14 @@ public:
     {
         mShowNormal = b;
     }
+
+    // Thick line segments (e.g. the FD check plane), replacing any previous data.
+    struct Segment
+    {
+        float3 a, b;
+        float thickness;
+    };
+    void setSegments(const std::vector<Segment>& segments, const float3& color);
 protected:
     ProbeVisualizePass(const ref<Device>& pDevice, const ProgramDesc& progDesc, const DefineList& programDefines);
 
