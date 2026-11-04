@@ -3,6 +3,9 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <charconv>
+#include <chrono>
+#include <string>
 
 ref<UniformProbeVolume> UniformProbeVolume::create(ref<Device> pDevice)
 {
@@ -179,27 +182,52 @@ void UniformProbeVolume::saveToFile(const std::string& filename) const
 
 void UniformProbeVolume::loadFromFile(const std::string& filename)
 {
-    std::ifstream in(filename);
+    // Reads the whole file once and parses it with std::from_chars: same text format as saveToFile, but much faster
+    // than ifstream >> float for large grids (U128 is about 2.7 GB of text).
+    const auto t0 = std::chrono::steady_clock::now();
+    std::ifstream in(filename, std::ios::binary | std::ios::ate);
     if (!in)
     {
         logError("Failed to open file for loading: " + filename);
         return;
     }
+    const std::streamoff fileSize = in.tellg();
+    in.seekg(0);
+    std::string buf(size_t(std::max<std::streamoff>(0, fileSize)), '\0');
+    in.read(buf.data(), std::streamsize(buf.size()));
+    in.close();
+
+    const char* cur = buf.data();
+    const char* const end = buf.data() + buf.size();
+    bool ok = true;
+    auto skipSpace = [&]() { while (cur < end && (unsigned char)*cur <= ' ') ++cur; };
+    auto token = [&]() -> std::string
+    {
+        skipSpace();
+        const char* b = cur;
+        while (cur < end && (unsigned char)*cur > ' ') ++cur;
+        return std::string(b, cur);
+    };
+    auto read = [&](auto& v)
+    {
+        skipSpace();
+        const auto r = std::from_chars(cur, end, v);
+        if (r.ec != std::errc()) { ok = false; v = {}; while (cur < end && (unsigned char)*cur > ' ') ++cur; }
+        else cur = r.ptr;
+    };
 
     // 1. Check Header
-    std::string header;
-    in >> header;
-    if (header != "UNIFORM_GRID_V1")
+    if (token() != "UNIFORM_GRID_V1")
     {
         logError("Invalid file format or version mismatch: " + filename);
         return;
     }
 
     // 2. Load Configuration
-    in >> mProbeResolution.x >> mProbeResolution.y >> mProbeResolution.z;
-    in >> mMinPoint.x >> mMinPoint.y >> mMinPoint.z;
-    in >> mMaxPoint.x >> mMaxPoint.y >> mMaxPoint.z;
-    in >> mBuildTimeMs;
+    read(mProbeResolution.x); read(mProbeResolution.y); read(mProbeResolution.z);
+    read(mMinPoint.x); read(mMinPoint.y); read(mMinPoint.z);
+    read(mMaxPoint.x); read(mMaxPoint.y); read(mMaxPoint.z);
+    read(mBuildTimeMs);
     // 3. Re-initialize Internal State (Logic copied from initGrid, but using loaded bounds)
     mCornerResolution = mProbeResolution + uint3(1, 1, 1);
     mTotalProbes = mCornerResolution.x * mCornerResolution.y * mCornerResolution.z;
@@ -212,9 +240,9 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
     mProbeData.resize(mTotalProbes);
 
     // 4. Load Probe Data
-    std::string tag;
-    size_t numProbesInFile;
-    in >> tag >> numProbesInFile;
+    const std::string tag = token();
+    size_t numProbesInFile = 0;
+    read(numProbesInFile);
 
     if (numProbesInFile != mTotalProbes)
     {
@@ -233,7 +261,7 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
         for (int i = 0; i < 9; ++i)
         {
             float3 val;
-            in >> val.x >> val.y >> val.z;
+            read(val.x); read(val.y); read(val.z);
             p.coeffs[i] = float4(val, 0.0f); // Restore w=0 padding
         }
 
@@ -241,9 +269,9 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
         for (int i = 0; i < 9; ++i)
         {
             float3 gR, gG, gB;
-            in >> gR.x >> gR.y >> gR.z;
-            in >> gG.x >> gG.y >> gG.z;
-            in >> gB.x >> gB.y >> gB.z;
+            read(gR.x); read(gR.y); read(gR.z);
+            read(gG.x); read(gG.y); read(gG.z);
+            read(gB.x); read(gB.y); read(gB.z);
 
             p.gradR[i] = float4(gR, 0.0f);
             p.gradG[i] = float4(gG, 0.0f);
@@ -251,8 +279,10 @@ void UniformProbeVolume::loadFromFile(const std::string& filename)
         }
     }
 
-    in.close();
-    logInfo("Successfully loaded UniformProbeVolume from " + filename);
+    if (!ok) logWarning("Some numbers in " + filename + " could not be parsed; they were set to 0.");
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    logInfo("Successfully loaded UniformProbeVolume from " + filename + " (" + std::to_string(mTotalProbes) + " probes, " +
+            std::to_string(secs) + " s)");
 }
 
 

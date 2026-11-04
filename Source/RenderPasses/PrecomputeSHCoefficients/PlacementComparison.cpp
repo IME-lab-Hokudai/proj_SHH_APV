@@ -371,8 +371,11 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         summary.flush();
     }
 
-    std::vector<std::vector<float>> perPoint; // normal-averaged percentage error per grid
-    std::vector<std::string> perPointNames;
+    // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
+    // the cell the point falls in (uniform grids: log2 of the cells per axis). Lets the error be split by region,
+    // e.g. where an adaptive grid is coarser or finer than the uniform grid with the same probe count.
+    struct PointColumns { std::string name; std::vector<float> pct, abs, sq; std::vector<int8_t> level; };
+    std::vector<PointColumns> perPoint;
 
     for (const Entry& e : entries)
     {
@@ -410,6 +413,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         std::vector<float> ape(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> absErr(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> pointApe(pointCount, std::numeric_limits<float>::quiet_NaN());
+        std::vector<float> pointAbs(pointCount, std::numeric_limits<float>::quiet_NaN());
+        std::vector<float> pointSq(pointCount, std::numeric_limits<float>::quiet_NaN());
+        std::vector<int8_t> pointLevel(pointCount, -1);
+        int uniformLevel = -1;
+        if (uniform)
+        {
+            const uint3 d = uniform->getProbeCountDim();
+            uniformLevel = int(std::lround(std::log2(double(std::max(1u, d.x - 1)))));
+        }
         parallelFor(pointCount, [&](size_t i)
         {
             if (!refValid[i]) return;
@@ -419,11 +431,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             if (adaptive)
             {
                 const int leaf = adaptive->traverseOctreeCPU(p);
-                if (leaf >= 0) { adaptive->interpolateHermite_CPU(leaf, p, c); ok = c.size() >= 9; }
+                if (leaf >= 0)
+                {
+                    adaptive->interpolateHermite_CPU(leaf, p, c); ok = c.size() >= 9;
+                    pointLevel[i] = int8_t(adaptive->getProbes()[leaf].level);
+                }
             }
-            else ok = uniform->fetchHermiteSH_CPU(p, c) && c.size() >= 9;
+            else { ok = uniform->fetchHermiteSH_CPU(p, c) && c.size() >= 9; pointLevel[i] = int8_t(uniformLevel); }
             if (!ok) return;
-            double sum = 0.0;
+            double sum = 0.0, sumA = 0.0, sumS = 0.0;
             for (size_t k = 0; k < N; ++k)
             {
                 const float r = refLum[i * N + k];
@@ -431,8 +447,11 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 absErr[i * N + k] = err;
                 ape[i * N + k] = 100.0f * err / std::max(std::abs(r), eps);
                 sum += ape[i * N + k];
+                sumA += err; sumS += double(err) * err;
             }
             pointApe[i] = float(sum / double(N));
+            pointAbs[i] = float(sumA / double(N));
+            pointSq[i] = float(sumS / double(N));
         });
 
         std::vector<float> valid; valid.reserve(ape.size());
@@ -460,22 +479,25 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         logInfo("[Placement eval] {} ({} probes): mean {:.3f}%, P95 {:.3f}%, RMSE {:.4g}; {} points outside the grid; {:.1f}s.",
             e.method, probes, sumApe / n, percentileSorted(valid, 95), std::sqrt(sumSq / n), failed, msSince(t0) / 1000.0);
 
-        if (!kPerPointCsv.empty()) { perPoint.push_back(std::move(pointApe)); perPointNames.push_back(e.method); }
+        if (!kPerPointCsv.empty())
+            perPoint.push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointLevel) });
     }
 
     if (!kPerPointCsv.empty() && !perPoint.empty())
     {
+        // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_lvl. About 200 MB for 25 grids at 64^3.
         std::ofstream pts(kPerPointCsv);
         pts << "ix,iy,iz,x,y,z,refLum";
-        for (const auto& m : perPointNames) pts << "," << m;
-        pts << "\n" << std::setprecision(6);
+        for (const auto& m : perPoint) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_lvl";
+        pts << "\n" << std::defaultfloat << std::setprecision(5);
         for (size_t i = 0; i < pointCount; ++i)
         {
             if (!refValid[i]) continue;
             const float3 p = pointPos(i);
             double r = 0.0; for (size_t k = 0; k < N; ++k) r += refLum[i * N + k];
             pts << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << p.x << "," << p.y << "," << p.z << "," << r / double(N);
-            for (const auto& v : perPoint) pts << "," << v[i];
+            for (const auto& m : perPoint)
+                pts << "," << m.pct[i] << "," << m.abs[i] << "," << m.sq[i] << "," << int(m.level[i]);
             pts << "\n";
         }
         logInfo("[Placement eval] Wrote {}.", kPerPointCsv);
