@@ -14,6 +14,7 @@
 #include "PrecomputeSHCoefficients.h"
 #include "PlacementComparisonSettings.h"
 #include "envMap_SH.h"
+#include "ParallelFor.h"
 
 #include <algorithm>
 #include <chrono>
@@ -79,21 +80,7 @@ double percentileSorted(const std::vector<float>& v, double pct)
     return double(v[i0]) * (1.0 - t) + double(v[i1]) * t;
 }
 
-// Runs fn(i) for i in [0, n) on all hardware threads.
-template<typename F>
-void parallelFor(size_t n, F fn)
-{
-    const size_t threads = std::max<size_t>(1, std::min<size_t>(std::thread::hardware_concurrency(), 64));
-    std::vector<std::thread> pool;
-    const size_t chunk = (n + threads - 1) / threads;
-    for (size_t t = 0; t < threads; ++t)
-    {
-        const size_t b = t * chunk, e = std::min(n, b + chunk);
-        if (b >= e) break;
-        pool.emplace_back([=, &fn]() { for (size_t i = b; i < e; ++i) fn(i); });
-    }
-    for (auto& th : pool) th.join();
-}
+using probepar::parallelFor;
 } // namespace
 
 // =====================================================================================================

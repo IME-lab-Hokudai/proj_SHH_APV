@@ -34,6 +34,7 @@
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
 #include "PlacementComparisonSettings.h"
+#include "ParallelFor.h"
 
 #include "envMap_SH.h"
 #include "Rendering/Lights/EmissivePowerSampler.h"
@@ -1461,86 +1462,73 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
                 mpScene, unifromGridSize, kUseManualGridBounds ? &gridBounds : nullptr
             );
             uint3 probeCountDim = mUniformProbeVolume->getProbeCountDim(); // (N+1) corners
+            const uint32_t totalProbes = probeCountDim.x * probeCountDim.y * probeCountDim.z;
 
-            // 2. Prepare reusable buffers for a single Row (X-dimension)
-            uint32_t numProbesPerRow = probeCountDim.x;
-
-            // Per probe: [direction samples | explicit light samples]
             const uint32_t lightSamplesPerProbe = getLightSamplesPerProbe();
             const uint32_t samplesStride = numSamplesPerProbe + lightSamplesPerProbe;
 
-            // Position Buffer for one row
+            // Probes are traced in batches of up to kMaxProbesPerDispatch (the same batch size as the
+            // adaptive builds) and their SH coefficients and gradients are computed on all CPU threads.
+            // Probe index = (z * Ny + y) * Nx + x, as before.
+            const uint32_t kMaxProbesPerDispatch = 2048;
             mpProbePosBuffer = mpDevice->createStructuredBuffer(
-                sizeof(float3), numProbesPerRow, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal
+                sizeof(float3), kMaxProbesPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal
             );
 
-            // Sampling result buffer for one row
             mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(
                 sizeof(ProbeSampleData),
-                samplesStride * numProbesPerRow,
+                size_t(samplesStride) * kMaxProbesPerDispatch,
                 ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
                 MemoryType::DeviceLocal
             );
 
-            // Temp storage for CPU readback of one row
-            std::vector<ProbeSampleData> rowSamplingData(size_t(samplesStride) * numProbesPerRow);
-            std::vector<float3> rowPositions(numProbesPerRow);
+            std::vector<ProbeSampleData> batchSamplingData(size_t(samplesStride) * kMaxProbesPerDispatch);
+            std::vector<float3> batchPositions(kMaxProbesPerDispatch);
+            std::vector<std::vector<float3>> batchCoeffs(kMaxProbesPerDispatch);
+            std::vector<std::vector<GradSHCoeff>> batchGrads(kMaxProbesPerDispatch);
+            uint32_t nextProgress = 10;
 
-            // --------------------------------------------------------------------------
-            // 3. Row-by-Row Processing Loop
-            // --------------------------------------------------------------------------
-            for (uint32_t z = 0; z < probeCountDim.z; ++z)
+            for (uint32_t batchStart = 0; batchStart < totalProbes; batchStart += kMaxProbesPerDispatch)
             {
-                for (uint32_t y = 0; y < probeCountDim.y; ++y)
+                const uint32_t n = std::min(kMaxProbesPerDispatch, totalProbes - batchStart);
+                for (uint32_t i = 0; i < n; ++i)
                 {
-                    // A. Calculate positions for the current row (X-axis)
-                    for (uint32_t x = 0; x < probeCountDim.x; ++x)
-                    {
-                        // Position = Origin + Index * CellSize
-                        rowPositions[x] = mUniformProbeVolume->getMinPoint() +
-                            float3(x, y, z) * mUniformProbeVolume->getCellSize();
-                    }
-
-                    // B. Upload row positions to GPU
-                    mpProbePosBuffer->setBlob(rowPositions.data(), 0, numProbesPerRow * sizeof(float3));
-
-                    // C. Dispatch Ray Tracing for this row
-                    traceProbeBatch(pRenderContext, numSamplesPerProbe, numProbesPerRow, lightSamplesPerProbe);
-                    pRenderContext->submit(true);
-                    // D. Synchronize and Readback row results
-                    mpProbeSamplingResultBuffer->getBlob(rowSamplingData.data(), 0, rowSamplingData.size() * sizeof(ProbeSampleData));
-
-                    // E. Process each probe in the row on CPU
-                    for (uint32_t x = 0; x < numProbesPerRow; ++x)
-                    {
-                        uint32_t probeIdx = (z * probeCountDim.y * probeCountDim.x) + (y * probeCountDim.x) + x;
-
-                        //int offset = x * numSamplesPerProbe;
-                        //std::vector<ProbeSampleData> probeSamplingResults;
-                        //probeSamplingResults.assign(rowSamplingData.begin() + offset, rowSamplingData.begin() + offset + numSamplesPerProbe);
-
-                        // Convert to Polar for SH Math (Z, X, Y mapping)
-                        float3 xPolar = float3(rowPositions[x].z, rowPositions[x].x, rowPositions[x].y);
-
-                        std::vector<float3> coeffs;
-                        std::vector<GradSHCoeff> grads;
-                        size_t offset = size_t(x) * size_t(samplesStride);
-                        const ProbeSampleData* samples =
-                            rowSamplingData.data() + offset;
-
-                        // Perform Physics Calculations
-                        // Direction samples: indirect light (+ direct only if no light samples).
-                        calculateSHCoeffsGradients(grads, xPolar, samples, numSamplesPerProbe, samplingDirs);
-                        calculateSHCoeffs(coeffs, samples, numSamplesPerProbe);
-                        // Explicit light samples: direct light at the probe.
-                        accumulateDirectLightSamples(coeffs, &grads, nullptr, xPolar,
-                            samples + numSamplesPerProbe, lightSamplesPerProbe);
-
-                        // Store in the Volume object
-                        mUniformProbeVolume->setProbeData(probeIdx, coeffs, grads);
-                    }
+                    const uint32_t probeIdx = batchStart + i;
+                    const uint32_t x = probeIdx % probeCountDim.x;
+                    const uint32_t y = (probeIdx / probeCountDim.x) % probeCountDim.y;
+                    const uint32_t z = probeIdx / (probeCountDim.x * probeCountDim.y);
+                    batchPositions[i] = mUniformProbeVolume->getMinPoint() +
+                        float3(x, y, z) * mUniformProbeVolume->getCellSize();
                 }
+
+                mpProbePosBuffer->setBlob(batchPositions.data(), 0, n * sizeof(float3));
+                traceProbeBatch(pRenderContext, numSamplesPerProbe, n, lightSamplesPerProbe);
+                pRenderContext->submit(true);
+                mpProbeSamplingResultBuffer->getBlob(batchSamplingData.data(), 0, size_t(samplesStride) * n * sizeof(ProbeSampleData));
                 mpDevice->wait();
+
+                probepar::parallelFor(n, [&](size_t i)
+                {
+                    const float3 p = batchPositions[i];
+                    const float3 xPolar = float3(p.z, p.x, p.y);
+                    const ProbeSampleData* samples = batchSamplingData.data() + i * size_t(samplesStride);
+                    calculateSHCoeffsGradients(batchGrads[i], xPolar, samples, numSamplesPerProbe, samplingDirs);
+                    calculateSHCoeffs(batchCoeffs[i], samples, numSamplesPerProbe);
+                    accumulateDirectLightSamples(batchCoeffs[i], &batchGrads[i], nullptr, xPolar,
+                        samples + numSamplesPerProbe, lightSamplesPerProbe);
+                });
+
+                for (uint32_t i = 0; i < n; ++i)
+                    mUniformProbeVolume->setProbeData(batchStart + i, batchCoeffs[i], batchGrads[i]);
+
+                const uint32_t done = batchStart + n;
+                if (100ull * done >= uint64_t(nextProgress) * totalProbes)
+                {
+                    logInfo("[Uniform grid] {}/{} probes ({}%), elapsed {:.1f}s.", done, totalProbes,
+                        100ull * done / totalProbes,
+                        std::chrono::duration<double>(clock::now() - tStart).count());
+                    nextProgress += 10;
+                }
             }
             auto tEnd = clock::now();
             double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
@@ -1787,8 +1775,11 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
             std::vector<std::vector<GradSHCoeff>> gradsBatch(numProbes);
             std::vector<std::vector<float3x3>> hessiansBatch(numProbes);
 
-            for (uint32_t probeIdx = 0; probeIdx < numProbes; ++probeIdx)
+            // One probe per index, on all CPU threads (ParallelFor.h): each probe reads its own samples
+            // and writes its own slot, so the result is the same as the serial loop.
+            probepar::parallelFor(numProbes, [&](size_t probeIdxSz)
             {
+                const uint32_t probeIdx = uint32_t(probeIdxSz);
                 size_t offset = size_t(probeIdx) * size_t(samplesStride);
                 //std::vector<ProbeSampleData> probeSamplingResults;
                 //probeSamplingResults.reserve(numSamplesPerProbe);
@@ -1814,7 +1805,7 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
                 // Direct light at the probe from the explicit light samples.
                 accumulateDirectLightSamples(coeffsBatch[probeIdx], &gradsBatch[probeIdx], &hessiansBatch[probeIdx],
                     xPolar, samples + numSamplesPerProbe, lightSamplesPerProbe);
-            }
+            });
 
             mAdaptiveProbeVolume->setCornerDataRange(batchStart, coeffsBatch, gradsBatch, hessiansBatch);
             completedCorners += numProbes;
