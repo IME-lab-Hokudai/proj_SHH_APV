@@ -28,8 +28,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
@@ -131,8 +131,8 @@ const float residualConfidenceEps = 1e-3f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-const uint3 unifromGridSize = uint3(32, 32, 32);
-//const uint3 unifromGridSize = uint3(8, 8, 8);
+//const uint3 unifromGridSize = uint3(32, 32, 32);
+const uint3 unifromGridSize = uint3(8, 8, 8);
 //const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
@@ -165,7 +165,7 @@ const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096s
 //const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
-const std::string saveToFileName = "U32DataScene.txt";
+const std::string saveToFileName = "U8DataScene.txt";
 //const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
 //const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";

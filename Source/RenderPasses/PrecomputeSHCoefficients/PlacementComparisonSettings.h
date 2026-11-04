@@ -20,15 +20,17 @@ inline constexpr BuildMode kBuildMode = BuildMode::BestFirst;
 inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::Hessian;
 
 // Seed grid of the best-first build. Levels are absolute (AdaptiveProbeVolume::mMaxLevel), so the seed does not
-// change the finest cell size; 1 x 1 x 1 matches the PG paper's single root voxel. 16 x 16 x 16 starts from U16
-// (4913 probes) and spends the rest of each budget on refinement. A seed other than 1 x 1 x 1 is added to the
-// file names: <scene>_BF_<score>_S16_<budget>.txt.
+// change the finest cell size; 1 x 1 x 1 matches the PG paper's single root voxel. 8 x 8 x 8 starts from U8
+// (729 probes) and spends the rest of each budget on refinement. A seed other than 1 x 1 x 1 is added to the
+// file names: <scene>_BF_<score>_S8_<budget>.txt.
 //inline const uint3 kSeedResolution = uint3(1, 1, 1);
-inline const uint3 kSeedResolution = uint3(16, 16, 16);
+//inline const uint3 kSeedResolution = uint3(16, 16, 16);
+inline const uint3 kSeedResolution = uint3(8, 8, 8);
 
-// Probe budgets (probe = grid corner, so probe count = memory). U16 = 17^3, U32 = 33^3, U64 = 65^3.
-// With the U16 seed, the 4913 snapshot is the seed itself (a check: it must match U16's error).
-inline const std::vector<uint64_t> kProbeBudgets = { 4913, 10000, 20000, 35937, 70000, 140000 };
+// Probe budgets = total probes of the grid, seed included (probe = grid corner, so probe count = memory).
+// U8 = 9^3, U16 = 17^3, U32 = 33^3, U64 = 65^3. With the U8 seed, the 729 snapshot is the seed itself
+// (a check: it must match a uniform U8 grid).
+inline const std::vector<uint64_t> kProbeBudgets = { 729, 4913, 10000, 20000, 35937, 70000, 140000 };
 
 // Leaves split per round: this fraction of the current leaf count, at most kMaxBatch.
 inline constexpr float kBatchFraction = 0.01f;
