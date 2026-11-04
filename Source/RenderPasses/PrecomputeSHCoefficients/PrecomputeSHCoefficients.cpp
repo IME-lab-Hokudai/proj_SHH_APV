@@ -1093,6 +1093,12 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             runFDVerification(pRenderContext, getFDBounds(), mFDCheck);
             mFDCheck = FDCheck::None;
         }
+        // Placement comparison batch (PlacementComparison.cpp): every grid, then the evaluation.
+        if (mRunPlacementBatch)
+        {
+            mRunPlacementBatch = false;
+            runPlacementBatch(pRenderContext);
+        }
         // Placement comparison evaluation (PlacementComparison.cpp), from the UI or on load.
         if (mRunPlacementEval)
         {
@@ -2148,6 +2154,8 @@ void PrecomputeSHCoefficients::renderUI(
     if (widget.button("FD check: re-traced on areas")) mFDCheck = FDCheck::PlaneRetraced;
     // Runs right away, with or without a scene (CPU only; the window freezes until it finishes).
     if (widget.button("Placement comparison: evaluate grids")) exportPlacementComparison();
+    // Runs on the next frame (needs the render context); scene required.
+    if (widget.button("Placement comparison: build everything + evaluate")) mRunPlacementBatch = true;
 
     if (widget.checkbox(
         "Show Reconstructed Env Map",
@@ -2408,6 +2416,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     {
             mFDCheck = kFDCheckOnLoad; // FD-only session: run the check on the first frame
             mRunPlacementEval = placement::kEvaluateOnLoad;
+            mRunPlacementBatch = placement::kRunBatchOnLoad;
             generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
             //generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
 

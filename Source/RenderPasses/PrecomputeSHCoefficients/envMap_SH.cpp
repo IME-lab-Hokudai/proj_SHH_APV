@@ -150,6 +150,10 @@ void calculateSHCoeffs(
     }
 }
 
+// Sample-outer versions. The per-sample geometry (q, 1/r, cos xi, grad Omega, Hessian of Omega) is computed once per
+// sample and added to all 9 coefficients. Each coefficient still sums the samples in the same order with the same
+// expressions as the per-basis routines (calculateGradSHCoeffLM, calculateGradRGBAndHessianLumSHCoeffLM), so the results
+// are unchanged; the per-basis loop recomputed the geometry 9 times per sample.
 void calculateSHCoeffsGradients(
     std::vector<GradSHCoeff>& gradOut,
     const float3& gridPos,
@@ -157,15 +161,35 @@ void calculateSHCoeffsGradients(
     const std::vector<ProbeDirSample>& samplingDir
 )
 {
-    gradOut.clear();
-    gradOut.resize(9);
-    // For each SH basis
-    for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+    constexpr int numBasis = 9;
+    gradOut.assign(numBasis, GradSHCoeff{ float3(0), float3(0), float3(0) });
+
+    int samplingSize = sampleCount;
+    float Omega_i = (4.0f * M_PI) / (float)samplingSize;
+
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
     {
-        GradSHCoeff grad;
-        HessianSHCoeff hessian;
-        calculateGradSHCoeffLM(gridPos, probeSamplingResults, sampleCount, samplingDir, basisIdx, grad);
-        gradOut[basisIdx] = grad;
+        const ProbeSampleData& sd = probeSamplingResults[sampleIdx];
+        if (sd.hitT < 0.0f) continue;
+
+        float3 s = float3(sd.s.x, sd.s.y, sd.s.z);
+        float3 n = float3(sd.n.x, sd.n.y, sd.n.z);
+        float3 L = float3(sd.Li.x, sd.Li.y, sd.Li.z);
+
+        float3 q = s - gridPos;
+        float rInv = 1.0f / length(q);
+        float cosXi = -(dot(n, q)) * rInv;
+        float3 gradOmega = gradientOmega(q, n, rInv, cosXi, Omega_i);
+
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+            float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+            float3 contrib = gradOmega * Ylm - Omega_i * rInv * gradYlm;
+            gradOut[basisIdx].r += (L.x * contrib);
+            gradOut[basisIdx].g += (L.y * contrib);
+            gradOut[basisIdx].b += (L.z * contrib);
+        }
     }
 }
 
@@ -1074,19 +1098,68 @@ void calculateSHCoeffsGradientsRGBAndHessiansLum(
     const std::vector<ProbeDirSample>& samplingDir
 )
 {
-    gradOut.resize(9);
-    hessianOut.resize(9);
+    constexpr int numBasis = 9;
+    gradOut.assign(numBasis, GradSHCoeff{ float3(0), float3(0), float3(0) });
 
-    for (int basisIdx = 0; basisIdx < 9; ++basisIdx)
+    // Upper triangle of each luminance Hessian (xx, xy, xz, yy, yz, zz), mirrored once at the end. The lower
+    // triangle receives exactly the same additions in the same order, so this matches the per-basis routine.
+    float hUpper[numBasis][6] = {};
+
+    const float3 kLuma = float3(0.2126f, 0.7152f, 0.0722f);
+    int samplingSize = sampleCount;
+    float Omega_i = (4.0f * M_PI) / (float)samplingSize;
+
+    for (int sampleIdx = 0; sampleIdx < samplingSize; ++sampleIdx)
     {
-        calculateGradRGBAndHessianLumSHCoeffLM(
-            gridPos,
-            probeSamplingResults,
-            sampleCount,
-            samplingDir,
-            basisIdx,
-            gradOut[basisIdx],
-            hessianOut[basisIdx]
-        );
+        const ProbeSampleData& sd = probeSamplingResults[sampleIdx];
+        if (sd.hitT < 0.0f) continue;
+
+        float3 s = float3(sd.s.x, sd.s.y, sd.s.z);
+        float3 n = float3(sd.n.x, sd.n.y, sd.n.z);
+        float3 L = float3(sd.Li.x, sd.Li.y, sd.Li.z);
+        float L_lum = dot(L, kLuma);
+
+        float3 q = s - gridPos;
+        float rInv = 1.0f / length(q);
+        float cosXi = -(dot(n, q)) * rInv;
+        float3 gradOmega = gradientOmega(q, n, rInv, cosXi, Omega_i);
+        float3x3 H_Omega = hessianOmega(q, n, rInv, cosXi, Omega_i);
+        float rInvSq = rInv * rInv;
+
+        for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+        {
+            float Ylm = SHBasisTable[numBasis * sampleIdx + basisIdx];
+            float3 gradYlm = SHGradientTable[numBasis * sampleIdx + basisIdx];
+
+            float3 contribGrad = gradOmega * Ylm - Omega_i * rInv * gradYlm;
+            gradOut[basisIdx].r += (L.x * contribGrad);
+            gradOut[basisIdx].g += (L.y * contribGrad);
+            gradOut[basisIdx].b += (L.z * contribGrad);
+
+            const float3x3& hessYlm = SHHessianTable[numBasis * sampleIdx + basisIdx];
+            float* h = hUpper[basisIdx];
+            int t = 0;
+            for (int j = 0; j < 3; ++j)
+            {
+                for (int k = j; k < 3; ++k, ++t)
+                {
+                    float term1 = H_Omega[j][k] * Ylm;
+                    float term2 = -rInv * (gradOmega[j] * gradYlm[k] + gradOmega[k] * gradYlm[j]);
+                    float term3 = Omega_i * rInvSq * hessYlm[j][k];
+                    float hessContrib = term1 + term2 + term3;
+                    h[t] += L_lum * hessContrib;
+                }
+            }
+        }
+    }
+
+    hessianOut.assign(numBasis, float3x3::zeros());
+    for (int basisIdx = 0; basisIdx < numBasis; ++basisIdx)
+    {
+        const float* h = hUpper[basisIdx];
+        float3x3& H = hessianOut[basisIdx];
+        H[0][0] = h[0]; H[0][1] = h[1]; H[0][2] = h[2];
+        H[1][0] = h[1]; H[1][1] = h[3]; H[1][2] = h[4];
+        H[2][0] = h[2]; H[2][1] = h[4]; H[2][2] = h[5];
     }
 }

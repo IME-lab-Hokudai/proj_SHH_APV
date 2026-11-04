@@ -58,4 +58,18 @@ inline constexpr float kRelEpsilonFraction = 0.01f; // epsilon of the percentage
 
 // Run the evaluation once when the scene loads (also available as a UI button).
 inline constexpr bool kEvaluateOnLoad = false;
+
+// ---- Batch: everything in one run --------------------------------------------------------------
+// Builds the uniform grids, then one best-first run per score (seed kSeedResolution, budgets kProbeBudgets),
+// then evaluates <scene>_PlacementComparisonGrids.csv. Start it with the UI button
+// "Placement comparison: build everything + evaluate", or set kRunBatchOnLoad to start it when the scene loads.
+// Uniform grids are saved as <scene>_U<cells>.txt (e.g. SceneForData_U32.txt). Progress is in the log ([Batch]).
+inline constexpr bool kRunBatchOnLoad = false;
+inline const std::vector<uint32_t> kBatchUniformResolutions = { 8, 16, 32, 64 };
+inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
+    AdaptiveProbeVolume::SplitScore::HarmonicMeanDepth,
+    AdaptiveProbeVolume::SplitScore::Hessian,
+    AdaptiveProbeVolume::SplitScore::HessianRelative,
+};
+inline constexpr bool kBatchEvaluateAtEnd = true;
 } // namespace placement

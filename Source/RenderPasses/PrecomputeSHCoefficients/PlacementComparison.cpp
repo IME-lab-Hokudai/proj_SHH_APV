@@ -21,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -86,7 +87,13 @@ using probepar::parallelFor;
 // =====================================================================================================
 // Best-first build
 // =====================================================================================================
+// Best-first build with the score and seed from PlacementComparisonSettings.h.
 void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
+{
+    BestFirstBuildWith(pRenderContext, placement::kScore, placement::kSeedResolution);
+}
+
+void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext, AdaptiveProbeVolume::SplitScore score, uint3 seedResolution)
 {
     using namespace placement;
     const auto buildStart = Clock::now();
@@ -101,24 +108,25 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
         return;
     }
 
+    if (!mAdaptiveProbeVolume) mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice); // e.g. uniform-mode builds
     auto& vol = mAdaptiveProbeVolume;
     const std::string scene = sceneTag(mpScene);
     const std::string logCsv = scene + "_BestFirstSnapshots.csv";
     // Run tag = score name, plus the seed when it is not a single root voxel (e.g. Hessian_S16), so runs with
     // different seeds write different files.
-    std::string scoreName = AdaptiveProbeVolume::splitScoreName(kScore);
-    if (kSeedResolution.x != 1 || kSeedResolution.y != 1 || kSeedResolution.z != 1)
+    std::string scoreName = AdaptiveProbeVolume::splitScoreName(score);
+    if (seedResolution.x != 1 || seedResolution.y != 1 || seedResolution.z != 1)
     {
-        scoreName += "_S" + std::to_string(kSeedResolution.x);
-        if (kSeedResolution.y != kSeedResolution.x || kSeedResolution.z != kSeedResolution.x)
-            scoreName += "x" + std::to_string(kSeedResolution.y) + "x" + std::to_string(kSeedResolution.z);
+        scoreName += "_S" + std::to_string(seedResolution.x);
+        if (seedResolution.y != seedResolution.x || seedResolution.z != seedResolution.x)
+            scoreName += "x" + std::to_string(seedResolution.y) + "x" + std::to_string(seedResolution.z);
     }
-    vol->setSplitScore(kScore);
+    vol->setSplitScore(score);
     vol->setResidualCorrection(false);
 
     AABB manualBounds;
     const bool manual = getManualGridBounds(manualBounds);
-    vol->startBuildSeeded(mpScene, kSeedResolution, std::numeric_limits<float>::max(), false, manual ? &manualBounds : nullptr);
+    vol->startBuildSeeded(mpScene, seedResolution, std::numeric_limits<float>::max(), false, manual ? &manualBounds : nullptr);
 
     logInfo("[Best-first] Scene {}: score {}, budgets {} to {} probes, batch {}% of the leaves (at most {}).",
         scene, scoreName, budgets.front(), budgets.back(), 100.0f * kBatchFraction, kMaxBatch);
@@ -132,6 +140,12 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
     mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(sizeof(ProbeSampleData), size_t(stride) * kMaxCornersPerDispatch,
         ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal);
     std::vector<ProbeSampleData> samples(size_t(stride) * kMaxCornersPerDispatch);
+
+    // Hessians are only computed for the scores that use them; the others store SH and gradients only (the same
+    // routine as the uniform build, identical gradients), which is what Hermite interpolation needs.
+    const bool needHessians = score == AdaptiveProbeVolume::SplitScore::Hessian ||
+                              score == AdaptiveProbeVolume::SplitScore::HessianRelative;
+    logInfo("[Best-first] Per-probe derivatives: gradients{}.", needHessians ? " and Hessians" : " only (score does not use Hessians)");
 
     // Trace every pending corner and store SH, derivatives and the harmonic-mean depth.
     auto traceAllPending = [&]()
@@ -162,9 +176,12 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
             {
                 const ProbeSampleData* s = samples.data() + i * size_t(stride);
                 const float3 xPolar(positions[i].z, positions[i].x, positions[i].y);
-                calculateSHCoeffsGradientsRGBAndHessiansLum(grads[i], hessians[i], xPolar, s, dirCount, samplingDirs);
+                if (needHessians)
+                    calculateSHCoeffsGradientsRGBAndHessiansLum(grads[i], hessians[i], xPolar, s, dirCount, samplingDirs);
+                else
+                    calculateSHCoeffsGradients(grads[i], xPolar, s, dirCount, samplingDirs);
                 calculateSHCoeffs(coeffs[i], s, dirCount);
-                accumulateDirectLightSamples(coeffs[i], &grads[i], &hessians[i], xPolar, s + dirCount, lightCount);
+                accumulateDirectLightSamples(coeffs[i], &grads[i], needHessians ? &hessians[i] : nullptr, xPolar, s + dirCount, lightCount);
                 hm[i] = harmonicMeanDepth(s, dirCount);
             });
             vol->setCornerDataRange(start, coeffs, grads, hessians);
@@ -356,7 +373,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
 
     std::ofstream summary(kSummaryCsv);
     summary << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
-               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum\n";
+               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE\n";
     {
         // The reference itself: zero error by definition; listed for its probe count and build time.
         const uint3 d = reference->getProbeCountDim();
@@ -367,14 +384,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         summary << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
                 << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
                 << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
-                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << "\n";
+                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0\n";
         summary.flush();
     }
 
     // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
     // the cell the point falls in (uniform grids: log2 of the cells per axis). Lets the error be split by region,
     // e.g. where an adaptive grid is coarser or finer than the uniform grid with the same probe count.
-    struct PointColumns { std::string name; std::vector<float> pct, abs, sq; std::vector<int8_t> level; };
+    // relMSE per sample = (E - E_ref)^2 / max(|E_ref|, eps)^2, the squared form of the percentage error / 100.
+    struct PointColumns { std::string name; std::vector<float> pct, abs, sq, rel; std::vector<int8_t> level; };
     std::vector<PointColumns> perPoint;
 
     for (const Entry& e : entries)
@@ -415,6 +433,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         std::vector<float> pointApe(pointCount, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> pointAbs(pointCount, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> pointSq(pointCount, std::numeric_limits<float>::quiet_NaN());
+        std::vector<float> pointRel(pointCount, std::numeric_limits<float>::quiet_NaN());
         std::vector<int8_t> pointLevel(pointCount, -1);
         int uniformLevel = -1;
         if (uniform)
@@ -439,7 +458,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             }
             else { ok = uniform->fetchHermiteSH_CPU(p, c) && c.size() >= 9; pointLevel[i] = int8_t(uniformLevel); }
             if (!ok) return;
-            double sum = 0.0, sumA = 0.0, sumS = 0.0;
+            double sum = 0.0, sumA = 0.0, sumS = 0.0, sumR = 0.0;
             for (size_t k = 0; k < N; ++k)
             {
                 const float r = refLum[i * N + k];
@@ -448,10 +467,12 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 ape[i * N + k] = 100.0f * err / std::max(std::abs(r), eps);
                 sum += ape[i * N + k];
                 sumA += err; sumS += double(err) * err;
+                const double rel = double(ape[i * N + k]) / 100.0; sumR += rel * rel;
             }
             pointApe[i] = float(sum / double(N));
             pointAbs[i] = float(sumA / double(N));
             pointSq[i] = float(sumS / double(N));
+            pointRel[i] = float(sumR / double(N));
         });
 
         std::vector<float> valid; valid.reserve(ape.size());
@@ -469,26 +490,27 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         }
         std::sort(valid.begin(), valid.end());
         const double n = double(std::max<size_t>(1, valid.size()));
-        double sumApe = 0.0; for (float v : valid) sumApe += v;
+        double sumApe = 0.0, sumRel = 0.0;
+        for (float v : valid) { sumApe += v; sumRel += double(v / 100.0f) * double(v / 100.0f); }
 
         summary << e.method << "," << e.type << "," << e.file << "," << probes << "," << leaves << "," << deepest << ","
                 << std::fixed << std::setprecision(1) << buildMs << "," << valid.size() << "," << failed << ","
                 << std::setprecision(6) << sumApe / n << "," << percentileSorted(valid, 50) << "," << percentileSorted(valid, 95) << ","
-                << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "\n";
+                << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << "\n";
         summary.flush();
-        logInfo("[Placement eval] {} ({} probes): mean {:.3f}%, P95 {:.3f}%, RMSE {:.4g}; {} points outside the grid; {:.1f}s.",
-            e.method, probes, sumApe / n, percentileSorted(valid, 95), std::sqrt(sumSq / n), failed, msSince(t0) / 1000.0);
+        logInfo("[Placement eval] {} ({} probes): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.",
+            e.method, probes, std::sqrt(sumSq / n), sumAbs / n, sumRel / n, failed, msSince(t0) / 1000.0);
 
         if (!kPerPointCsv.empty())
-            perPoint.push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointLevel) });
+            perPoint.push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointRel), std::move(pointLevel) });
     }
 
     if (!kPerPointCsv.empty() && !perPoint.empty())
     {
-        // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_lvl. About 200 MB for 25 grids at 64^3.
+        // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_rel, <method>_lvl. About 250 MB for 25 grids at 64^3.
         std::ofstream pts(kPerPointCsv);
         pts << "ix,iy,iz,x,y,z,refLum";
-        for (const auto& m : perPoint) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_lvl";
+        for (const auto& m : perPoint) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_rel," << m.name << "_lvl";
         pts << "\n" << std::defaultfloat << std::setprecision(5);
         for (size_t i = 0; i < pointCount; ++i)
         {
@@ -497,10 +519,110 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             double r = 0.0; for (size_t k = 0; k < N; ++k) r += refLum[i * N + k];
             pts << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << p.x << "," << p.y << "," << p.z << "," << r / double(N);
             for (const auto& m : perPoint)
-                pts << "," << m.pct[i] << "," << m.abs[i] << "," << m.sq[i] << "," << int(m.level[i]);
+                pts << "," << m.pct[i] << "," << m.abs[i] << "," << m.sq[i] << "," << m.rel[i] << "," << int(m.level[i]);
             pts << "\n";
         }
         logInfo("[Placement eval] Wrote {}.", kPerPointCsv);
     }
     logInfo("[Placement eval] Wrote {} (absolute path: {}).", kSummaryCsv, std::filesystem::absolute(kSummaryCsv).string());
+}
+
+// =====================================================================================================
+// Batch: build every grid of the comparison in one run, then evaluate (PlacementComparisonSettings.h)
+// =====================================================================================================
+// Uniform grid of cellsPerAxis^3 cells, same tracing and threaded SH/gradient step as the uniform build in
+// execute(); saved to file with its build time (file I/O excluded).
+void PrecomputeSHCoefficients::buildUniformGridToFile(RenderContext* pRenderContext, uint32_t cellsPerAxis, const std::string& file)
+{
+    const auto tStart = Clock::now();
+    ref<UniformProbeVolume> vol = UniformProbeVolume::create(mpDevice);
+    AABB bounds;
+    const bool manual = getManualGridBounds(bounds);
+    vol->initGrid(mpScene, uint3(cellsPerAxis, cellsPerAxis, cellsPerAxis), manual ? &bounds : nullptr);
+    const uint3 dim = vol->getProbeCountDim();
+    const uint32_t totalProbes = dim.x * dim.y * dim.z;
+
+    const uint32_t dirCount = (uint32_t)samplingDirs.size();
+    const uint32_t lightCount = getLightSamplesPerProbe();
+    const uint32_t stride = dirCount + lightCount;
+    const uint32_t kMaxProbesPerDispatch = 2048;
+    mpProbePosBuffer = mpDevice->createStructuredBuffer(sizeof(float3), kMaxProbesPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal);
+    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(sizeof(ProbeSampleData), size_t(stride) * kMaxProbesPerDispatch,
+        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal);
+
+    std::vector<ProbeSampleData> samples(size_t(stride) * kMaxProbesPerDispatch);
+    std::vector<float3> positions(kMaxProbesPerDispatch);
+    std::vector<std::vector<float3>> coeffs(kMaxProbesPerDispatch);
+    std::vector<std::vector<GradSHCoeff>> grads(kMaxProbesPerDispatch);
+    uint32_t nextProgress = 25;
+    for (uint32_t batchStart = 0; batchStart < totalProbes; batchStart += kMaxProbesPerDispatch)
+    {
+        const uint32_t n = std::min(kMaxProbesPerDispatch, totalProbes - batchStart);
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const uint32_t probeIdx = batchStart + i; // (z * Ny + y) * Nx + x, as in the uniform build
+            const uint32_t x = probeIdx % dim.x, y = (probeIdx / dim.x) % dim.y, z = probeIdx / (dim.x * dim.y);
+            positions[i] = vol->getMinPoint() + float3(x, y, z) * vol->getCellSize();
+        }
+        mpProbePosBuffer->setBlob(positions.data(), 0, n * sizeof(float3));
+        traceProbeBatch(pRenderContext, dirCount, n, lightCount);
+        pRenderContext->submit(true);
+        mpProbeSamplingResultBuffer->getBlob(samples.data(), 0, size_t(stride) * n * sizeof(ProbeSampleData));
+        mpDevice->wait();
+        parallelFor(n, [&](size_t i)
+        {
+            const float3 p = positions[i];
+            const float3 xPolar(p.z, p.x, p.y);
+            const ProbeSampleData* s = samples.data() + i * size_t(stride);
+            calculateSHCoeffsGradients(grads[i], xPolar, s, dirCount, samplingDirs);
+            calculateSHCoeffs(coeffs[i], s, dirCount);
+            accumulateDirectLightSamples(coeffs[i], &grads[i], nullptr, xPolar, s + dirCount, lightCount);
+        });
+        for (uint32_t i = 0; i < n; ++i) vol->setProbeData(batchStart + i, coeffs[i], grads[i]);
+
+        const uint32_t done = batchStart + n;
+        if (100ull * done >= uint64_t(nextProgress) * totalProbes)
+        {
+            logInfo("[Batch] U{}: {}/{} probes, {:.1f}s.", cellsPerAxis, done, totalProbes, msSince(tStart) / 1000.0);
+            nextProgress += 25;
+        }
+    }
+    vol->setBuildTimeMs(msSince(tStart));
+    vol->saveToFile(file);
+    logInfo("[Batch] U{} done: {} probes in {:.1f}s -> {}", cellsPerAxis, totalProbes, vol->getBuildTimeMs() / 1000.0, file);
+}
+
+void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
+{
+    using namespace placement;
+    const auto t0 = Clock::now();
+    const std::string scene = sceneTag(mpScene);
+    std::vector<std::string> failed;
+    auto step = [&](const std::string& name, const std::function<void()>& fn)
+    {
+        const auto ts = Clock::now();
+        logInfo("[Batch] ==== {} (elapsed {:.1f} min) ====", name, msSince(t0) / 60000.0);
+        try { fn(); }
+        catch (const std::exception& e) { logError("[Batch] {} failed: {}", name, e.what()); failed.push_back(name); }
+        catch (...) { logError("[Batch] {} failed.", name); failed.push_back(name); }
+        logInfo("[Batch] ==== {} finished in {:.1f} min ====", name, msSince(ts) / 60000.0);
+    };
+
+    for (uint32_t res : kBatchUniformResolutions)
+    {
+        const std::string file = scene + "_U" + std::to_string(res) + ".txt";
+        step("uniform U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
+    }
+    for (AdaptiveProbeVolume::SplitScore sc : kBatchScores)
+        step(std::string("best-first ") + AdaptiveProbeVolume::splitScoreName(sc),
+             [&]() { BestFirstBuildWith(pRenderContext, sc, kSeedResolution); });
+    if (kBatchEvaluateAtEnd)
+        step("evaluation", [&]() { exportPlacementComparison(); });
+
+    if (failed.empty()) logInfo("[Batch] All steps done in {:.1f} min.", msSince(t0) / 60000.0);
+    else
+    {
+        std::string list; for (const auto& f : failed) list += (list.empty() ? "" : ", ") + f;
+        logError("[Batch] Done in {:.1f} min; failed steps: {}", msSince(t0) / 60000.0, list);
+    }
 }
