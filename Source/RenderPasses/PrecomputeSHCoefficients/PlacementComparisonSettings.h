@@ -15,9 +15,11 @@ namespace placement
 enum class BuildMode { Threshold, BestFirst };
 inline constexpr BuildMode kBuildMode = BuildMode::BestFirst;
 
-// Score of the best-first build: Hessian (ours, E_abs) or HarmonicMeanDepth.
+// Score of the best-first build: Hessian (ours, E_abs), HessianRelative (ours, E_rel; floor = 1% of the seed's
+// mean ||L||) or HarmonicMeanDepth.
 //inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::HarmonicMeanDepth;
-inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::Hessian;
+//inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::Hessian;
+inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::HessianRelative;
 
 // Seed grid of the best-first build. Levels are absolute (AdaptiveProbeVolume::mMaxLevel), so the seed does not
 // change the finest cell size; 1 x 1 x 1 matches the PG paper's single root voxel. 8 x 8 x 8 starts from U8

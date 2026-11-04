@@ -1668,6 +1668,7 @@ const char* AdaptiveProbeVolume::splitScoreName(SplitScore score)
     switch (score)
     {
     case SplitScore::Hessian: return "Hessian";
+    case SplitScore::HessianRelative: return "HessianRel";
     case SplitScore::HarmonicMeanDepth: return "HarmonicMeanDepth";
     }
     return "Unknown";
@@ -1698,6 +1699,20 @@ float AdaptiveProbeVolume::scoreCell(int probeIdx) const
         float sum = 0.0f;
         for (int k = 0; k < 8; ++k)
             sum += 0.5f * mCorners[p.corners[k]].maxLambdaVecL2 * d2;
+        return sum / 8.0f;
+    }
+    case SplitScore::HessianRelative:
+    {
+        // E_rel = E_abs / ||L|| per corner (||L|| = norm of the 9 luminance SH coefficients), averaged over
+        // the 8 corners; ||L|| is clamped to mRelFloor (set in finishBatchBestFirst before the first split).
+        const float d2 = dot(ext, ext);
+        const float floorL = std::max(mRelFloor, 1e-8f);
+        float sum = 0.0f;
+        for (int k = 0; k < 8; ++k)
+        {
+            const Corner& c = mCorners[p.corners[k]];
+            sum += 0.5f * c.maxLambdaVecL2 * d2 / std::max(computeCoeffVecL2_SHSpace(c.shCoeffs), floorL);
+        }
         return sum / 8.0f;
     }
     case SplitScore::HarmonicMeanDepth:
@@ -1776,6 +1791,17 @@ AdaptiveProbeVolume::BestFirstRound AdaptiveProbeVolume::finishBatchBestFirst(
 {
     BestFirstRound result;
     mPendingNewCorners.clear();
+
+    // 0. E_rel floor, once per build: a fraction of the mean ||L|| of the corners traced so far (the seed).
+    if (mSplitScore == SplitScore::HessianRelative && mRelFloor < 0.0f)
+    {
+        double sumL = 0.0;
+        size_t n = 0;
+        for (const Corner& c : mCorners)
+            if (!c.shCoeffs.empty()) { sumL += computeCoeffVecL2_SHSpace(c.shCoeffs); ++n; }
+        mRelFloor = mRelFloorFraction * float(n ? sumL / double(n) : 0.0);
+        logInfo("[Best-first] E_rel floor = {} x mean ||L|| over {} seed corners = {:.4g}", mRelFloorFraction, n, mRelFloor);
+    }
 
     // 1. Leaves whose 8 corners have just been traced become candidates.
     for (int probeIdx : mProbesPendingCheck)
@@ -2701,6 +2727,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
     mProbesPendingCheck.clear();
     mCornerLookup.clear();
     mBestFirstHeap.clear();
+    mRelFloor = -1.0f;
 
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;

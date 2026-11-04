@@ -510,6 +510,7 @@ public:
     enum class SplitScore
     {
         Hessian,           // mean over the 8 corners of 0.5 * ||lambda|| * d^2 (this paper, E_abs)
+        HessianRelative,   // the same divided by max(||L||, floor) per corner (E_rel, Iwasaki & Dobashi 2025 Eq. 22)
         HarmonicMeanDepth, // voxel edge / min over corners of the harmonic-mean hit distance
     };
     void setSplitScore(SplitScore score) { mSplitScore = score; }
@@ -562,6 +563,11 @@ private:
     };
     std::vector<HeapEntry> mBestFirstHeap;
     SplitScore mSplitScore = SplitScore::Hessian;
+    // E_rel floor: ||L|| below this counts as the floor, so deep shadow is not refined forever.
+    // Set once per build to mRelFloorFraction x the mean ||L|| of the corners traced before the first split
+    // (the seed), then kept fixed so scores do not drift while the grid grows.
+    float mRelFloorFraction = 0.01f;
+    float mRelFloor = -1.0f;
 
     CornerKey makeCornerKey(float3 p) const;
     // The 19 corner positions created by splitting a voxel, in the order subdivideCell() adds them.
