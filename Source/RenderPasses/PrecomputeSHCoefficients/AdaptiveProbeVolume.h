@@ -255,6 +255,10 @@ public:
         std::vector<float3x3> shHessians;
         float maxLambdaVecL2 = 0.0f; // Curvature
         float coeffVecL2 = 0.0f; // ||L||
+        // Harmonic mean of the first-hit distances of the direction samples,
+        // N / sum(1/d_i) with misses contributing 0 (Ward et al. 1988; GDC 2005).
+        // FLT_MAX until set. Used by SplitScore::HarmonicMeanDepth.
+        float harmonicMeanDepth = std::numeric_limits<float>::max();
         bool residualCorrectionValid = false;
          // ------------------------------------------------------------
         // Residual-corrected Hessian scale
@@ -498,11 +502,73 @@ public:
     );
 
     void clearPendingBatch();
+
+    // ----------------------------------------------------------------
+    // Best-first build to fixed probe budgets (placement comparison)
+    // ----------------------------------------------------------------
+    // Score used to rank leaves; every method plugs in here.
+    enum class SplitScore
+    {
+        Hessian,           // mean over the 8 corners of 0.5 * ||lambda|| * d^2 (this paper, E_abs)
+        HarmonicMeanDepth, // voxel edge / min over corners of the harmonic-mean hit distance
+    };
+    void setSplitScore(SplitScore score) { mSplitScore = score; }
+    SplitScore getSplitScore() const { return mSplitScore; }
+    static const char* splitScoreName(SplitScore score);
+
+    // Per-corner harmonic-mean depth for the pending corners [start, start + values.size()).
+    void setCornerHarmonicMeanDepthRange(uint32_t start, const std::vector<float>& values);
+
+    float scoreCell(int probeIdx) const;
+
+    struct BestFirstRound
+    {
+        uint32_t splits = 0;       // leaves split in this round
+        float lastSplitScore = 0;  // score of the last split leaf (the implied threshold)
+        bool budgetReached = false;// the next split would exceed the probe budget
+        bool exhausted = false;    // no leaf left that can be split
+    };
+
+    // Replaces finishBatch() in a best-first build. Pushes the leaves whose corners were just
+    // traced, then splits the highest-scoring leaves, up to batchFraction of the current leaf
+    // count (at most maxBatch), while the probe count stays within probeBudget.
+    BestFirstRound finishBatchBestFirst(uint64_t probeBudget, float batchFraction, uint32_t maxBatch);
+
+    uint64_t getCornerCount() const { return mCorners.size(); }
+    uint32_t getLeafCount() const;
+    int getDeepestLeafLevel() const;
+    int getMaxLevel() const { return mMaxLevel; }
     void scheduleAllLeafCornersForRuntimeBake();
     void printCoarseStageDebugInfo(const std::string& filename) const;
     void finishBatchCoarseLimited(int maxEvalLevel);
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
+
+    // Best-first state
+    struct HeapEntry
+    {
+        float score;
+        int level;
+        int probeIdx;
+    };
+    struct HeapLess // max-heap: higher score first, then larger voxels, then lower index
+    {
+        bool operator()(const HeapEntry& a, const HeapEntry& b) const
+        {
+            if (a.score != b.score) return a.score < b.score;
+            if (a.level != b.level) return a.level > b.level;
+            return a.probeIdx > b.probeIdx;
+        }
+    };
+    std::vector<HeapEntry> mBestFirstHeap;
+    SplitScore mSplitScore = SplitScore::Hessian;
+
+    CornerKey makeCornerKey(float3 p) const;
+    // The 19 corner positions created by splitting a voxel, in the order subdivideCell() adds them.
+    static void splitCornerPositions(const float3& minP, const float3& maxP, float3 out[19]);
+    uint32_t countNewCornersForSplit(int probeIdx) const;
+    // Splits one leaf: creates the missing corners (scheduled for tracing) and 8 children.
+    void subdivideCell(int probeIdx, bool addedByEdgeAware, std::vector<int>& nextProbesToCheck);
     BuildStats mBuildStats;
     // ----------------------------------------------------------------
     // Internal Data Structures
@@ -519,6 +585,8 @@ private:
 
     // Settings
     float mCurrentThreshold = 0.01f;
+    // Absolute maximum level: the finest cells are 1 / 2^mMaxLevel of the volume per axis (6 = U64 size),
+    // whatever the seed grid; seed cells start at level log2(seed resolution).
     int mMaxLevel = 6;
     //int mMaxLevel = 5;
     //int mMaxLevel = 0;

@@ -33,6 +33,7 @@
 
 #include <fstream>
 #include "PrecomputeSHCoefficients.h"
+#include "PlacementComparisonSettings.h"
 
 #include "envMap_SH.h"
 #include "Rendering/Lights/EmissivePowerSampler.h"
@@ -110,7 +111,8 @@ const float3 kGridMax = float3(11.97f, 5.55f, 1.37f);
 // Where the probes go: Plane / PlaneRetraced -> every enabled area in FDPlaneSettings.h, one CSV per area
 // (AdaptiveSHDemo "Show FD areas" draws them);
 // FixedPatch / Retraced -> random probes inside kGridMin/kGridMax (if kUseManualGridBounds) or the scene bounds.
-const PrecomputeSHCoefficients::FDCheck kFDCheckOnLoad = PrecomputeSHCoefficients::FDCheck::PlaneRetraced;
+const PrecomputeSHCoefficients::FDCheck kFDCheckOnLoad = PrecomputeSHCoefficients::FDCheck::None;
+//const PrecomputeSHCoefficients::FDCheck kFDCheckOnLoad = PrecomputeSHCoefficients::FDCheck::PlaneRetraced;
 const bool kFDOnly = kFDCheckOnLoad != PrecomputeSHCoefficients::FDCheck::None;
 const bool useIrradianceSpaceMetric = false;
 const bool useResidualCorrection = true;
@@ -1089,6 +1091,12 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             runFDVerification(pRenderContext, getFDBounds(), mFDCheck);
             mFDCheck = FDCheck::None;
         }
+        // Placement comparison evaluation (PlacementComparison.cpp), from the UI or on load.
+        if (mRunPlacementEval)
+        {
+            exportPlacementComparison();
+            mRunPlacementEval = false;
+        }
         if (kFDOnly) return; // FD-only session: no grid build, no rendering
 #pragma region  ====Finite difference verification code block (Row-by-Row)===
 //if (mbVerify)
@@ -1355,7 +1363,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             auto tStart = clock::now();
            
             //ProgressiveRefineBuild(pRenderContext);
-            SinglePassBuild(pRenderContext);
+            if (placement::kBuildMode == placement::BuildMode::BestFirst)
+                BestFirstBuild(pRenderContext); // snapshots at every probe budget, see PlacementComparisonSettings.h
+            else
+                SinglePassBuild(pRenderContext);
             auto tEnd = clock::now();
             double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
             mAdaptiveProbeVolume->setBuildTimeMs(ms);
@@ -1425,9 +1436,13 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             //logInfo("Wrote residual summary CSV: " + residualSummaryCsvFileName);
             //logInfo("Wrote residual by-level CSV: " + residualLevelCsvFileName);
 
-            mAdaptiveProbeVolume->printDebugInfo(debugFileName);
-            logInfo("Wrote hierarchy debug file: " + debugFileName);
-            mAdaptiveProbeVolume->saveToFile(saveToFileName);
+            // A best-first build has already saved one grid per probe budget (<scene>_BF_<score>_<budget>.txt).
+            if (placement::kBuildMode != placement::BuildMode::BestFirst)
+            {
+                mAdaptiveProbeVolume->printDebugInfo(debugFileName);
+                logInfo("Wrote hierarchy debug file: " + debugFileName);
+                mAdaptiveProbeVolume->saveToFile(saveToFileName);
+            }
             mNeedRebuildProbeVolume = false;
             mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 
@@ -1663,8 +1678,8 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
     // 1. Initialize
            //mAdaptiveProbeVolume->startBuild(mpScene, ErrorThreshold, useRelativeError);
 
-    //const uint3 seedResolution = uint3(1, 1, 1);
-    const uint3 seedResolution = uint3(2, 2, 2);
+    const uint3 seedResolution = uint3(1, 1, 1);
+    //const uint3 seedResolution = uint3(2, 2, 2);
     //const uint3 seedResolution = uint3(4,4,4); 
     //const uint3 seedResolution = uint3(8,8,8); 
     //const uint3 seedResolution = uint3(16, 16, 16);
@@ -2125,6 +2140,12 @@ AABB PrecomputeSHCoefficients::getFDBounds() const
     return kUseManualGridBounds ? AABB(kGridMin, kGridMax) : mpScene->getSceneBounds();
 }
 
+bool PrecomputeSHCoefficients::getManualGridBounds(AABB& out) const
+{
+    if (kUseManualGridBounds) out = AABB(kGridMin, kGridMax);
+    return kUseManualGridBounds;
+}
+
 void PrecomputeSHCoefficients::renderUI(
     Gui::Widgets& widget
 )
@@ -2133,6 +2154,7 @@ void PrecomputeSHCoefficients::renderUI(
     if (widget.button("FD check: fixed-patch + re-traced (E1c)")) mFDCheck = FDCheck::Retraced;
     if (widget.button("FD check: fixed-patch on areas")) mFDCheck = FDCheck::Plane;
     if (widget.button("FD check: re-traced on areas")) mFDCheck = FDCheck::PlaneRetraced;
+    if (widget.button("Placement comparison: evaluate grids")) mRunPlacementEval = true;
 
     if (widget.checkbox(
         "Show Reconstructed Env Map",
@@ -2392,6 +2414,7 @@ void PrecomputeSHCoefficients::setScene(RenderContext* pRenderContext, const ref
     if (mpScene)
     {
             mFDCheck = kFDCheckOnLoad; // FD-only session: run the check on the first frame
+            mRunPlacementEval = placement::kEvaluateOnLoad;
             generateUniformSphereDirSamples(numSamplesPerProbe, samplingDirs); // polar z-up
             //generateProgressiveSphereDirSamples(kMaxSamplesPerProbe, samplingDirs);
 

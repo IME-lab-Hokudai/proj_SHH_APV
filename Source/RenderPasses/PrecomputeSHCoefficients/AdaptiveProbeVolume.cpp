@@ -4,6 +4,7 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 // ------------------------------------------------------------------
 // CPU PORT OF SHADER LOGIC
 // ------------------------------------------------------------------
@@ -1515,141 +1516,305 @@ void AdaptiveProbeVolume::finishBatch()
         if (avgProbeError > mCurrentThreshold)
         //if (maxProbeError > mCurrentThreshold)
         {
-            mProbes[probeIdx].isLeaf = false;
-
-            float3 minP = mProbes[probeIdx].minPoint;
-            float3 maxP = mProbes[probeIdx].maxPoint;
-            float3 center = (minP + maxP) * 0.5f;
-            // 1. Setup the Lookup Logic ---------------------------------------------
-            float quantizationScale = 10000.0f; // Precision ~0.1mm
-
-            auto getCornerKey = [&](float3 p) -> CornerKey {
-                return {
-                    (int)(floor(p.x * quantizationScale + 0.5f)),
-                    (int)(floor(p.y * quantizationScale + 0.5f)),
-                    (int)(floor(p.z * quantizationScale + 0.5f))
-                };
-                };
-            // Helper: Create new corner and add to pending list
-            /*auto addNewCorner = [&](float3 pos) -> int {
-                Corner c; c.position = pos;
-                mCorners.push_back(c);
-                int idx = (int)mCorners.size() - 1;
-                mPendingNewCorners.push_back(idx);
-                return idx;
-                };*/
-            auto addNewCorner = [&](float3 pos) -> int {
-                CornerKey key = getCornerKey(pos);
-
-                // CHECK: Does this corner already exist?
-                auto it = mCornerLookup.find(key);
-                if (it != mCornerLookup.end()) {
-                    // YES: Return existing index.
-                    // DO NOT add to mPendingNewCorners (It's already been processed!)
-                    return it->second;
-                }
-
-                // NO: It's new. Create it.
-                Corner c;
-                c.position = pos;
-                // ------------------------------------------------------------
-                // Residual correction metadata
-                // ------------------------------------------------------------
-                // This point was created because parent probeIdx was subdivided.
-                // After tracing the point, setCornerData() will compare:
-                //
-                // actual SH at this point
-                // vs.
-                // parent Hermite interpolation at this point.
-                c.residualParentProbeIdx = probeIdx;
-
-                // Parent Hessian-predicted error before residual scaling.
-                //c.residualPredictedError = avgHessianPredictedError;
-                c.residualPredictedError = computeParentPointHessianPrediction(
-                    probeIdx,
-                    pos
-                );
-
-                c.residualObservedError = 0.0f;
-                c.residualRatio = 1.0f;
-                c.residualCorrectionScale = 1.0f;
-
-                mCorners.push_back(c);
-                int idx = (int)mCorners.size() - 1;
-
-                // Register in map
-                mCornerLookup[key] = idx;
-
-                // Schedule for Ray Tracing
-                mPendingNewCorners.push_back(idx);
-
-                return idx;
-                };
-
-            // A. Generate 19 NEW Corners
-            int c_center = addNewCorner(center);
-
-            int c_fX0 = addNewCorner({ minP.x, center.y, center.z }); int c_fX1 = addNewCorner({ maxP.x, center.y, center.z });
-            int c_fY0 = addNewCorner({ center.x, minP.y, center.z }); int c_fY1 = addNewCorner({ center.x, maxP.y, center.z });
-            int c_fZ0 = addNewCorner({ center.x, center.y, minP.z }); int c_fZ1 = addNewCorner({ center.x, center.y, maxP.z });
-
-            int c_eX_Y0Z0 = addNewCorner({ center.x, minP.y, minP.z }); int c_eX_Y1Z0 = addNewCorner({ center.x, maxP.y, minP.z });
-            int c_eX_Y0Z1 = addNewCorner({ center.x, minP.y, maxP.z }); int c_eX_Y1Z1 = addNewCorner({ center.x, maxP.y, maxP.z });
-
-            int c_eY_X0Z0 = addNewCorner({ minP.x, center.y, minP.z }); int c_eY_X1Z0 = addNewCorner({ maxP.x, center.y, minP.z });
-            int c_eY_X0Z1 = addNewCorner({ minP.x, center.y, maxP.z }); int c_eY_X1Z1 = addNewCorner({ maxP.x, center.y, maxP.z });
-
-            int c_eZ_X0Y0 = addNewCorner({ minP.x, minP.y, center.z }); int c_eZ_X1Y0 = addNewCorner({ maxP.x, minP.y, center.z });
-            int c_eZ_X0Y1 = addNewCorner({ minP.x, maxP.y, center.z }); int c_eZ_X1Y1 = addNewCorner({ maxP.x, maxP.y, center.z });
-
-            // B. Retrieve 8 OLD Corners
-            const int* P = mProbes[probeIdx].corners;
-
-            // C. Map to Grid
-            int grid[3][3][3];
-            grid[0][0][0] = P[0]; grid[0][0][2] = P[1]; grid[0][2][0] = P[2]; grid[0][2][2] = P[3];
-            grid[2][0][0] = P[4]; grid[2][0][2] = P[5]; grid[2][2][0] = P[6]; grid[2][2][2] = P[7];
-            grid[1][1][1] = c_center;
-            grid[0][1][1] = c_fX0; grid[2][1][1] = c_fX1;
-            grid[1][0][1] = c_fY0; grid[1][2][1] = c_fY1;
-            grid[1][1][0] = c_fZ0; grid[1][1][2] = c_fZ1;
-            grid[1][0][0] = c_eX_Y0Z0; grid[1][2][0] = c_eX_Y1Z0; grid[1][0][2] = c_eX_Y0Z1; grid[1][2][2] = c_eX_Y1Z1;
-            grid[0][1][0] = c_eY_X0Z0; grid[2][1][0] = c_eY_X1Z0; grid[0][1][2] = c_eY_X0Z1; grid[2][1][2] = c_eY_X1Z1;
-            grid[0][0][1] = c_eZ_X0Y0; grid[2][0][1] = c_eZ_X1Y0; grid[0][2][1] = c_eZ_X0Y1; grid[2][2][1] = c_eZ_X1Y1;
-
-            // D. Create 8 Child Probes
-            for (int k = 0; k < 8; ++k)
-            {
-                Probe child;
-                child.level = mProbes[probeIdx].level + 1;
-                child.addedByEdgeAware =
-                    mProbes[probeIdx].addedByEdgeAware ||
-                    subdivisionAddedByEdgeAware;
-                float3 childSize = (maxP - minP) * 0.5f;
-                float3 offset = float3((k & 4) ? childSize.x : 0, (k & 2) ? childSize.y : 0, (k & 1) ? childSize.z : 0);
-                child.minPoint = minP + offset;
-                child.maxPoint = child.minPoint + childSize;
-
-                int startX = (k & 4) ? 1 : 0;
-                int startY = (k & 2) ? 1 : 0;
-                int startZ = (k & 1) ? 1 : 0;
-
-                for (int c = 0; c < 8; ++c)
-                {
-                    int dx = (c & 4) ? 1 : 0;
-                    int dy = (c & 2) ? 1 : 0;
-                    int dz = (c & 1) ? 1 : 0;
-                    child.corners[c] = grid[startX + dx][startY + dy][startZ + dz];
-                }
-
-                mProbes.push_back(child);
-                mProbes[probeIdx].children[k] = (int)mProbes.size() - 1;
-                nextProbesToCheck.push_back((int)mProbes.size() - 1);
-            }
+            subdivideCell(probeIdx, subdivisionAddedByEdgeAware, nextProbesToCheck);
         }
     }
     mProbesPendingCheck = nextProbesToCheck;
 }
+
+// ------------------------------------------------------------------
+// Split one leaf into 8 children (shared by finishBatch and the best-first build)
+// ------------------------------------------------------------------
+void AdaptiveProbeVolume::subdivideCell(int probeIdx, bool addedByEdgeAware, std::vector<int>& nextProbesToCheck)
+{
+    mProbes[probeIdx].isLeaf = false;
+
+    float3 minP = mProbes[probeIdx].minPoint;
+    float3 maxP = mProbes[probeIdx].maxPoint;
+    float3 center = (minP + maxP) * 0.5f;
+    // 1. Setup the Lookup Logic ---------------------------------------------
+    float quantizationScale = 10000.0f; // Precision ~0.1mm
+
+    auto getCornerKey = [&](float3 p) -> CornerKey {
+        return {
+            (int)(floor(p.x * quantizationScale + 0.5f)),
+            (int)(floor(p.y * quantizationScale + 0.5f)),
+            (int)(floor(p.z * quantizationScale + 0.5f))
+        };
+        };
+    // Helper: Create new corner and add to pending list
+    /*auto addNewCorner = [&](float3 pos) -> int {
+        Corner c; c.position = pos;
+        mCorners.push_back(c);
+        int idx = (int)mCorners.size() - 1;
+        mPendingNewCorners.push_back(idx);
+        return idx;
+        };*/
+    auto addNewCorner = [&](float3 pos) -> int {
+        CornerKey key = getCornerKey(pos);
+
+        // CHECK: Does this corner already exist?
+        auto it = mCornerLookup.find(key);
+        if (it != mCornerLookup.end()) {
+            // YES: Return existing index.
+            // DO NOT add to mPendingNewCorners (It's already been processed!)
+            return it->second;
+        }
+
+        // NO: It's new. Create it.
+        Corner c;
+        c.position = pos;
+        // ------------------------------------------------------------
+        // Residual correction metadata
+        // ------------------------------------------------------------
+        // This point was created because parent probeIdx was subdivided.
+        // After tracing the point, setCornerData() will compare:
+        //
+        // actual SH at this point
+        // vs.
+        // parent Hermite interpolation at this point.
+        c.residualParentProbeIdx = probeIdx;
+
+        // Parent Hessian-predicted error before residual scaling.
+        //c.residualPredictedError = avgHessianPredictedError;
+        c.residualPredictedError = computeParentPointHessianPrediction(
+            probeIdx,
+            pos
+        );
+
+        c.residualObservedError = 0.0f;
+        c.residualRatio = 1.0f;
+        c.residualCorrectionScale = 1.0f;
+
+        mCorners.push_back(c);
+        int idx = (int)mCorners.size() - 1;
+
+        // Register in map
+        mCornerLookup[key] = idx;
+
+        // Schedule for Ray Tracing
+        mPendingNewCorners.push_back(idx);
+
+        return idx;
+        };
+
+    // A. Generate 19 NEW Corners
+    int c_center = addNewCorner(center);
+
+    int c_fX0 = addNewCorner({ minP.x, center.y, center.z }); int c_fX1 = addNewCorner({ maxP.x, center.y, center.z });
+    int c_fY0 = addNewCorner({ center.x, minP.y, center.z }); int c_fY1 = addNewCorner({ center.x, maxP.y, center.z });
+    int c_fZ0 = addNewCorner({ center.x, center.y, minP.z }); int c_fZ1 = addNewCorner({ center.x, center.y, maxP.z });
+
+    int c_eX_Y0Z0 = addNewCorner({ center.x, minP.y, minP.z }); int c_eX_Y1Z0 = addNewCorner({ center.x, maxP.y, minP.z });
+    int c_eX_Y0Z1 = addNewCorner({ center.x, minP.y, maxP.z }); int c_eX_Y1Z1 = addNewCorner({ center.x, maxP.y, maxP.z });
+
+    int c_eY_X0Z0 = addNewCorner({ minP.x, center.y, minP.z }); int c_eY_X1Z0 = addNewCorner({ maxP.x, center.y, minP.z });
+    int c_eY_X0Z1 = addNewCorner({ minP.x, center.y, maxP.z }); int c_eY_X1Z1 = addNewCorner({ maxP.x, center.y, maxP.z });
+
+    int c_eZ_X0Y0 = addNewCorner({ minP.x, minP.y, center.z }); int c_eZ_X1Y0 = addNewCorner({ maxP.x, minP.y, center.z });
+    int c_eZ_X0Y1 = addNewCorner({ minP.x, maxP.y, center.z }); int c_eZ_X1Y1 = addNewCorner({ maxP.x, maxP.y, center.z });
+
+    // B. Retrieve 8 OLD Corners
+    const int* P = mProbes[probeIdx].corners;
+
+    // C. Map to Grid
+    int grid[3][3][3];
+    grid[0][0][0] = P[0]; grid[0][0][2] = P[1]; grid[0][2][0] = P[2]; grid[0][2][2] = P[3];
+    grid[2][0][0] = P[4]; grid[2][0][2] = P[5]; grid[2][2][0] = P[6]; grid[2][2][2] = P[7];
+    grid[1][1][1] = c_center;
+    grid[0][1][1] = c_fX0; grid[2][1][1] = c_fX1;
+    grid[1][0][1] = c_fY0; grid[1][2][1] = c_fY1;
+    grid[1][1][0] = c_fZ0; grid[1][1][2] = c_fZ1;
+    grid[1][0][0] = c_eX_Y0Z0; grid[1][2][0] = c_eX_Y1Z0; grid[1][0][2] = c_eX_Y0Z1; grid[1][2][2] = c_eX_Y1Z1;
+    grid[0][1][0] = c_eY_X0Z0; grid[2][1][0] = c_eY_X1Z0; grid[0][1][2] = c_eY_X0Z1; grid[2][1][2] = c_eY_X1Z1;
+    grid[0][0][1] = c_eZ_X0Y0; grid[2][0][1] = c_eZ_X1Y0; grid[0][2][1] = c_eZ_X0Y1; grid[2][2][1] = c_eZ_X1Y1;
+
+    // D. Create 8 Child Probes
+    for (int k = 0; k < 8; ++k)
+    {
+        Probe child;
+        child.level = mProbes[probeIdx].level + 1;
+        child.addedByEdgeAware =
+            mProbes[probeIdx].addedByEdgeAware ||
+            addedByEdgeAware;
+        float3 childSize = (maxP - minP) * 0.5f;
+        float3 offset = float3((k & 4) ? childSize.x : 0, (k & 2) ? childSize.y : 0, (k & 1) ? childSize.z : 0);
+        child.minPoint = minP + offset;
+        child.maxPoint = child.minPoint + childSize;
+
+        int startX = (k & 4) ? 1 : 0;
+        int startY = (k & 2) ? 1 : 0;
+        int startZ = (k & 1) ? 1 : 0;
+
+        for (int c = 0; c < 8; ++c)
+        {
+            int dx = (c & 4) ? 1 : 0;
+            int dy = (c & 2) ? 1 : 0;
+            int dz = (c & 1) ? 1 : 0;
+            child.corners[c] = grid[startX + dx][startY + dy][startZ + dz];
+        }
+
+        mProbes.push_back(child);
+        mProbes[probeIdx].children[k] = (int)mProbes.size() - 1;
+        nextProbesToCheck.push_back((int)mProbes.size() - 1);
+    }
+}
+
+// ------------------------------------------------------------------
+// Best-first build to fixed probe budgets (placement comparison)
+// ------------------------------------------------------------------
+const char* AdaptiveProbeVolume::splitScoreName(SplitScore score)
+{
+    switch (score)
+    {
+    case SplitScore::Hessian: return "Hessian";
+    case SplitScore::HarmonicMeanDepth: return "HarmonicMeanDepth";
+    }
+    return "Unknown";
+}
+
+void AdaptiveProbeVolume::setCornerHarmonicMeanDepthRange(uint32_t start, const std::vector<float>& values)
+{
+    for (uint32_t i = 0; i < (uint32_t)values.size(); ++i)
+    {
+        const uint32_t batchIndex = start + i;
+        if (batchIndex >= mPendingNewCorners.size()) return;
+        mCorners[mPendingNewCorners[batchIndex]].harmonicMeanDepth = values[i];
+    }
+}
+
+float AdaptiveProbeVolume::scoreCell(int probeIdx) const
+{
+    const Probe& p = mProbes[probeIdx];
+    const float3 ext = p.maxPoint - p.minPoint;
+
+    switch (mSplitScore)
+    {
+    case SplitScore::Hessian:
+    {
+        // Same indicator as finishBatch(), without the residual correction:
+        // mean over the 8 corners of E_abs = 0.5 * ||lambda|| * d^2, d = voxel diagonal.
+        const float d2 = dot(ext, ext);
+        float sum = 0.0f;
+        for (int k = 0; k < 8; ++k)
+            sum += 0.5f * mCorners[p.corners[k]].maxLambdaVecL2 * d2;
+        return sum / 8.0f;
+    }
+    case SplitScore::HarmonicMeanDepth:
+    {
+        // Split when neighbouring samples are farther apart than the harmonic-mean depth:
+        // score = e / min over corners of HM; the source's threshold is 1.
+        // e = the longest voxel edge (seed cells need not be cubes).
+        const float e = std::max(ext.x, std::max(ext.y, ext.z));
+        float minHM = std::numeric_limits<float>::max();
+        for (int k = 0; k < 8; ++k)
+            minHM = std::min(minHM, mCorners[p.corners[k]].harmonicMeanDepth);
+        if (minHM >= std::numeric_limits<float>::max())
+            return 0.0f; // every ray from every corner missed
+        return e / std::max(minHM, 1e-6f);
+    }
+    }
+    return 0.0f;
+}
+
+AdaptiveProbeVolume::CornerKey AdaptiveProbeVolume::makeCornerKey(float3 p) const
+{
+    // Must match the quantisation in subdivideCell() and startBuildSeeded().
+    const float quantizationScale = 10000.0f;
+    return {
+        (int)(floor(p.x * quantizationScale + 0.5f)),
+        (int)(floor(p.y * quantizationScale + 0.5f)),
+        (int)(floor(p.z * quantizationScale + 0.5f))
+    };
+}
+
+void AdaptiveProbeVolume::splitCornerPositions(const float3& minP, const float3& maxP, float3 out[19])
+{
+    const float3 c = (minP + maxP) * 0.5f;
+    int i = 0;
+    out[i++] = c;
+    out[i++] = { minP.x, c.y, c.z };    out[i++] = { maxP.x, c.y, c.z };
+    out[i++] = { c.x, minP.y, c.z };    out[i++] = { c.x, maxP.y, c.z };
+    out[i++] = { c.x, c.y, minP.z };    out[i++] = { c.x, c.y, maxP.z };
+    out[i++] = { c.x, minP.y, minP.z }; out[i++] = { c.x, maxP.y, minP.z };
+    out[i++] = { c.x, minP.y, maxP.z }; out[i++] = { c.x, maxP.y, maxP.z };
+    out[i++] = { minP.x, c.y, minP.z }; out[i++] = { maxP.x, c.y, minP.z };
+    out[i++] = { minP.x, c.y, maxP.z }; out[i++] = { maxP.x, c.y, maxP.z };
+    out[i++] = { minP.x, minP.y, c.z }; out[i++] = { maxP.x, minP.y, c.z };
+    out[i++] = { minP.x, maxP.y, c.z }; out[i++] = { maxP.x, maxP.y, c.z };
+}
+
+uint32_t AdaptiveProbeVolume::countNewCornersForSplit(int probeIdx) const
+{
+    float3 pos[19];
+    splitCornerPositions(mProbes[probeIdx].minPoint, mProbes[probeIdx].maxPoint, pos);
+    uint32_t count = 0;
+    for (int i = 0; i < 19; ++i)
+        if (mCornerLookup.find(makeCornerKey(pos[i])) == mCornerLookup.end())
+            ++count;
+    return count;
+}
+
+uint32_t AdaptiveProbeVolume::getLeafCount() const
+{
+    uint32_t n = 0;
+    for (const auto& p : mProbes)
+        if (p.isLeaf) ++n;
+    return n;
+}
+
+int AdaptiveProbeVolume::getDeepestLeafLevel() const
+{
+    int deepest = 0;
+    for (const auto& p : mProbes)
+        if (p.isLeaf) deepest = std::max(deepest, p.level);
+    return deepest;
+}
+
+AdaptiveProbeVolume::BestFirstRound AdaptiveProbeVolume::finishBatchBestFirst(
+    uint64_t probeBudget, float batchFraction, uint32_t maxBatch)
+{
+    BestFirstRound result;
+    mPendingNewCorners.clear();
+
+    // 1. Leaves whose 8 corners have just been traced become candidates.
+    for (int probeIdx : mProbesPendingCheck)
+    {
+        const Probe& p = mProbes[probeIdx];
+        if (!p.isLeaf || p.level >= mMaxLevel) continue;
+        mBestFirstHeap.push_back({ scoreCell(probeIdx), p.level, probeIdx });
+        std::push_heap(mBestFirstHeap.begin(), mBestFirstHeap.end(), HeapLess{});
+    }
+    mProbesPendingCheck.clear();
+
+    // 2. Batch size: a fixed fraction of the current leaves, the same for every method.
+    const uint32_t leaves = getLeafCount();
+    const uint32_t batch = std::clamp<uint32_t>(uint32_t(std::lround(batchFraction * float(leaves))), 1u, std::max(1u, maxBatch));
+
+    // 3. Split in score order while the probe count stays within the budget.
+    std::vector<int> nextProbesToCheck;
+    while (result.splits < batch && !mBestFirstHeap.empty())
+    {
+        const HeapEntry top = mBestFirstHeap.front();
+        const uint32_t cost = countNewCornersForSplit(top.probeIdx);
+        if (uint64_t(mCorners.size()) + cost > probeBudget)
+        {
+            result.budgetReached = true;
+            break;
+        }
+        std::pop_heap(mBestFirstHeap.begin(), mBestFirstHeap.end(), HeapLess{});
+        mBestFirstHeap.pop_back();
+
+        subdivideCell(top.probeIdx, false, nextProbesToCheck);
+        result.lastSplitScore = top.score;
+        ++result.splits;
+    }
+
+    result.exhausted = mBestFirstHeap.empty() && nextProbesToCheck.empty();
+    mProbesPendingCheck = nextProbesToCheck;
+    return result;
+}
+
 // ------------------------------------------------------------------
 // Neighbor Computation (Fixes T-Junctions)
 // ------------------------------------------------------------------
@@ -2490,20 +2655,38 @@ void AdaptiveProbeVolume::startBuildSeeded(
     }
 
     resetResidualPaperStats();
-    uint32_t cellsPerAxis = 1u << mMaxLevel;
-    uint64_t maxNodes = 0;
-    uint64_t levelCount = 1;
 
-    for (int  l = 0; l <= mMaxLevel; ++l)
+    // Levels are absolute: a level-L cell is 1 / 2^L of the volume along each axis, so mMaxLevel = 6
+    // means a finest cell of U64 size whatever the seed. A seed of n cells per axis therefore starts at
+    // level log2(n). For a seed that is not the same power of two on every axis, the seed level is
+    // rounded up from the largest axis, so no cell is ever finer than 2^mMaxLevel per axis.
+    const uint32_t maxSeed = std::max(seedResolution.x, std::max(seedResolution.y, seedResolution.z));
+    int seedLevel = 0;
+    while ((1u << seedLevel) < maxSeed) ++seedLevel;
+    const bool exactSeed = seedResolution.x == (1u << seedLevel) && seedResolution.y == (1u << seedLevel) &&
+                           seedResolution.z == (1u << seedLevel);
+    if (!exactSeed)
+        logWarning("[Adaptive grid] Seed {}x{}x{} is not the same power of two on every axis; seed cells start at level {}, "
+                   "so the finest cells are coarser than 2^{} per axis on some axes.",
+            seedResolution.x, seedResolution.y, seedResolution.z, seedLevel, mMaxLevel);
+    if (seedLevel > mMaxLevel)
+        logWarning("[Adaptive grid] Seed level {} is above the maximum level {}: the seed cells cannot be split.", seedLevel, mMaxLevel);
+    logInfo("[Adaptive grid] Seed {}x{}x{} = level {}; maximum level {} = {} cells per axis.",
+        seedResolution.x, seedResolution.y, seedResolution.z, seedLevel, mMaxLevel, 1u << mMaxLevel);
+
+    // Memory reservation for the deepest possible grid.
+    const int depthBelowSeed = std::max(0, mMaxLevel - seedLevel);
+    uint64_t maxNodes = 0;
+    uint64_t levelCount = uint64_t(seedResolution.x) * seedResolution.y * seedResolution.z;
+    for (int l = 0; l <= depthBelowSeed; ++l)
     {
         maxNodes += levelCount;
         levelCount *= 8;
     }
 
-    uint64_t maxCorners =
-        uint64_t(cellsPerAxis + 1) *
-        uint64_t(cellsPerAxis + 1) *
-        uint64_t(cellsPerAxis + 1);
+    uint64_t maxCorners = 1;
+    for (uint32_t axis = 0; axis < 3; ++axis)
+        maxCorners *= uint64_t(seedResolution[axis]) * (uint64_t(1) << depthBelowSeed) + 1;
 
     mProbes.reserve(size_t(maxNodes));
     mCorners.reserve(size_t(maxCorners));
@@ -2517,6 +2700,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
     mPendingNewCorners.clear();
     mProbesPendingCheck.clear();
     mCornerLookup.clear();
+    mBestFirstHeap.clear();
 
     mCurrentThreshold = errorThreshold;
     mUseRelativeError = useRelativeError;
@@ -2577,7 +2761,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
             {
                 Probe p;
                 p.isLeaf = true;
-                p.level = 0;
+                p.level = seedLevel; // absolute level, see above
                 p.minPoint = scaledMin + float3(x, y, z) * cellSize;
                 p.maxPoint = p.minPoint + cellSize;
 

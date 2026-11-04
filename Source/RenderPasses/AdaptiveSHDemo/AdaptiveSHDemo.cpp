@@ -69,7 +69,9 @@
 //const std::string loadFromFileName = "DirectAbsErr2N6EdgeGradientMetricDataScene4096spp.txt";
 //const std::string loadFromFileName = "DirectAbsErr2EdgeMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
-const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+//const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
+
+const std::string loadFromFileName = "SceneForData_BF_HarmonicMeanDepth_70000.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
 
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";

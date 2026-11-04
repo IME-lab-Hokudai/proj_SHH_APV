@@ -144,14 +144,20 @@ private:
 
     ref<AdaptiveProbeVolume> mAdaptiveProbeVolume;
     ref<UniformProbeVolume> mUniformProbeVolume;
-    bool mNeedRebuildProbeVolume = false;
-    //bool mNeedRebuildProbeVolume = true;
+    //bool mNeedRebuildProbeVolume = false;
+    bool mNeedRebuildProbeVolume = true;
 
     // Add this array to track checkbox states
     bool mVisLevels[8] = { true, true, true, true, true, true, true, true };
     bool mbDrawLeafOnly = false;
 
     void SinglePassBuild(RenderContext* pRenderContext);
+    // Placement comparison (PlacementComparison.cpp, settings in PlacementComparisonSettings.h).
+    void BestFirstBuild(RenderContext* pRenderContext);
+    void exportPlacementComparison();
+    bool mRunPlacementEval = false;
+    // The manual grid bounds (true) or none, in which case builds use the scene bounds with a 2% inset.
+    bool getManualGridBounds(AABB& out) const;
     void ProgressiveRefineBuild(RenderContext* pRenderContext);
     void exportResidualTopologyRegionErrorComparison();
 

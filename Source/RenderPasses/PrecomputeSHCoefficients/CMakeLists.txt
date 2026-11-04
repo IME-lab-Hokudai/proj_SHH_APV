@@ -10,6 +10,8 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     FDVerificationCore.h
     FDPlaneSettings.h
     FDVerification.cpp
+    PlacementComparisonSettings.h
+    PlacementComparison.cpp
 	sphericalHarmonics.h
 	sphericalHarmonics.cpp
     envMap_SH.h
