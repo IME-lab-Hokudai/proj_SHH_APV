@@ -104,7 +104,15 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
     auto& vol = mAdaptiveProbeVolume;
     const std::string scene = sceneTag(mpScene);
     const std::string logCsv = scene + "_BestFirstSnapshots.csv";
-    const std::string scoreName = AdaptiveProbeVolume::splitScoreName(kScore);
+    // Run tag = score name, plus the seed when it is not a single root voxel (e.g. Hessian_S16), so runs with
+    // different seeds write different files.
+    std::string scoreName = AdaptiveProbeVolume::splitScoreName(kScore);
+    if (kSeedResolution.x != 1 || kSeedResolution.y != 1 || kSeedResolution.z != 1)
+    {
+        scoreName += "_S" + std::to_string(kSeedResolution.x);
+        if (kSeedResolution.y != kSeedResolution.x || kSeedResolution.z != kSeedResolution.x)
+            scoreName += "x" + std::to_string(kSeedResolution.y) + "x" + std::to_string(kSeedResolution.z);
+    }
     vol->setSplitScore(kScore);
     vol->setResidualCorrection(false);
 
@@ -224,10 +232,43 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
 // =====================================================================================================
 // Evaluation
 // =====================================================================================================
+// Entry point (UI button or kEvaluateOnLoad). Needs no scene: everything is read from grid files on the CPU.
+// With a scene loaded (or kSceneTagOverride set) it evaluates <scene>_PlacementComparisonGrids.csv; with no scene it
+// evaluates every *_PlacementComparisonGrids.csv in the working directory.
 void PrecomputeSHCoefficients::exportPlacementComparison()
 {
+    static const std::string kSuffix = "_PlacementComparisonGrids.csv";
+    if (mpScene || !placement::kSceneTagOverride.empty())
+    {
+        evaluatePlacementManifest(sceneTag(mpScene));
+        return;
+    }
+    std::vector<std::string> tags;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::current_path(), ec))
+    {
+        if (!entry.is_regular_file()) continue;
+        const std::string name = entry.path().filename().string();
+        if (name.size() > kSuffix.size() && name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) == 0)
+            tags.push_back(name.substr(0, name.size() - kSuffix.size()));
+    }
+    if (tags.empty())
+    {
+        logError("[Placement eval] No scene loaded and no *{} in the working directory {}.", kSuffix,
+                 std::filesystem::current_path().string());
+        return;
+    }
+    std::sort(tags.begin(), tags.end());
+    for (const std::string& t : tags)
+    {
+        logInfo("[Placement eval] Evaluating {}{}", t, kSuffix);
+        evaluatePlacementManifest(t);
+    }
+}
+
+void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scene)
+{
     using namespace placement;
-    const std::string scene = sceneTag(mpScene);
     const std::string kManifestFile = scene + "_PlacementComparisonGrids.csv";
     const std::string kSummaryCsv = scene + "_PlacementComparisonSummary.csv";
     const std::string kPerPointCsv = kWritePerPointCsv ? scene + "_PlacementComparisonPoints.csv" : std::string();
@@ -244,14 +285,29 @@ void PrecomputeSHCoefficients::exportPlacementComparison()
         std::string line;
         while (std::getline(in, line))
         {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
+            // Tolerate files saved by Excel: UTF-8 BOM, quoted cells, trailing ",," and padding spaces.
+            auto trim = [](std::string v)
+            {
+                if (v.size() >= 3 && v.compare(0, 3, "\xEF\xBB\xBF") == 0) v.erase(0, 3);
+                const auto notJunk = [](char ch) { return ch != ' ' && ch != '\t' && ch != '\r' && ch != '"' && ch != ','; };
+                const auto b = std::find_if(v.begin(), v.end(), notJunk);
+                const auto e = std::find_if(v.rbegin(), v.rend(), notJunk).base();
+                return b < e ? std::string(b, e) : std::string();
+            };
+            line = trim(line);
             if (line.empty() || line[0] == '#') continue;
             std::stringstream ss(line);
             Entry e;
             std::getline(ss, e.method, ',');
             std::getline(ss, e.type, ',');
-            std::getline(ss, e.file);
+            std::getline(ss, e.file, ',');
+            e.method = trim(e.method); e.type = trim(e.type); e.file = trim(e.file);
             if (e.method == "method") continue; // header
+            if (e.type.empty() || e.file.empty())
+            {
+                logWarning("[Placement eval] Ignored manifest line (expected method,type,file): {}", line);
+                continue;
+            }
             entries.push_back(e);
         }
     }
@@ -262,6 +318,11 @@ void PrecomputeSHCoefficients::exportPlacementComparison()
         return;
     }
 
+    if (!std::filesystem::exists(refIt->file))
+    {
+        logError("[Placement eval] Reference file {} not found.", refIt->file);
+        return;
+    }
     ref<UniformProbeVolume> reference = UniformProbeVolume::create(mpDevice);
     reference->loadFromFile(refIt->file);
     const float3 bmin = reference->getMinPoint(), bmax = reference->getMaxPoint();
@@ -296,6 +357,19 @@ void PrecomputeSHCoefficients::exportPlacementComparison()
     std::ofstream summary(kSummaryCsv);
     summary << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
                "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum\n";
+    {
+        // The reference itself: zero error by definition; listed for its probe count and build time.
+        const uint3 d = reference->getProbeCountDim();
+        double sumRef = 0.0; size_t samplesRef = 0;
+        for (size_t i = 0; i < pointCount; ++i)
+            if (refValid[i])
+                for (size_t k = 0; k < N; ++k) { sumRef += refLum[i * N + k]; ++samplesRef; }
+        summary << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
+                << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
+                << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
+                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << "\n";
+        summary.flush();
+    }
 
     std::vector<std::vector<float>> perPoint; // normal-averaged percentage error per grid
     std::vector<std::string> perPointNames;
@@ -303,6 +377,11 @@ void PrecomputeSHCoefficients::exportPlacementComparison()
     for (const Entry& e : entries)
     {
         if (e.type == "reference") continue;
+        if (!std::filesystem::exists(e.file))
+        {
+            logWarning("[Placement eval] {}: file {} not found; skipped.", e.method, e.file);
+            continue;
+        }
         const auto t0 = Clock::now();
         ref<AdaptiveProbeVolume> adaptive;
         ref<UniformProbeVolume> uniform;

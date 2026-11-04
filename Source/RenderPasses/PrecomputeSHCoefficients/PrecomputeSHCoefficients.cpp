@@ -131,9 +131,9 @@ const float residualConfidenceEps = 1e-3f;
 //const bool useIrradianceSpaceMetric = false;
 //const bool useRelativeError = true;
 //const uint3 unifromGridSize = uint3(16, 16, 16);
-//const uint3 unifromGridSize = uint3(32, 32, 32);
+const uint3 unifromGridSize = uint3(32, 32, 32);
 //const uint3 unifromGridSize = uint3(8, 8, 8);
-const uint3 unifromGridSize = uint3(64, 64, 64);
+//const uint3 unifromGridSize = uint3(64, 64, 64);
 //const std::string loadFromFileName = "DirectAbsErr8p5N6DataScene.txt";
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
@@ -165,6 +165,7 @@ const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096s
 //const std::string saveToFileName = "DirectAbsErr5DataScene.txt";
 //const std::string saveToFileName = "DirectAbsErr1DataScene.txt";
 
+const std::string saveToFileName = "U32DataScene.txt";
 //const std::string saveToFileName = "U64DataScene.txt";
 //const std::string saveToFileName = "U32DataScene.txt";
 //const std::string saveToFileName = "U32DataScene_4096spp_4spt.txt";
@@ -219,7 +220,7 @@ const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096s
 //const std::string saveToFileName = "DirectAbsErr100EGCMetricCubeBistro.txt";
 //const std::string saveToFileName = "DirectAbsErr100HessianMetricCubeBistro.txt";
 //const std::string saveToFileName = "DirectAbsErr50EGCMetricCubeBistro.txt";
-const std::string saveToFileName = "DirectAbsErr100EGCMetricBistroWholeScene.txt";
+//const std::string saveToFileName = "DirectAbsErr100EGCMetricBistroWholeScene.txt";
 
 //const std::string saveToFileName = "U64CornellShadowBoundaryScene.txt";
 //const std::string saveToFileName = "U32CornellShadowBoundaryScene.txt";
@@ -2145,7 +2146,8 @@ void PrecomputeSHCoefficients::renderUI(
     if (widget.button("FD check: fixed-patch + re-traced (E1c)")) mFDCheck = FDCheck::Retraced;
     if (widget.button("FD check: fixed-patch on areas")) mFDCheck = FDCheck::Plane;
     if (widget.button("FD check: re-traced on areas")) mFDCheck = FDCheck::PlaneRetraced;
-    if (widget.button("Placement comparison: evaluate grids")) mRunPlacementEval = true;
+    // Runs right away, with or without a scene (CPU only; the window freezes until it finishes).
+    if (widget.button("Placement comparison: evaluate grids")) exportPlacementComparison();
 
     if (widget.checkbox(
         "Show Reconstructed Env Map",

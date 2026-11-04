@@ -20,10 +20,14 @@ inline constexpr BuildMode kBuildMode = BuildMode::BestFirst;
 inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::SplitScore::Hessian;
 
 // Seed grid of the best-first build. Levels are absolute (AdaptiveProbeVolume::mMaxLevel), so the seed does not
-// change the finest cell size; 1 x 1 x 1 matches the PG paper's single root voxel.
-inline const uint3 kSeedResolution = uint3(1, 1, 1);
+// change the finest cell size; 1 x 1 x 1 matches the PG paper's single root voxel. 16 x 16 x 16 starts from U16
+// (4913 probes) and spends the rest of each budget on refinement. A seed other than 1 x 1 x 1 is added to the
+// file names: <scene>_BF_<score>_S16_<budget>.txt.
+//inline const uint3 kSeedResolution = uint3(1, 1, 1);
+inline const uint3 kSeedResolution = uint3(16, 16, 16);
 
 // Probe budgets (probe = grid corner, so probe count = memory). U16 = 17^3, U32 = 33^3, U64 = 65^3.
+// With the U16 seed, the 4913 snapshot is the seed itself (a check: it must match U16's error).
 inline const std::vector<uint64_t> kProbeBudgets = { 4913, 10000, 20000, 35937, 70000, 140000 };
 
 // Leaves split per round: this fraction of the current leaf count, at most kMaxBatch.
@@ -32,7 +36,7 @@ inline constexpr uint32_t kMaxBatch = 256;
 
 // Every output file starts with the scene tag: the loaded scene's file name without extension
 // (e.g. SceneForData, Bistro), or kSceneTagOverride when it is not empty.
-//   <scene>_BF_<score>_<budget>.txt   snapshot grid at each budget
+//   <scene>_BF_<score>[_S<seed>]_<budget>.txt   snapshot grid at each budget
 //   <scene>_BestFirstSnapshots.csv    one row per snapshot
 inline const std::string kSceneTagOverride = "";
 

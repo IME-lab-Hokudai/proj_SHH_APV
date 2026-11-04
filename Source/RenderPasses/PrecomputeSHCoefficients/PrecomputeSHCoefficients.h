@@ -154,7 +154,8 @@ private:
     void SinglePassBuild(RenderContext* pRenderContext);
     // Placement comparison (PlacementComparison.cpp, settings in PlacementComparisonSettings.h).
     void BestFirstBuild(RenderContext* pRenderContext);
-    void exportPlacementComparison();
+    void exportPlacementComparison();                          // no scene needed; see PlacementComparison.cpp
+    void evaluatePlacementManifest(const std::string& scene); // one <scene>_PlacementComparisonGrids.csv
     bool mRunPlacementEval = false;
     // The manual grid bounds (true) or none, in which case builds use the scene bounds with a 2% inset.
     bool getManualGridBounds(AABB& out) const;
