@@ -65,11 +65,26 @@ inline constexpr bool kEvaluateOnLoad = false;
 // "Placement comparison: build everything + evaluate", or set kRunBatchOnLoad to start it when the scene loads.
 // Uniform grids are saved as <scene>_U<cells>.txt (e.g. SceneForData_U32.txt). Progress is in the log ([Batch]).
 inline constexpr bool kRunBatchOnLoad = false;
-inline const std::vector<uint32_t> kBatchUniformResolutions = { 8, 16, 32, 64 };
+// U40 (41^3 = 68,921 probes) and U51 (52^3 = 140,608) match the 70,000 and 140,000 budgets.
+inline const std::vector<uint32_t> kBatchUniformResolutions = { 8, 16, 32, 40, 51, 64 };
 inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
     AdaptiveProbeVolume::SplitScore::HarmonicMeanDepth,
     AdaptiveProbeVolume::SplitScore::Hessian,
     AdaptiveProbeVolume::SplitScore::HessianRelative,
 };
 inline constexpr bool kBatchEvaluateAtEnd = true;
+// Skip grids whose files already exist (uniform: the grid file; best-first: the snapshot at the largest budget),
+// so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings).
+inline constexpr bool kBatchSkipExisting = true;
+inline constexpr bool kBatchClassifyPoints = true; // classify the evaluation points before the evaluation (scene loaded)
+
+// ---- Sample points away from geometry ------------------------------------------------------------
+// classifyEvalPoints traces kClassifyDirections rays (no back-face culling) from every evaluation point and writes
+// <scene>_EvalPointMask.csv. A point is "inside" when most rays that hit something hit a back face, and "near" when
+// the closest hit is nearer than kNearSurfaceCells finest cells (U64 cell). The evaluation then also reports every
+// metric over the points that are neither (columns ...Away in the summary; inside and minDist in the per-point file).
+inline constexpr uint32_t kClassifyDirections = 64;
+// One finest cell: closer than that, neighbouring probes can lie on both sides of a surface and interpolation is not
+// meaningful (with 0.5 a few such points remained and skewed relMSE in coarse regions).
+inline constexpr float kNearSurfaceCells = 1.0f;
 } // namespace placement

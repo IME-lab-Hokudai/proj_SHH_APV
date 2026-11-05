@@ -60,6 +60,37 @@ std::string sceneTag(const ref<Scene>& scene)
 
 float lum709(float3 c) { return dot(c, float3(0.2126f, 0.7152f, 0.0722f)); }
 
+// File of the reference line in a grid list (<scene>_PlacementComparisonGrids.csv); empty if none.
+std::string manifestReferenceFile(const std::string& manifest)
+{
+    std::ifstream in(manifest);
+    std::string line;
+    while (std::getline(in, line))
+    {
+        std::vector<std::string> f;
+        std::stringstream ss(line);
+        std::string cell;
+        while (std::getline(ss, cell, ','))
+        {
+            const auto b = cell.find_first_not_of(" \t\r\"\xEF\xBB\xBF");
+            const auto e = cell.find_last_not_of(" \t\r\"");
+            f.push_back(b == std::string::npos ? std::string() : cell.substr(b, e - b + 1));
+        }
+        if (f.size() >= 3 && f[1] == "reference") return f[2];
+    }
+    return std::string();
+}
+
+// Bounds from the header of a uniform grid file (UNIFORM_GRID_V1, resolution, min, max), without loading the probes.
+bool readUniformGridBounds(const std::string& file, float3& bmin, float3& bmax)
+{
+    std::ifstream in(file);
+    std::string header;
+    uint32_t rx = 0, ry = 0, rz = 0;
+    if (!(in >> header) || header != "UNIFORM_GRID_V1") return false;
+    return bool(in >> rx >> ry >> rz >> bmin.x >> bmin.y >> bmin.z >> bmax.x >> bmax.y >> bmax.z);
+}
+
 // 6 axes + 8 diagonals (world space; the evaluators swizzle internally).
 std::vector<float3> fourteenNormals()
 {
@@ -371,9 +402,57 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     const float eps = kRelEpsilonFraction * float(refCount ? sumAbsRef / double(refCount) : 1.0);
     logInfo("[Placement eval] Reference {}: {}^3 points x {} normals, epsilon {:.4g}.", refIt->file, R, N, eps);
 
+    // Sample-point mask (classifyEvalPoints): points inside objects or near surfaces. Without the file, every point
+    // counts as "away" and the ...Away columns equal the all-point ones.
+    const std::string kMaskFile = scene + "_EvalPointMask.csv";
+    std::vector<int8_t> pointInside(pointCount, -1);
+    std::vector<float> pointMinDist(pointCount, -1.0f);
+    std::vector<uint8_t> away(pointCount, 1);
+    bool haveMask = false;
+    {
+        std::ifstream mf(kMaskFile);
+        if (mf)
+        {
+            const float3 ext = bmax - bmin;
+            const float nearDist = kNearSurfaceCells * std::min(ext.x, std::min(ext.y, ext.z)) / 64.0f; // finest cell = U64
+            std::string line;
+            size_t rowsRead = 0, inside = 0, nearCount = 0;
+            while (std::getline(mf, line))
+            {
+                if (line.empty() || line[0] == '#' || line[0] == 'i') continue; // comment / header
+                uint32_t ix, iy, iz, hits, backs; float minDist;
+                char sep;
+                std::stringstream ss(line);
+                if (!(ss >> ix >> sep >> iy >> sep >> iz >> sep >> hits >> sep >> backs >> sep >> minDist)) continue;
+                if (ix >= R || iy >= R || iz >= R) continue;
+                const size_t i = (size_t(iz) * R + iy) * R + ix;
+                const bool in = hits > 0 && 2 * backs > hits;
+                const bool nr = !in && minDist >= 0.0f && minDist < nearDist;
+                pointInside[i] = in ? 1 : 0;
+                pointMinDist[i] = minDist;
+                away[i] = (in || nr) ? 0 : 1;
+                inside += in; nearCount += nr; ++rowsRead;
+            }
+            haveMask = rowsRead == pointCount;
+            if (!haveMask)
+            {
+                logWarning("[Placement eval] {} has {} rows, expected {} ({}^3); ignored. Re-run the classification.", kMaskFile, rowsRead, pointCount, R);
+                std::fill(away.begin(), away.end(), uint8_t(1));
+                std::fill(pointInside.begin(), pointInside.end(), int8_t(-1));
+                std::fill(pointMinDist.begin(), pointMinDist.end(), -1.0f);
+            }
+            else
+                logInfo("[Placement eval] Sample-point mask {}: {} inside objects ({:.1f}%), {} within {:.3g} of a surface ({:.1f}%); "
+                        "the ...Away columns use the other {:.1f}%.", kMaskFile, inside, 100.0 * inside / pointCount, nearCount, nearDist,
+                        100.0 * nearCount / pointCount, 100.0 * (pointCount - inside - nearCount) / pointCount);
+        }
+        else
+            logWarning("[Placement eval] No {} (run \"classify sample points\" with the scene loaded); ...Away columns = all points.", kMaskFile);
+    }
+
     std::ofstream summary(kSummaryCsv);
     summary << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
-               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE\n";
+               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway\n";
     {
         // The reference itself: zero error by definition; listed for its probe count and build time.
         const uint3 d = reference->getProbeCountDim();
@@ -384,7 +463,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         summary << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
                 << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
                 << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
-                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0\n";
+                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0\n";
         summary.flush();
     }
 
@@ -477,6 +556,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
 
         std::vector<float> valid; valid.reserve(ape.size());
         double sumAbs = 0.0, sumSq = 0.0, sumRef = 0.0; size_t failed = 0;
+        double aAbs = 0.0, aSq = 0.0, aRel = 0.0, aRef = 0.0; size_t aCount = 0; // points away from geometry
         for (size_t i = 0; i < pointCount; ++i)
         {
             if (!refValid[i]) continue;
@@ -486,8 +566,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 valid.push_back(ape[i * N + k]);
                 sumAbs += absErr[i * N + k]; sumSq += double(absErr[i * N + k]) * absErr[i * N + k];
                 sumRef += refLum[i * N + k];
+                if (away[i])
+                {
+                    const double rel = double(ape[i * N + k]) / 100.0;
+                    aAbs += absErr[i * N + k]; aSq += double(absErr[i * N + k]) * absErr[i * N + k];
+                    aRel += rel * rel; aRef += refLum[i * N + k]; ++aCount;
+                }
             }
         }
+        const double na = double(std::max<size_t>(1, aCount));
         std::sort(valid.begin(), valid.end());
         const double n = double(std::max<size_t>(1, valid.size()));
         double sumApe = 0.0, sumRel = 0.0;
@@ -496,7 +583,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         summary << e.method << "," << e.type << "," << e.file << "," << probes << "," << leaves << "," << deepest << ","
                 << std::fixed << std::setprecision(1) << buildMs << "," << valid.size() << "," << failed << ","
                 << std::setprecision(6) << sumApe / n << "," << percentileSorted(valid, 50) << "," << percentileSorted(valid, 95) << ","
-                << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << "\n";
+                << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << ","
+                << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << "\n";
         summary.flush();
         logInfo("[Placement eval] {} ({} probes): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.",
             e.method, probes, std::sqrt(sumSq / n), sumAbs / n, sumRel / n, failed, msSince(t0) / 1000.0);
@@ -509,7 +597,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     {
         // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_rel, <method>_lvl. About 250 MB for 25 grids at 64^3.
         std::ofstream pts(kPerPointCsv);
-        pts << "ix,iy,iz,x,y,z,refLum";
+        pts << "ix,iy,iz,x,y,z,refLum,inside,minDist";
         for (const auto& m : perPoint) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_rel," << m.name << "_lvl";
         pts << "\n" << std::defaultfloat << std::setprecision(5);
         for (size_t i = 0; i < pointCount; ++i)
@@ -517,7 +605,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             if (!refValid[i]) continue;
             const float3 p = pointPos(i);
             double r = 0.0; for (size_t k = 0; k < N; ++k) r += refLum[i * N + k];
-            pts << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << p.x << "," << p.y << "," << p.z << "," << r / double(N);
+            pts << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << p.x << "," << p.y << "," << p.z << "," << r / double(N) << "," << int(pointInside[i]) << "," << pointMinDist[i];
             for (const auto& m : perPoint)
                 pts << "," << m.pct[i] << "," << m.abs[i] << "," << m.sq[i] << "," << m.rel[i] << "," << int(m.level[i]);
             pts << "\n";
@@ -611,11 +699,35 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
     for (uint32_t res : kBatchUniformResolutions)
     {
         const std::string file = scene + "_U" + std::to_string(res) + ".txt";
+        if (kBatchSkipExisting && std::filesystem::exists(file))
+        {
+            logInfo("[Batch] uniform U{}: {} exists, skipped.", res, file);
+            continue;
+        }
         step("uniform U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
     }
     for (AdaptiveProbeVolume::SplitScore sc : kBatchScores)
+    {
+        // Same run tag as BestFirstBuildWith: score name, plus _S<seed> for a seed other than 1 x 1 x 1.
+        std::string tag = AdaptiveProbeVolume::splitScoreName(sc);
+        if (kSeedResolution.x != 1 || kSeedResolution.y != 1 || kSeedResolution.z != 1)
+        {
+            tag += "_S" + std::to_string(kSeedResolution.x);
+            if (kSeedResolution.y != kSeedResolution.x || kSeedResolution.z != kSeedResolution.x)
+                tag += "x" + std::to_string(kSeedResolution.y) + "x" + std::to_string(kSeedResolution.z);
+        }
+        const uint64_t lastBudget = kProbeBudgets.empty() ? 0 : *std::max_element(kProbeBudgets.begin(), kProbeBudgets.end());
+        const std::string lastFile = scene + "_BF_" + tag + "_" + std::to_string(lastBudget) + ".txt";
+        if (kBatchSkipExisting && std::filesystem::exists(lastFile))
+        {
+            logInfo("[Batch] best-first {}: {} exists, skipped.", tag, lastFile);
+            continue;
+        }
         step(std::string("best-first ") + AdaptiveProbeVolume::splitScoreName(sc),
              [&]() { BestFirstBuildWith(pRenderContext, sc, kSeedResolution); });
+    }
+    if (kBatchClassifyPoints)
+        step("classify sample points", [&]() { classifyEvalPoints(pRenderContext); });
     if (kBatchEvaluateAtEnd)
         step("evaluation", [&]() { exportPlacementComparison(); });
 
@@ -625,4 +737,84 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
         std::string list; for (const auto& f : failed) list += (list.empty() ? "" : ", ") + f;
         logError("[Batch] Done in {:.1f} min; failed steps: {}", msSince(t0) / 60000.0, list);
     }
+}
+
+// =====================================================================================================
+// Sample-point classification: which evaluation points are inside objects or near surfaces
+// =====================================================================================================
+// Same points as the evaluation (kEvalResolution^3 cell centres of the reference grid's bounds). For each point,
+// kClassifyDirections rays without back-face culling (ProbeSampling.rt.slang, classifyMode = 1) give the number of
+// hits, the number of back-face hits and the closest hit distance. Written to <scene>_EvalPointMask.csv; the
+// evaluation turns them into "inside" / "near" flags (PlacementComparisonSettings.h).
+void PrecomputeSHCoefficients::classifyEvalPoints(RenderContext* pRenderContext)
+{
+    using namespace placement;
+    const auto t0 = Clock::now();
+    if (!mpScene) { logError("[Placement classify] Needs a loaded scene."); return; }
+    const std::string scene = sceneTag(mpScene);
+    const std::string manifest = scene + "_PlacementComparisonGrids.csv";
+    const std::string refFile = manifestReferenceFile(manifest);
+    float3 bmin, bmax;
+    if (refFile.empty() || !readUniformGridBounds(refFile, bmin, bmax))
+    {
+        logError("[Placement classify] Could not read the reference grid bounds (grid list {}, reference '{}').", manifest, refFile);
+        return;
+    }
+    const uint32_t R = kEvalResolution;
+    const size_t pointCount = size_t(R) * R * R;
+    const uint32_t K = kClassifyDirections;
+    const uint32_t kBatch = 2048;
+
+    mpProbePosBuffer = mpDevice->createStructuredBuffer(sizeof(float3), kBatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal);
+    mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(sizeof(ProbeSampleData), size_t(K) * kBatch,
+        ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal);
+    std::vector<ProbeSampleData> samples(size_t(K) * kBatch);
+    std::vector<float3> positions(kBatch);
+    std::vector<uint16_t> hits(pointCount, 0), backs(pointCount, 0);
+    std::vector<float> minDist(pointCount, -1.0f);
+
+    struct ModeGuard { uint32_t& m; ~ModeGuard() { m = 0; } } guard{ mProbeClassifyMode };
+    mProbeClassifyMode = 1;
+    for (size_t start = 0; start < pointCount; start += kBatch)
+    {
+        const uint32_t n = uint32_t(std::min<size_t>(kBatch, pointCount - start));
+        for (uint32_t j = 0; j < n; ++j)
+        {
+            const size_t i = start + j;
+            const uint32_t x = uint32_t(i % R), y = uint32_t((i / R) % R), z = uint32_t(i / (size_t(R) * R));
+            positions[j] = bmin + (float3(float(x), float(y), float(z)) + 0.5f) / float(R) * (bmax - bmin); // as in the evaluation
+        }
+        mpProbePosBuffer->setBlob(positions.data(), 0, n * sizeof(float3));
+        traceProbeBatch(pRenderContext, K, n, 0);
+        pRenderContext->submit(true);
+        mpProbeSamplingResultBuffer->getBlob(samples.data(), 0, size_t(K) * n * sizeof(ProbeSampleData));
+        mpDevice->wait();
+        for (uint32_t j = 0; j < n; ++j)
+        {
+            const size_t i = start + j;
+            for (uint32_t k = 0; k < K; ++k)
+            {
+                const ProbeSampleData& sd = samples[size_t(j) * K + k];
+                if (sd.hitT < 0.0f) continue;
+                ++hits[i];
+                if (sd.Li.x > 0.5f) ++backs[i];
+                if (minDist[i] < 0.0f || sd.hitT < minDist[i]) minDist[i] = sd.hitT;
+            }
+        }
+    }
+    mProbeClassifyMode = 0;
+
+    const std::string out = scene + "_EvalPointMask.csv";
+    std::ofstream f(out);
+    f << "# Evaluation-point classification: " << R << "^3 points in [" << bmin.x << "," << bmin.y << "," << bmin.z << "] - ["
+      << bmax.x << "," << bmax.y << "," << bmax.z << "], " << K << " rays each, no back-face culling.\n";
+    f << "ix,iy,iz,hits,backHits,minDist\n" << std::setprecision(6);
+    size_t inside = 0;
+    for (size_t i = 0; i < pointCount; ++i)
+    {
+        f << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << hits[i] << "," << backs[i] << "," << minDist[i] << "\n";
+        inside += (hits[i] > 0 && 2 * backs[i] > hits[i]);
+    }
+    logInfo("[Placement classify] {} points, {} rays each: {} inside objects ({:.1f}%). Wrote {} in {:.1f}s.",
+        pointCount, K, inside, 100.0 * inside / pointCount, out, msSince(t0) / 1000.0);
 }

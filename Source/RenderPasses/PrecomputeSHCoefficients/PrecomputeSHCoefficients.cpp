@@ -1093,6 +1093,12 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             runFDVerification(pRenderContext, getFDBounds(), mFDCheck);
             mFDCheck = FDCheck::None;
         }
+        // Classification of the evaluation points (PlacementComparison.cpp), from the UI.
+        if (mRunClassifyEvalPoints)
+        {
+            mRunClassifyEvalPoints = false;
+            classifyEvalPoints(pRenderContext);
+        }
         // Placement comparison batch (PlacementComparison.cpp): every grid, then the evaluation.
         if (mRunPlacementBatch)
         {
@@ -2156,6 +2162,8 @@ void PrecomputeSHCoefficients::renderUI(
     if (widget.button("Placement comparison: evaluate grids")) exportPlacementComparison();
     // Runs on the next frame (needs the render context); scene required.
     if (widget.button("Placement comparison: build everything + evaluate")) mRunPlacementBatch = true;
+    // Runs on the next frame; scene required. Writes <scene>_EvalPointMask.csv, used by the evaluation.
+    if (widget.button("Placement comparison: classify sample points")) mRunClassifyEvalPoints = true;
 
     if (widget.checkbox(
         "Show Reconstructed Env Map",
@@ -2387,6 +2395,7 @@ void PrecomputeSHCoefficients::traceProbeBatch(RenderContext* pRenderContext, ui
     rtVar["PerFrameCB"]["numLightSamplePerProbe"] = lightSamplesPerProbe;
     rtVar["PerFrameCB"]["numPathsPerDirection"] = numPathsPerDirection;
     rtVar["PerFrameCB"]["numNeeSamplesPerHit"] = numNeeSamplesPerHit;
+    rtVar["PerFrameCB"]["classifyMode"] = mProbeClassifyMode;
 
     auto tracerVar = rtVar["gPathTracer"];
     tracerVar["params"]["lodBias"] = 0.f;

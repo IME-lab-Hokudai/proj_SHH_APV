@@ -158,6 +158,10 @@ private:
     void buildUniformGridToFile(RenderContext* pRenderContext, uint32_t cellsPerAxis, const std::string& file);
     void runPlacementBatch(RenderContext* pRenderContext); // every grid of the comparison, then the evaluation
     bool mRunPlacementBatch = false;
+    // Flags evaluation points inside objects / near surfaces -> <scene>_EvalPointMask.csv (needs the scene).
+    void classifyEvalPoints(RenderContext* pRenderContext);
+    bool mRunClassifyEvalPoints = false;
+    uint32_t mProbeClassifyMode = 0; // passed to ProbeSampling.rt.slang by traceProbeBatch (1 only inside classifyEvalPoints)
     void exportPlacementComparison();                          // no scene needed; see PlacementComparison.cpp
     void evaluatePlacementManifest(const std::string& scene); // one <scene>_PlacementComparisonGrids.csv
     bool mRunPlacementEval = false;

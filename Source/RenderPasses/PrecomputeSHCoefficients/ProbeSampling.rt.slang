@@ -22,6 +22,7 @@ cbuffer PerFrameCB
     uint numLightSamplePerProbe; // explicit emissive light samples, indices [numSamplePerProbe, numSamplePerProbe + numLightSamplePerProbe)
     uint numPathsPerDirection;   // K continuations per direction sharing the first hit (1 = single path, original behaviour)
     uint numNeeSamplesPerHit;    // NEE light samples at every surface hit along a path (1 = Falcor default)
+    uint classifyMode;           // 1 = sample-point classification for the placement evaluation (see rayGen); 0 = probe tracing
 };
 
 // ---------------------------------------------------------------------------
@@ -168,6 +169,35 @@ void rayGen()
     const uint probeIdx = DispatchRaysIndex().y;
     const uint strideSamples = numSamplePerProbe + numLightSamplePerProbe;
     const uint outIdx = probeIdx * strideSamples + dirIdx;
+
+    // Sample-point classification (PlacementComparison.cpp, classifyEvalPoints): one ray per Fibonacci direction
+    // (numSamplePerProbe of them), NO back-face culling, first non-transmissive hit only, no path tracing.
+    // Output: hitT (-1 = miss) and Li.x = 1 if the ray hit the back side of a surface, i.e. the point is inside
+    // an object along that direction. Probe tracing (classifyMode = 0) is unchanged.
+    if (classifyMode != 0)
+    {
+        const float sampleCount = float(numSamplePerProbe);
+        const float cz = 1.f - (2.f * float(dirIdx) + 1.f) / sampleCount;
+        const float cr = sqrt(max(0.f, 1.f - cz * cz));
+        const float cphi = 2.39996323f * float(dirIdx); // golden angle
+        const Ray classifyRay = Ray(gProbePositions[probeIdx], float3(cr * cos(cphi), cr * sin(cphi), cz), 0.f, 10000.f);
+        SceneRayQuery<kUseAlphaTest> classifyQuery;
+        float classifyHitT;
+        const HitInfo classifyHit = traceSkippingInvisible(classifyQuery, classifyRay, classifyHitT, RAY_FLAG_NONE);
+        ProbeSampleData co;
+        co.Li = float4(0.f);
+        co.s = float4(0.f);
+        co.n = float4(0.f);
+        co.hitT = -1.f;
+        if (classifyHit.isValid())
+        {
+            const ShadingData csd = loadShadingData(classifyHit, classifyRay.origin, classifyRay.dir);
+            co.hitT = classifyHitT;
+            co.Li = float4(csd.frontFacing ? 0.f : 1.f, 0.f, 0.f, 0.f);
+        }
+        gProbeSamplingOutput[outIdx] = co;
+        return;
+    }
 
     // Threads past the direction samples take explicit light samples.
     if (dirIdx >= numSamplePerProbe)
