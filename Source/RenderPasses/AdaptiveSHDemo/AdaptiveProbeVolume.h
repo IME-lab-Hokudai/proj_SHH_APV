@@ -87,6 +87,17 @@ public:
     float3 getSeedMinPoint() const { return mSeedMinPoint; }
     float3 getSeedCellSize() const { return mSeedCellSize; }
     uint3 getSeedResolution() const { return mSeedResolution; }
+
+    // Seed grid as uploaded (bind these to SeedGridCB): the file's seed grid, or for a grid without one a single
+    // 1 x 1 x 1 cell covering the root, so the shader always starts from a seed cell and derives node bounds from it.
+    float3 getGpuSeedMinPoint() const { return mGpuSeedMinPoint; }
+    float3 getGpuSeedCellSize() const { return mGpuSeedCellSize; }
+    uint3 getGpuSeedResolution() const { return mGpuSeedResolution; }
+
+    // Runtime GPU memory of the uploaded grid (compact layout), in bytes.
+    uint64_t getGpuNodeBytes() const { return mGpuNodeBytes; }
+    uint64_t getGpuCornerBytes() const { return mGpuCornerBytes; }
+    uint64_t getGpuSeedBytes() const { return mGpuSeedBytes; }
 private:
     AdaptiveProbeVolume(ref<Device> pDevice);
 
@@ -116,4 +127,10 @@ private:
     uint3 mSeedResolution = uint3(0);
     std::vector<int> mSeedProbeIndices; // size = rx * ry * rz
     ref<Buffer> mpSeedProbeIndexBuffer;
+
+    // Set by uploadToGPU.
+    float3 mGpuSeedMinPoint = float3(0.f);
+    float3 mGpuSeedCellSize = float3(0.f);
+    uint3 mGpuSeedResolution = uint3(0);
+    uint64_t mGpuNodeBytes = 0, mGpuCornerBytes = 0, mGpuSeedBytes = 0;
 };

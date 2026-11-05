@@ -2,7 +2,7 @@
 // Placement comparison (Comparison plan: Hessian vs. adaptive probe criteria).
 //
 // BestFirstBuild  every method splits its highest-scoring leaves first (AdaptiveProbeVolume::scoreCell)
-//                 and stops at fixed probe budgets; a grid snapshot is saved at each budget, with one row
+//                 and stops at fixed budgets (probe count or runtime memory); a grid snapshot is saved at each budget, with one row
 //                 per snapshot in <scene>_BestFirstSnapshots.csv (probe count, leaves, deepest level, the
 //                 implied threshold = score of the last split, and build time split into stages).
 // exportPlacementComparison
@@ -131,11 +131,11 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     double traceMs = 0.0, shMs = 0.0, scoreMs = 0.0, ioMs = 0.0;
     uint32_t rounds = 0;
 
-    std::vector<uint64_t> budgets = kProbeBudgets;
-    std::sort(budgets.begin(), budgets.end());
+    const std::vector<Budget> budgets = bestFirstBudgets(); // increasing; probe counts or runtime bytes (kBudgetUnit)
+    const bool budgetInBytes = kBudgetUnit == BudgetUnit::Memory;
     if (budgets.empty())
     {
-        logError("[Best-first] No probe budgets set (placement::kProbeBudgets).");
+        logError("[Best-first] No budgets set (placement::kProbeBudgets / kMemoryBudgetsUniform).");
         return;
     }
 
@@ -159,8 +159,9 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     const bool manual = getManualGridBounds(manualBounds);
     vol->startBuildSeeded(mpScene, seedResolution, std::numeric_limits<float>::max(), false, manual ? &manualBounds : nullptr);
 
-    logInfo("[Best-first] Scene {}: score {}, budgets {} to {} probes, batch {}% of the leaves (at most {}).",
-        scene, scoreName, budgets.front(), budgets.back(), 100.0f * kBatchFraction, kMaxBatch);
+    logInfo("[Best-first] Scene {}: score {}, budgets {} to {} ({}), batch {}% of the leaves (at most {}).",
+        scene, scoreName, budgets.front().label, budgets.back().label,
+        budgetInBytes ? "runtime memory, compact octree" : "probe count", 100.0f * kBatchFraction, kMaxBatch);
 
     const uint32_t dirCount = (uint32_t)samplingDirs.size();
     const uint32_t lightCount = getLightSamplesPerProbe();
@@ -221,27 +222,42 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
         }
     };
 
-    auto saveSnapshot = [&](uint64_t budget, float impliedThreshold, bool exhausted)
+    auto saveSnapshot = [&](const Budget& budget, float impliedThreshold, bool exhausted)
     {
         const double buildMs = msSince(buildStart) - ioMs; // file I/O does not count
         const auto t0 = Clock::now();
         std::ostringstream name;
-        name << scene << "_BF_" << scoreName << "_" << budget << ".txt";
+        name << scene << "_BF_" << scoreName << "_" << budget.label << ".txt";
         vol->setBuildTimeMs(buildMs);
         vol->saveToFile(name.str());
 
-        const bool exists = std::ifstream(logCsv).good();
+        bool exists = std::ifstream(logCsv).good();
+        if (exists)
+        {
+            // A log from before the runtime-memory columns: keep it under another name and start a new one.
+            std::string header;
+            { std::ifstream in(logCsv); std::getline(in, header); }
+            if (header.find("runtimeBytes") == std::string::npos)
+            {
+                const std::string old = scene + "_BestFirstSnapshots_old.csv";
+                std::error_code ec;
+                std::filesystem::rename(logCsv, old, ec);
+                if (!ec) { logInfo("[Best-first] Older {} renamed to {} (new columns).", logCsv, old); exists = false; }
+            }
+        }
         std::ofstream csv(logCsv, std::ios::app);
         if (!exists)
             csv << "scene,score,budget,probes,leaves,deepestLevel,impliedThreshold,exhausted,rounds,"
-                   "buildMs,traceMs,shMs,scoreMs,file\n";
-        csv << scene << "," << scoreName << "," << budget << "," << vol->getCornerCount() << ","
+                   "buildMs,traceMs,shMs,scoreMs,file,nodes,runtimeBytes,budgetValue\n";
+        csv << scene << "," << scoreName << "," << budget.label << "," << vol->getCornerCount() << ","
             << vol->getLeafCount() << "," << vol->getDeepestLeafLevel() << "," << std::setprecision(8) << impliedThreshold << ","
             << (exhausted ? 1 : 0) << "," << rounds << "," << std::fixed << std::setprecision(1)
-            << buildMs << "," << traceMs << "," << shMs << "," << scoreMs << "," << name.str() << "\n";
+            << buildMs << "," << traceMs << "," << shMs << "," << scoreMs << "," << name.str() << ","
+            << vol->getNodeCount() << "," << vol->getRuntimeBytes() << "," << budget.value << "\n";
         ioMs += msSince(t0);
-        logInfo("[Best-first] Snapshot {}: {} probes, {} leaves, deepest level {}, implied threshold {:.4g}, build {:.1f}s.",
-            name.str(), vol->getCornerCount(), vol->getLeafCount(), vol->getDeepestLeafLevel(), impliedThreshold, buildMs / 1000.0);
+        logInfo("[Best-first] Snapshot {}: {} probes, {} leaves, {:.2f} MB runtime, deepest level {}, implied threshold {:.4g}, build {:.1f}s.",
+            name.str(), vol->getCornerCount(), vol->getLeafCount(), vol->getRuntimeBytes() / 1e6, vol->getDeepestLeafLevel(),
+            impliedThreshold, buildMs / 1000.0);
     };
 
     size_t budgetIdx = 0;
@@ -252,7 +268,7 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
         ++rounds;
 
         const auto t0 = Clock::now();
-        const auto r = vol->finishBatchBestFirst(budgets[budgetIdx], kBatchFraction, kMaxBatch);
+        const auto r = vol->finishBatchBestFirst(budgets[budgetIdx].value, kBatchFraction, kMaxBatch, budgetInBytes);
         scoreMs += msSince(t0);
         if (r.splits > 0) lastScore = r.lastSplitScore;
 
@@ -261,7 +277,7 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             saveSnapshot(budgets[budgetIdx], lastScore, r.exhausted);
             if (r.exhausted)
             {
-                logWarning("[Best-first] Every leaf is at the maximum level; stopping before budget {}.", budgets[budgetIdx]);
+                logWarning("[Best-first] Every leaf is at the maximum level; stopping before budget {}.", budgets[budgetIdx].label);
                 break;
             }
             ++budgetIdx;
@@ -452,7 +468,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
 
     std::ofstream summary(kSummaryCsv);
     summary << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
-               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway\n";
+               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
+               "memoryBytes\n";
     {
         // The reference itself: zero error by definition; listed for its probe count and build time.
         const uint3 d = reference->getProbeCountDim();
@@ -463,7 +480,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         summary << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
                 << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
                 << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
-                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0\n";
+                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0,"
+                << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << "\n";
         summary.flush();
     }
 
@@ -485,13 +503,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         const auto t0 = Clock::now();
         ref<AdaptiveProbeVolume> adaptive;
         ref<UniformProbeVolume> uniform;
-        uint64_t probes = 0, leaves = 0; int deepest = -1; double buildMs = 0.0;
+        // memoryBytes: runtime GPU memory (uniform: probes only; adaptive: probes + compact octree + seed table).
+        uint64_t probes = 0, leaves = 0, memoryBytes = 0; int deepest = -1; double buildMs = 0.0;
         if (e.type == "adaptive")
         {
             adaptive = AdaptiveProbeVolume::create(mpDevice);
             adaptive->loadFromFile(e.file);
             probes = adaptive->getCornerCount(); leaves = adaptive->getLeafCount();
             deepest = adaptive->getDeepestLeafLevel(); buildMs = adaptive->getBuildTimeMs();
+            memoryBytes = adaptive->getRuntimeBytes();
         }
         else if (e.type == "uniform")
         {
@@ -500,6 +520,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             const uint3 d = uniform->getProbeCountDim();
             probes = uint64_t(d.x) * d.y * d.z; leaves = uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1);
             buildMs = uniform->getBuildTimeMs();
+            memoryBytes = AdaptiveProbeVolume::kRuntimeProbeBytes * probes;
         }
         else
         {
@@ -584,7 +605,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 << std::fixed << std::setprecision(1) << buildMs << "," << valid.size() << "," << failed << ","
                 << std::setprecision(6) << sumApe / n << "," << percentileSorted(valid, 50) << "," << percentileSorted(valid, 95) << ","
                 << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << ","
-                << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << "\n";
+                << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << ","
+                << memoryBytes << "\n";
         summary.flush();
         logInfo("[Placement eval] {} ({} probes): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.",
             e.method, probes, std::sqrt(sumSq / n), sumAbs / n, sumRel / n, failed, msSince(t0) / 1000.0);
@@ -716,8 +738,8 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
             if (kSeedResolution.y != kSeedResolution.x || kSeedResolution.z != kSeedResolution.x)
                 tag += "x" + std::to_string(kSeedResolution.y) + "x" + std::to_string(kSeedResolution.z);
         }
-        const uint64_t lastBudget = kProbeBudgets.empty() ? 0 : *std::max_element(kProbeBudgets.begin(), kProbeBudgets.end());
-        const std::string lastFile = scene + "_BF_" + tag + "_" + std::to_string(lastBudget) + ".txt";
+        const std::vector<Budget> budgets = bestFirstBudgets();
+        const std::string lastFile = scene + "_BF_" + tag + "_" + (budgets.empty() ? std::string("0") : budgets.back().label) + ".txt";
         if (kBatchSkipExisting && std::filesystem::exists(lastFile))
         {
             logInfo("[Batch] best-first {}: {} exists, skipped.", tag, lastFile);

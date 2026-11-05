@@ -944,10 +944,11 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 
         applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
 
-        applyVar["SeedGridCB"]["gUseSeedGrid"] = mAdaptiveProbeVolume->getUseSeedGrid() ? 1u : 0u;
-        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getSeedMinPoint();
-        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getSeedCellSize();
-        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getSeedResolution();
+        // The uploaded seed (a grid without a seed gets one 1 x 1 x 1 cell): the shader derives node bounds from it.
+        applyVar["SeedGridCB"]["gUseSeedGrid"] = 1u;
+        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getGpuSeedMinPoint();
+        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getGpuSeedCellSize();
+        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getGpuSeedResolution();
 
 #else
         mUniformProbeVolume->bindShaderData(applyVar);

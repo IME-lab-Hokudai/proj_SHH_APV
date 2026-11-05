@@ -188,13 +188,13 @@ float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
 #if SH_GRID_UNIFORM
 #include "UniformGridSampling.slang"
 #else
-void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])
+// nodeMin, size: bounds of the leaf, from traverseOctree (not stored in the node).
+void fetchTrilinearInterpolatedSH(int probeIdx, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
 {
     GPUProbe p = gProbeBuffer[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
 
     // Normalized position within voxel (0..1)
-    float3 t = saturate((pos - p.minPoint) / size);
+    float3 t = saturate((pos - nodeMin) / size);
 
     // Pre-load indices for the 8 corners
     int cIdx[8];
@@ -232,12 +232,10 @@ void fetchTrilinearInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoef
 // ------------------------------------------------------------------
 // Progressive Tricubic Hermite Interpolation
 // ------------------------------------------------------------------
-void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs[9])
+void fetchHermiteInterpolatedSH(int probeIdx, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
 {
     GPUProbe p = gProbeBuffer[probeIdx];
-    float3 size = p.maxPoint - p.minPoint;
-    float3 t = saturate((pos - p.minPoint) / size);
-    // float3 t = (pos - p.minPoint) / size;
+    float3 t = saturate((pos - nodeMin) / size);
 
     int cIdx[8];
     for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
@@ -315,31 +313,35 @@ void fetchHermiteInterpolatedSH(int probeIdx, float3 pos, out float3 finalCoeffs
     }
 }
 
-int findSeedProbe(float3 pos)
+// Seed cell containing pos: its root node, and its bounds (cellMin, cellSize). Every grid has a seed on the GPU
+// (uploadToGPU gives a grid without one a single 1 x 1 x 1 seed cell = the root), so gUseSeedGrid is always 1.
+// A point on the upper face of the volume counts as inside the last cell.
+int findSeedProbe(float3 pos, out float3 cellMin, out float3 cellSize)
 {
+    cellMin = float3(0.f);
+    cellSize = gSeedCellSize;
     if (gUseSeedGrid == 0)
-    {
-        return 0;
-    }
-
-    float3 rel = (pos - gSeedMinPoint) / gSeedCellSize;
-    int3 cell = int3(floor(rel));
-
-    if (cell.x < 0 || cell.y < 0 || cell.z < 0 ||
-        cell.x >= int(gSeedResolution.x) ||
-        cell.y >= int(gSeedResolution.y) ||
-        cell.z >= int(gSeedResolution.z))
     {
         return -1;
     }
 
+    float3 rel = (pos - gSeedMinPoint) / gSeedCellSize;
+    if (any(rel < 0.f) || any(rel > float3(gSeedResolution)))
+    {
+        return -1;
+    }
+    int3 cell = min(int3(floor(rel)), int3(gSeedResolution) - 1);
+
+    cellMin = gSeedMinPoint + float3(cell) * gSeedCellSize;
     uint idx = (uint(cell.z) * gSeedResolution.y + uint(cell.y)) * gSeedResolution.x + uint(cell.x);
     return gSeedProbeIndices[idx];
 }
 
-int traverseOctree(float3 pos)
+// Leaf containing pos, and its bounds. Bounds are not stored per node: they start as the seed cell and are
+// halved at every level, moving to the half that contains pos (octant bits x = 4, y = 2, z = 1, as in the build).
+int traverseOctree(float3 pos, out float3 nodeMin, out float3 nodeSize)
 {
-    int currentIdx = findSeedProbe(pos);
+    int currentIdx = findSeedProbe(pos, nodeMin, nodeSize);
     if (currentIdx < 0)
     {
         return -1;
@@ -347,34 +349,21 @@ int traverseOctree(float3 pos)
 
     for (int i = 0; i < OCTREE_MAX_DEPTH; ++i)
     {
-        GPUProbe p = gProbeBuffer[currentIdx];
-
-        // Extra safety: position must be inside this probe
-        if (pos.x < p.minPoint.x || pos.y < p.minPoint.y || pos.z < p.minPoint.z ||
-            pos.x > p.maxPoint.x || pos.y > p.maxPoint.y || pos.z > p.maxPoint.z)
+        int firstChild = gProbeBuffer[currentIdx].firstChild;
+        if (firstChild < 0)
         {
-            return -1;
+            return currentIdx; // leaf
         }
 
-        if (p.children[0] == -1)
-        {
-            return currentIdx;
-        }
-
-        float3 center = 0.5 * (p.minPoint + p.maxPoint);
+        float3 halfSize = 0.5 * nodeSize;
+        float3 center = nodeMin + halfSize;
         int octant = 0;
+        if (pos.x >= center.x) { octant |= 4; nodeMin.x = center.x; }
+        if (pos.y >= center.y) { octant |= 2; nodeMin.y = center.y; }
+        if (pos.z >= center.z) { octant |= 1; nodeMin.z = center.z; }
+        nodeSize = halfSize;
 
-        if (pos.x >= center.x) octant |= 4;
-        if (pos.y >= center.y) octant |= 2;
-        if (pos.z >= center.z) octant |= 1;
-
-        int childIdx = p.children[octant];
-        if (childIdx == -1)
-        {
-            return currentIdx;
-        }
-
-        currentIdx = childIdx;
+        currentIdx = firstChild + octant;
     }
 
     return currentIdx;
@@ -384,10 +373,11 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
 {
     [unroll]
     for (int band = 0; band < MAX_SH_BASIS; ++band) coeffs[band] = float3(0.f);
-    int probeIdx = traverseOctree(pos);
+    float3 nodeMin, nodeSize;
+    int probeIdx = traverseOctree(pos, nodeMin, nodeSize);
     if (probeIdx < 0) return false;
-    fetchHermiteInterpolatedSH(probeIdx, pos, coeffs);
-    //fetchTrilinearInterpolatedSH(pos, coeffs);
+    fetchHermiteInterpolatedSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
+    //fetchTrilinearInterpolatedSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
     return true;
 }
 #endif

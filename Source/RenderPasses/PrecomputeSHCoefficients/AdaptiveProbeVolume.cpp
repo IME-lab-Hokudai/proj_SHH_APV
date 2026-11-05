@@ -1787,7 +1787,7 @@ int AdaptiveProbeVolume::getDeepestLeafLevel() const
 }
 
 AdaptiveProbeVolume::BestFirstRound AdaptiveProbeVolume::finishBatchBestFirst(
-    uint64_t probeBudget, float batchFraction, uint32_t maxBatch)
+    uint64_t budget, float batchFraction, uint32_t maxBatch, bool budgetInBytes)
 {
     BestFirstRound result;
     mPendingNewCorners.clear();
@@ -1817,13 +1817,18 @@ AdaptiveProbeVolume::BestFirstRound AdaptiveProbeVolume::finishBatchBestFirst(
     const uint32_t leaves = getLeafCount();
     const uint32_t batch = std::clamp<uint32_t>(uint32_t(std::lround(batchFraction * float(leaves))), 1u, std::max(1u, maxBatch));
 
-    // 3. Split in score order while the probe count stays within the budget.
+    // 3. Split in score order while the grid stays within the budget (probe count, or runtime memory: a split adds
+    //    its new corners and 8 nodes).
     std::vector<int> nextProbesToCheck;
+    const uint64_t seedCells = getRuntimeSeedCells();
     while (result.splits < batch && !mBestFirstHeap.empty())
     {
         const HeapEntry top = mBestFirstHeap.front();
         const uint32_t cost = countNewCornersForSplit(top.probeIdx);
-        if (uint64_t(mCorners.size()) + cost > probeBudget)
+        const bool over = budgetInBytes
+            ? runtimeBytes(uint64_t(mCorners.size()) + cost, uint64_t(mProbes.size()) + 8, seedCells) > budget
+            : uint64_t(mCorners.size()) + cost > budget;
+        if (over)
         {
             result.budgetReached = true;
             break;
@@ -2945,9 +2950,11 @@ AdaptiveProbeVolume::MemoryFootprintInfo AdaptiveProbeVolume::calculateMemoryFoo
 {
     MemoryFootprintInfo info{};
 
-    // GPU packed layout
-    info.gpuProbesBytes = uint64_t(mProbes.size()) * sizeof(GPUProbe);
-    info.gpuCornersBytes = uint64_t(mCorners.size()) * sizeof(GPUCorner);
+    // Runtime layout (AdaptiveSHDemo): compact 36-byte nodes, not this pass's 128-byte debug GPUProbe.
+    // gpuProbesBytes = octree nodes + seed table, gpuCornersBytes = probes. Written to the grid files (MEMORY).
+    static_assert(sizeof(GPUCorner) == kRuntimeProbeBytes, "kRuntimeProbeBytes must match GPUCorner");
+    info.gpuProbesBytes = kRuntimeNodeBytes * uint64_t(mProbes.size()) + kRuntimeSeedCellBytes * getRuntimeSeedCells();
+    info.gpuCornersBytes = kRuntimeProbeBytes * uint64_t(mCorners.size());
     const double invMB = 1.0 / 1e6;               // decimal
     info.totalBytes =
     info.gpuCornersBytes +

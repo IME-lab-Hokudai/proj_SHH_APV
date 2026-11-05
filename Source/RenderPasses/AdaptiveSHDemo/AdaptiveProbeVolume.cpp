@@ -365,29 +365,71 @@ void AdaptiveProbeVolume::uploadToGPU()
     //computeNeighbors();
     //constrainHangingNodes();
     //constrainHangingNodesHermite();
-    // 1. Pack Probes (Tree Topology)
-    std::vector<GPUProbe> gpuProbes;
-    gpuProbes.reserve(mProbes.size());
+    // 1. Pack the nodes (tree topology), compact layout (GPUProbe in AdaptiveGridData.slang, 36 bytes).
+    // Nodes are re-ordered breadth-first from the seed roots so that the 8 children of every node are adjacent:
+    // child k = firstChild + k. Bounds are not stored; the shader derives them from the seed cell. The CPU-side
+    // mProbes keep their file order (only the GPU copy is re-ordered).
+    static_assert(sizeof(GPUProbe) == 36, "GPUProbe must be the 36-byte compact node");
 
-    for (const auto& p : mProbes)
+    // Seed as uploaded: the file's seed grid, or one cell covering the root (node 0) for a grid without a seed.
+    std::vector<int> seedRoots;
+    if (mUseSeedGrid && !mSeedProbeIndices.empty())
     {
+        mGpuSeedMinPoint = mSeedMinPoint;
+        mGpuSeedCellSize = mSeedCellSize;
+        mGpuSeedResolution = mSeedResolution;
+        seedRoots = mSeedProbeIndices;
+    }
+    else
+    {
+        mGpuSeedMinPoint = mProbes.empty() ? float3(0.f) : mProbes[0].minPoint;
+        mGpuSeedCellSize = mProbes.empty() ? float3(1.f) : mProbes[0].maxPoint - mProbes[0].minPoint;
+        mGpuSeedResolution = uint3(1);
+        seedRoots = { mProbes.empty() ? -1 : 0 };
+    }
+
+    std::vector<int> newIndex(mProbes.size(), -1);
+    std::vector<int> order; // order[newIdx] = old index
+    order.reserve(mProbes.size());
+    for (int r : seedRoots)
+        if (r >= 0 && r < (int)mProbes.size() && newIndex[r] < 0) { newIndex[r] = (int)order.size(); order.push_back(r); }
+
+    uint32_t partialNodes = 0;
+    for (size_t i = 0; i < order.size(); ++i)
+    {
+        const Probe& p = mProbes[order[i]];
+        if (p.children[0] == -1) continue;
+        bool complete = true;
+        for (int k = 0; k < 8; ++k)
+            if (p.children[k] < 0 || p.children[k] >= (int)mProbes.size() || newIndex[p.children[k]] >= 0) complete = false;
+        if (!complete) { ++partialNodes; continue; } // treated as a leaf below
+        for (int k = 0; k < 8; ++k) { newIndex[p.children[k]] = (int)order.size(); order.push_back(p.children[k]); }
+    }
+    if (partialNodes > 0)
+        logWarning("[AdaptiveProbeVolume] {} nodes without 8 valid children are uploaded as leaves.", partialNodes);
+    if (order.size() != mProbes.size())
+        logWarning("[AdaptiveProbeVolume] {} of {} nodes are not reachable from the seed and are not uploaded.",
+            mProbes.size() - order.size(), mProbes.size());
+
+    std::vector<GPUProbe> gpuProbes;
+    gpuProbes.reserve(order.size());
+    for (int oldIdx : order)
+    {
+        const Probe& p = mProbes[oldIdx];
         GPUProbe gp;
-        gp.minPoint = p.minPoint;
-        gp.maxPoint = p.maxPoint;
-        gp.pad1 = 0; gp.pad2 = 0;
-
-        for (int i = 0; i < 8; ++i) gp.children[i] = p.children[i];
+        const int c0 = p.children[0];
+        gp.firstChild = (c0 >= 0 && c0 < (int)newIndex.size()) ? newIndex[c0] : -1;
+        // A node uploaded as a leaf (partial children) has newIndex[c0] = -1 or a child that is not at c0 + k.
+        if (gp.firstChild >= 0)
+            for (int k = 0; k < 8; ++k)
+                if (newIndex[p.children[k]] != gp.firstChild + k) { gp.firstChild = -1; break; }
         for (int i = 0; i < 8; ++i) gp.corners[i] = p.corners[i];
-
-        // --------------------------------------------------------
-        // NEW: Copy Coarse Neighbor Indices
-        // --------------------------------------------------------
-        //for (int k = 0; k < 6; ++k) gp.coarseNeighbors[k] = p.coarseNeighbors[k];
-        //gp.pad3[0] = 0; // Padding maintenance
-        //gp.pad3[1] = 0;
-
         gpuProbes.push_back(gp);
     }
+
+    std::vector<int> gpuSeedIndices(seedRoots.size());
+    for (size_t i = 0; i < seedRoots.size(); ++i)
+        gpuSeedIndices[i] = (seedRoots[i] >= 0 && seedRoots[i] < (int)newIndex.size()) ? newIndex[seedRoots[i]] : -1;
 
     mpProbeBuffer = mpDevice->createStructuredBuffer(
         sizeof(GPUProbe),
@@ -440,12 +482,19 @@ void AdaptiveProbeVolume::uploadToGPU()
 
     mpSeedProbeIndexBuffer = mpDevice->createStructuredBuffer(
         sizeof(int),
-        (uint32_t)mSeedProbeIndices.size(),
+        (uint32_t)gpuSeedIndices.size(),
         ResourceBindFlags::ShaderResource,
         MemoryType::DeviceLocal,
-        mSeedProbeIndices.data()
+        gpuSeedIndices.data()
     );
     mpSeedProbeIndexBuffer->setName("SeedProbeIndexBuffer");
+
+    mGpuNodeBytes = uint64_t(gpuProbes.size()) * sizeof(GPUProbe);
+    mGpuCornerBytes = uint64_t(gpuCorners.size()) * sizeof(GPUCorner);
+    mGpuSeedBytes = uint64_t(gpuSeedIndices.size()) * sizeof(int);
+    logInfo("[AdaptiveProbeVolume] Runtime memory: {} probes x {} B = {:.2f} MB, {} nodes x {} B = {:.2f} MB, seed {} B; total {:.2f} MB.",
+        gpuCorners.size(), sizeof(GPUCorner), mGpuCornerBytes / 1e6, gpuProbes.size(), sizeof(GPUProbe), mGpuNodeBytes / 1e6,
+        mGpuSeedBytes, (mGpuNodeBytes + mGpuCornerBytes + mGpuSeedBytes) / 1e6);
 
 }
 

@@ -532,8 +532,25 @@ public:
 
     // Replaces finishBatch() in a best-first build. Pushes the leaves whose corners were just
     // traced, then splits the highest-scoring leaves, up to batchFraction of the current leaf
-    // count (at most maxBatch), while the probe count stays within probeBudget.
-    BestFirstRound finishBatchBestFirst(uint64_t probeBudget, float batchFraction, uint32_t maxBatch);
+    // count (at most maxBatch), while the grid stays within the budget: a probe count, or with
+    // budgetInBytes the runtime memory (runtimeBytes(): probes, octree nodes and seed table).
+    BestFirstRound finishBatchBestFirst(uint64_t budget, float batchFraction, uint32_t maxBatch, bool budgetInBytes = false);
+
+    // Runtime GPU memory in the compact layout of the runtime renderer (RenderPasses/AdaptiveSHDemo,
+    // AdaptiveGridData.slang): one GPUCorner per probe, one 36-byte node per octree node (first-child index +
+    // 8 probe indices; bounds are derived in the shader) and one int per seed cell. A uniform grid stores the
+    // probes only: kRuntimeProbeBytes x probe count.
+    static constexpr uint64_t kRuntimeProbeBytes = 576; // GPUCorner: 36 float4 (SH + RGB gradients, 9 bands)
+    static constexpr uint64_t kRuntimeNodeBytes = 36;   // int firstChild + int corners[8]
+    static constexpr uint64_t kRuntimeSeedCellBytes = 4;
+    static uint64_t runtimeBytes(uint64_t probes, uint64_t nodes, uint64_t seedCells)
+    {
+        return kRuntimeProbeBytes * probes + kRuntimeNodeBytes * nodes + kRuntimeSeedCellBytes * seedCells;
+    }
+    // Seed cells as uploaded at runtime (a grid without a seed gets one cell = the root).
+    uint64_t getRuntimeSeedCells() const { return (mUseSeedGrid && !mSeedProbeIndices.empty()) ? mSeedProbeIndices.size() : 1; }
+    uint64_t getRuntimeBytes() const { return runtimeBytes(mCorners.size(), mProbes.size(), getRuntimeSeedCells()); }
+    uint64_t getNodeCount() const { return mProbes.size(); }
 
     uint64_t getCornerCount() const { return mCorners.size(); }
     uint32_t getLeafCount() const;

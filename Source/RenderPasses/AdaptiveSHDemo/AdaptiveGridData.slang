@@ -45,13 +45,13 @@ struct GPUCorner
     float4 gradB[9];  // .xyz = Gradient of Blue Channel
 };
 
+// One octree node (voxel), compact runtime layout: 36 bytes.
+// The 8 children of a node are stored next to each other (uploadToGPU reorders the nodes), so child k is
+// firstChild + k, with k = octant bits (x = 4, y = 2, z = 1). Node bounds are not stored: the shader derives them
+// while descending, from the seed cell halved once per level.
 struct GPUProbe
 {
-    float3 minPoint;
-    int pad1;
-    float3 maxPoint;
-    int pad2;
-    int children[8]; // Indices into GPUProbe buffer (-1 if leaf)
+    int firstChild;  // index of child 0 in the node buffer; -1 = leaf
     int corners[8];  // Indices into GPUCorner buffer
 };
 

@@ -2,6 +2,7 @@
 // Settings of the placement comparison (Comparison plan: Hessian vs. adaptive probe criteria).
 // Shared by PrecomputeSHCoefficients.cpp (build switch) and PlacementComparison.cpp.
 #include "AdaptiveProbeVolume.h"
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -29,10 +30,38 @@ inline constexpr AdaptiveProbeVolume::SplitScore kScore = AdaptiveProbeVolume::S
 //inline const uint3 kSeedResolution = uint3(16, 16, 16);
 inline const uint3 kSeedResolution = uint3(8, 8, 8);
 
-// Probe budgets = total probes of the grid, seed included (probe = grid corner, so probe count = memory).
+// What a budget limits.
+//   Memory: the runtime GPU memory of the grid (AdaptiveProbeVolume::runtimeBytes: probes, octree nodes in the
+//           compact 36-byte layout, seed table). Budgets are given as uniform grid resolutions (kMemoryBudgetsUniform):
+//           budget n = the memory of uniform U<n> = 576 B x (n + 1)^3 probes, so every snapshot has a uniform grid of
+//           equal memory. Files: <scene>_BF_<score>_S8_memU<n>.txt.
+//   Probes: the probe count (kProbeBudgets). An adaptive grid also stores its octree, so equal probes is not equal
+//           memory (about 5% more with the compact nodes). Files: <scene>_BF_<score>_S8_<budget>.txt.
+enum class BudgetUnit { Probes, Memory };
+inline constexpr BudgetUnit kBudgetUnit = BudgetUnit::Memory;
+
+// Uniform resolutions whose memory is a budget. The U8 seed alone (729 probes + 512 nodes) is above U8's memory,
+// so the smallest is U16. Each needs a uniform grid of the same resolution for the comparison (kBatchUniformResolutions).
+inline const std::vector<uint32_t> kMemoryBudgetsUniform = { 16, 20, 26, 32, 40, 51 };
+
+// Probe budgets = total probes of the grid, seed included (probe = grid corner).
 // U8 = 9^3, U16 = 17^3, U32 = 33^3, U64 = 65^3. With the U8 seed, the 729 snapshot is the seed itself
 // (a check: it must match a uniform U8 grid).
 inline const std::vector<uint64_t> kProbeBudgets = { 729, 4913, 10000, 20000, 35937, 70000, 140000 };
+
+// Budgets of the best-first build in increasing order, with the label used in the snapshot file names.
+struct Budget { uint64_t value; std::string label; };
+inline std::vector<Budget> bestFirstBudgets()
+{
+    std::vector<Budget> b;
+    if (kBudgetUnit == BudgetUnit::Memory)
+        for (uint32_t n : kMemoryBudgetsUniform)
+            b.push_back({ AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(n + 1) * (n + 1) * (n + 1), "memU" + std::to_string(n) });
+    else
+        for (uint64_t n : kProbeBudgets) b.push_back({ n, std::to_string(n) });
+    std::sort(b.begin(), b.end(), [](const Budget& x, const Budget& y) { return x.value < y.value; });
+    return b;
+}
 
 // Leaves split per round: this fraction of the current leaf count, at most kMaxBatch.
 inline constexpr float kBatchFraction = 0.01f;
@@ -65,8 +94,9 @@ inline constexpr bool kEvaluateOnLoad = false;
 // "Placement comparison: build everything + evaluate", or set kRunBatchOnLoad to start it when the scene loads.
 // Uniform grids are saved as <scene>_U<cells>.txt (e.g. SceneForData_U32.txt). Progress is in the log ([Batch]).
 inline constexpr bool kRunBatchOnLoad = false;
-// U40 (41^3 = 68,921 probes) and U51 (52^3 = 140,608) match the 70,000 and 140,000 budgets.
-inline const std::vector<uint32_t> kBatchUniformResolutions = { 8, 16, 32, 40, 51, 64 };
+// One uniform grid per memory budget (kMemoryBudgetsUniform), plus U8 and U64. U20, U26, U40 and U51 also sit near
+// the old probe budgets 10,000, 20,000, 70,000 and 140,000.
+inline const std::vector<uint32_t> kBatchUniformResolutions = { 8, 16, 20, 26, 32, 40, 51, 64 };
 inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
     AdaptiveProbeVolume::SplitScore::HarmonicMeanDepth,
     AdaptiveProbeVolume::SplitScore::Hessian,
