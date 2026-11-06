@@ -13,6 +13,7 @@ target_sources(PrecomputeSHCoefficients PRIVATE
     PlacementComparisonSettings.h
     PlacementComparison.cpp
     ParallelFor.h
+    BuildTiming.h
 	sphericalHarmonics.h
 	sphericalHarmonics.cpp
     envMap_SH.h

@@ -105,7 +105,7 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
 inline constexpr bool kBatchEvaluateAtEnd = true;
 // Skip grids whose files already exist (uniform: the grid file; best-first: the snapshot at the largest budget),
 // so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings).
-inline constexpr bool kBatchSkipExisting = true;
+inline constexpr bool kBatchSkipExisting = false; // false: full rebuild for the stage timings (<scene>_BuildTimings.csv)
 inline constexpr bool kBatchClassifyPoints = true; // classify the evaluation points before the evaluation (scene loaded)
 
 // ---- Sample points away from geometry ------------------------------------------------------------

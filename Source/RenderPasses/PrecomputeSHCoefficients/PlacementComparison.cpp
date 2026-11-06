@@ -4,7 +4,9 @@
 // BestFirstBuild  every method splits its highest-scoring leaves first (AdaptiveProbeVolume::scoreCell)
 //                 and stops at fixed budgets (probe count or runtime memory); a grid snapshot is saved at each budget, with one row
 //                 per snapshot in <scene>_BestFirstSnapshots.csv (probe count, leaves, deepest level, the
-//                 implied threshold = score of the last split, and build time split into stages).
+//                 implied threshold = score of the last split, and build time split into stages). Every snapshot
+//                 and every uniform grid of the batch also gets a row in <scene>_BuildTimings.csv (BuildTiming.h:
+//                 wall time per stage and CPU time per routine, e.g. gradients vs. gradients + Hessians).
 // exportPlacementComparison
 //                 reconstructs irradiance from every grid listed in <scene>_PlacementComparisonGrids.csv at a uniform
 //                 lattice of points x 14 normals and compares it with the reference grid; one summary row
@@ -15,6 +17,7 @@
 #include "PlacementComparisonSettings.h"
 #include "envMap_SH.h"
 #include "ParallelFor.h"
+#include "BuildTiming.h"
 
 #include <algorithm>
 #include <chrono>
@@ -130,6 +133,7 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     const auto buildStart = Clock::now();
     double traceMs = 0.0, shMs = 0.0, scoreMs = 0.0, ioMs = 0.0;
     uint32_t rounds = 0;
+    buildtiming::Stats timing; // CPU time per routine and traced probes, for <scene>_BuildTimings.csv
 
     const std::vector<Budget> budgets = bestFirstBudgets(); // increasing; probe counts or runtime bytes (kBudgetUnit)
     const bool budgetInBytes = kBudgetUnit == BudgetUnit::Memory;
@@ -198,6 +202,8 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             mpDevice->wait();
             traceMs += msSince(t0);
             vol->recordTraceBatch(n, dirCount);
+            timing.tracedProbes += n;
+            ++timing.batches;
 
             t0 = Clock::now();
             std::vector<std::vector<float3>> coeffs(n);
@@ -206,15 +212,25 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             std::vector<float> hm(n);
             parallelFor(n, [&](size_t i)
             {
+                using buildtiming::nsBetween;
                 const ProbeSampleData* s = samples.data() + i * size_t(stride);
                 const float3 xPolar(positions[i].z, positions[i].x, positions[i].y);
+                const auto c0 = Clock::now();
                 if (needHessians)
                     calculateSHCoeffsGradientsRGBAndHessiansLum(grads[i], hessians[i], xPolar, s, dirCount, samplingDirs);
                 else
                     calculateSHCoeffsGradients(grads[i], xPolar, s, dirCount, samplingDirs);
+                const auto c1 = Clock::now();
                 calculateSHCoeffs(coeffs[i], s, dirCount);
+                const auto c2 = Clock::now();
                 accumulateDirectLightSamples(coeffs[i], &grads[i], needHessians ? &hessians[i] : nullptr, xPolar, s + dirCount, lightCount);
+                const auto c3 = Clock::now();
                 hm[i] = harmonicMeanDepth(s, dirCount);
+                const auto c4 = Clock::now();
+                timing.cpuDerivNs += nsBetween(c0, c1);
+                timing.cpuShNs += nsBetween(c1, c2);
+                timing.cpuLightNs += nsBetween(c2, c3);
+                timing.cpuDepthNs += nsBetween(c3, c4);
             });
             vol->setCornerDataRange(start, coeffs, grads, hessians);
             vol->setCornerHarmonicMeanDepthRange(start, hm);
@@ -254,6 +270,8 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             << (exhausted ? 1 : 0) << "," << rounds << "," << std::fixed << std::setprecision(1)
             << buildMs << "," << traceMs << "," << shMs << "," << scoreMs << "," << name.str() << ","
             << vol->getNodeCount() << "," << vol->getRuntimeBytes() << "," << budget.value << "\n";
+        buildtiming::appendRow(scene, scoreName, budget.label, name.str(), vol->getCornerCount(), needHessians, dirCount,
+                               buildMs, traceMs, shMs, scoreMs, timing);
         ioMs += msSince(t0);
         logInfo("[Best-first] Snapshot {}: {} probes, {} leaves, {:.2f} MB runtime, deepest level {}, implied threshold {:.4g}, build {:.1f}s.",
             name.str(), vol->getCornerCount(), vol->getLeafCount(), vol->getRuntimeBytes() / 1e6, vol->getDeepestLeafLevel(),
@@ -664,6 +682,8 @@ void PrecomputeSHCoefficients::buildUniformGridToFile(RenderContext* pRenderCont
     std::vector<float3> positions(kMaxProbesPerDispatch);
     std::vector<std::vector<float3>> coeffs(kMaxProbesPerDispatch);
     std::vector<std::vector<GradSHCoeff>> grads(kMaxProbesPerDispatch);
+    double traceMs = 0.0, shMs = 0.0;
+    buildtiming::Stats timing; // same counters as the best-first build, for <scene>_BuildTimings.csv
     uint32_t nextProgress = 25;
     for (uint32_t batchStart = 0; batchStart < totalProbes; batchStart += kMaxProbesPerDispatch)
     {
@@ -674,21 +694,36 @@ void PrecomputeSHCoefficients::buildUniformGridToFile(RenderContext* pRenderCont
             const uint32_t x = probeIdx % dim.x, y = (probeIdx / dim.x) % dim.y, z = probeIdx / (dim.x * dim.y);
             positions[i] = vol->getMinPoint() + float3(x, y, z) * vol->getCellSize();
         }
+        auto t0 = Clock::now();
         mpProbePosBuffer->setBlob(positions.data(), 0, n * sizeof(float3));
         traceProbeBatch(pRenderContext, dirCount, n, lightCount);
         pRenderContext->submit(true);
         mpProbeSamplingResultBuffer->getBlob(samples.data(), 0, size_t(stride) * n * sizeof(ProbeSampleData));
         mpDevice->wait();
+        traceMs += msSince(t0);
+        timing.tracedProbes += n;
+        ++timing.batches;
+
+        t0 = Clock::now();
         parallelFor(n, [&](size_t i)
         {
+            using buildtiming::nsBetween;
             const float3 p = positions[i];
             const float3 xPolar(p.z, p.x, p.y);
             const ProbeSampleData* s = samples.data() + i * size_t(stride);
+            const auto c0 = Clock::now();
             calculateSHCoeffsGradients(grads[i], xPolar, s, dirCount, samplingDirs);
+            const auto c1 = Clock::now();
             calculateSHCoeffs(coeffs[i], s, dirCount);
+            const auto c2 = Clock::now();
             accumulateDirectLightSamples(coeffs[i], &grads[i], nullptr, xPolar, s + dirCount, lightCount);
+            const auto c3 = Clock::now();
+            timing.cpuDerivNs += nsBetween(c0, c1);
+            timing.cpuShNs += nsBetween(c1, c2);
+            timing.cpuLightNs += nsBetween(c2, c3);
         });
         for (uint32_t i = 0; i < n; ++i) vol->setProbeData(batchStart + i, coeffs[i], grads[i]);
+        shMs += msSince(t0);
 
         const uint32_t done = batchStart + n;
         if (100ull * done >= uint64_t(nextProgress) * totalProbes)
@@ -699,7 +734,10 @@ void PrecomputeSHCoefficients::buildUniformGridToFile(RenderContext* pRenderCont
     }
     vol->setBuildTimeMs(msSince(tStart));
     vol->saveToFile(file);
-    logInfo("[Batch] U{} done: {} probes in {:.1f}s -> {}", cellsPerAxis, totalProbes, vol->getBuildTimeMs() / 1000.0, file);
+    buildtiming::appendRow(sceneTag(mpScene), "Uniform", "U" + std::to_string(cellsPerAxis), file, totalProbes, false, dirCount,
+                           vol->getBuildTimeMs(), traceMs, shMs, 0.0, timing);
+    logInfo("[Batch] U{} done: {} probes in {:.1f}s (trace {:.1f}s, SH {:.1f}s) -> {}", cellsPerAxis, totalProbes,
+            vol->getBuildTimeMs() / 1000.0, traceMs / 1000.0, shMs / 1000.0, file);
 }
 
 void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
