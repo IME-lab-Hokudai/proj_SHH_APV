@@ -121,15 +121,15 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
-    //constexpr const char* kBistroAtlasMappingFile =
-    //    "Bistro_AtlasMapping.bin";
-    //constexpr const char* kBistroAtlasManifestFile =
-    //    "Bistro_AtlasManifest.txt";
-    
     constexpr const char* kBistroAtlasMappingFile =
-        "Room_AtlasMapping.bin";
+        "Bistro_AtlasMapping.bin";
     constexpr const char* kBistroAtlasManifestFile =
-        "Room_AtlasManifest.txt";
+        "Bistro_AtlasManifest.txt";
+    
+    //constexpr const char* kBistroAtlasMappingFile =
+    //    "Room_AtlasMapping.bin";
+    //constexpr const char* kBistroAtlasManifestFile =
+    //    "Room_AtlasManifest.txt";
     
     
     //constexpr const char* kBistroAtlasMappingFile =
@@ -1367,11 +1367,17 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
 
+        // A missing grid file leaves the volume empty, and the upload then fails with "Can't create GPU buffer of size
+        // zero". Stop here with the file name instead.
+        if (!std::ifstream(loadFromFileName))
+            FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
         mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
         mAdaptiveProbeVolume->uploadToGPU();
         mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+        if (!std::ifstream(loadFromFileName))
+            FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
         mUniformProbeVolume->loadFromFile(loadFromFileName);
         mUniformProbeVolume->uploadToGPU();
         mpProbeVisualizePass->setUniformVolumeData(

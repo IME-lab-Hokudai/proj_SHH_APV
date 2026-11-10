@@ -746,6 +746,13 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
     const auto t0 = Clock::now();
     const std::string scene = sceneTag(mpScene);
     std::vector<std::string> failed;
+    {
+        AABB b;
+        if (getManualGridBounds(b))
+            logInfo("[Batch] Scene {}: probe volume ({:.2f}, {:.2f}, {:.2f}) to ({:.2f}, {:.2f}, {:.2f}).", scene,
+                    b.minPoint.x, b.minPoint.y, b.minPoint.z, b.maxPoint.x, b.maxPoint.y, b.maxPoint.z);
+        else logInfo("[Batch] Scene {}: probe volume = scene bounds with the 2% inset.", scene);
+    }
     auto step = [&](const std::string& name, const std::function<void()>& fn)
     {
         const auto ts = Clock::now();
@@ -765,6 +772,14 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
             continue;
         }
         step("uniform U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
+    }
+    // Reference grid of this scene (kSceneSetups), built only when its file is missing.
+    if (const SceneSetup* setup = findSceneSetup(scene); setup && setup->referenceResolution > 0)
+    {
+        const uint32_t res = setup->referenceResolution;
+        const std::string file = scene + "_U" + std::to_string(res) + ".txt";
+        if (std::filesystem::exists(file)) logInfo("[Batch] reference U{}: {} exists, skipped.", res, file);
+        else step("reference U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
     }
     for (AdaptiveProbeVolume::SplitScore sc : kBatchScores)
     {

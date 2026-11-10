@@ -1470,9 +1470,10 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             using clock = std::chrono::high_resolution_clock;
             auto tStart = clock::now();
             // 1. Initialize Grid Structure (Calculates resolution and total probes)
-            const AABB gridBounds(kGridMin, kGridMax);
+            AABB gridBounds; // per-scene bounds (kSceneSetups), else kGridMin/kGridMax if kUseManualGridBounds, else the scene
+            const bool manualBounds = getManualGridBounds(gridBounds);
             mUniformProbeVolume->initGrid(
-                mpScene, unifromGridSize, kUseManualGridBounds ? &gridBounds : nullptr
+                mpScene, unifromGridSize, manualBounds ? &gridBounds : nullptr
             );
             uint3 probeCountDim = mUniformProbeVolume->getProbeCountDim(); // (N+1) corners
             const uint32_t totalProbes = probeCountDim.x * probeCountDim.y * probeCountDim.z;
@@ -1702,10 +1703,11 @@ void PrecomputeSHCoefficients::SinglePassBuild(RenderContext* pRenderContext)
         residualConfidenceEps
     );
 
-    const AABB gridBounds(kGridMin, kGridMax);
+    AABB gridBounds; // per-scene bounds (kSceneSetups), else kGridMin/kGridMax if kUseManualGridBounds, else the scene
+    const bool manualBounds = getManualGridBounds(gridBounds);
     mAdaptiveProbeVolume->startBuildSeeded(
         mpScene, seedResolution, ErrorThreshold, useRelativeError,
-        kUseManualGridBounds ? &gridBounds : nullptr
+        manualBounds ? &gridBounds : nullptr
     );
 
     //const uint32_t kMaxCornersPerDispatch = 8192; // tune this
@@ -1974,10 +1976,11 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
     mAdaptiveProbeVolume->resetBuildStats();
 
     const uint3 seedResolution = uint3(1, 1, 1);
-    const AABB gridBounds(kGridMin, kGridMax);
+    AABB gridBounds; // per-scene bounds (kSceneSetups), else kGridMin/kGridMax if kUseManualGridBounds, else the scene
+    const bool manualBounds = getManualGridBounds(gridBounds);
     mAdaptiveProbeVolume->startBuildSeeded(
         mpScene, seedResolution, ErrorThreshold, useRelativeError,
-        kUseManualGridBounds ? &gridBounds : nullptr
+        manualBounds ? &gridBounds : nullptr
     );
 
     // Reusable buffers.
@@ -2141,11 +2144,28 @@ void PrecomputeSHCoefficients::ProgressiveRefineBuild(RenderContext* pRenderCont
 
 AABB PrecomputeSHCoefficients::getFDBounds() const
 {
-    return kUseManualGridBounds ? AABB(kGridMin, kGridMax) : mpScene->getSceneBounds();
+    AABB b;
+    return getManualGridBounds(b) ? b : mpScene->getSceneBounds();
 }
 
 bool PrecomputeSHCoefficients::getManualGridBounds(AABB& out) const
 {
+    // Per-scene bounds of the placement comparison first (PlacementComparisonSettings.h, kSceneSetups), matched by the
+    // same scene tag as the output files: kSceneTagOverride, or the loaded scene's file name without extension.
+    if (mpScene)
+    {
+        std::string tag = placement::kSceneTagOverride;
+        if (tag.empty())
+        {
+            const auto paths = mpScene->getImportPaths();
+            if (!paths.empty()) tag = paths.front().stem().string();
+        }
+        if (const placement::SceneSetup* s = placement::findSceneSetup(tag); s && s->manualBounds)
+        {
+            out = AABB(s->boundsMin, s->boundsMax);
+            return true;
+        }
+    }
     if (kUseManualGridBounds) out = AABB(kGridMin, kGridMax);
     return kUseManualGridBounds;
 }

@@ -73,6 +73,35 @@ inline constexpr uint32_t kMaxBatch = 256;
 //   <scene>_BestFirstSnapshots.csv    one row per snapshot
 inline const std::string kSceneTagOverride = "";
 
+// ---- Per-scene setup ---------------------------------------------------------------------------
+// Probe-volume bounds and reference grid per scene (matched by the scene tag above). Every grid of the comparison
+// (uniform, best-first, reference) and the evaluation lattice use these bounds, so all cover the same region.
+// A scene not listed here keeps the old behaviour: the scene bounds with the 2% inset (or kGridMin/kGridMax in
+// PrecomputeSHCoefficients.cpp when kUseManualGridBounds is set there).
+//   boundsMin/boundsMax  region in Falcor world coordinates (Y up), used when manualBounds is true
+//   referenceResolution  > 0: the batch also builds <scene>_U<n>.txt as the reference, once (skipped when the file
+//                        exists, even with kBatchSkipExisting = false, because it is the most expensive grid)
+struct SceneSetup
+{
+    std::string scene;
+    bool manualBounds;
+    float3 boundsMin, boundsMax;
+    uint32_t referenceResolution;
+};
+inline const std::vector<SceneSetup> kSceneSetups = {
+    // Bistro interior: a 6.5 x 5.35 x 6.5 m part of the dining area, floor to ceiling (pendant lamps and both ceiling
+    // fans inside), centred on the cube region of the earlier sphere-loop demo (centre x 9.52, z -1.08). Near-cubic, so
+    // the cells are near-cubic too (U64: about 10 x 8.4 x 10 cm, close to SceneForData's 7.7 cm). The larger TC region
+    // (3.5, 0.65, -6.5)-(16, 5, 3) gave cells 2.3x longer in x than in y, coarser than the lighting detail.
+    { "BistroInterior_Wine", true, float3(6.27f, 0.65f, -4.33f), float3(12.77f, 6.0f, 2.17f), 128 },
+};
+inline const SceneSetup* findSceneSetup(const std::string& scene)
+{
+    for (const auto& s : kSceneSetups)
+        if (s.scene == scene) return &s;
+    return nullptr;
+}
+
 // ---- Evaluation --------------------------------------------------------------------------------
 // Per scene, in Mogwai's working directory:
 //   <scene>_PlacementComparisonGrids.csv     input: one grid per line, method,type,file
@@ -105,7 +134,7 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
 inline constexpr bool kBatchEvaluateAtEnd = true;
 // Skip grids whose files already exist (uniform: the grid file; best-first: the snapshot at the largest budget),
 // so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings).
-inline constexpr bool kBatchSkipExisting = false; // false: full rebuild for the stage timings (<scene>_BuildTimings.csv)
+inline constexpr bool kBatchSkipExisting = true;
 inline constexpr bool kBatchClassifyPoints = true; // classify the evaluation points before the evaluation (scene loaded)
 
 // ---- Sample points away from geometry ------------------------------------------------------------
