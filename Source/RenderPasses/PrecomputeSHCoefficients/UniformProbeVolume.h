@@ -38,6 +38,8 @@ public:
     void setBuildTimeMs(double t) { mBuildTimeMs = t; }
 
     bool fetchHermiteSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const;
+    // Trilinear interpolation of the 8 corner SH coefficients (gradients unused); placement comparison only.
+    bool fetchTrilinearSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const;
     float3 evaluateIrradianceHermiteCPU(float3 posW, float3 normalW) const;
 
 private:

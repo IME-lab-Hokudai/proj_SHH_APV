@@ -387,6 +387,32 @@ namespace
     }
 }
 
+bool UniformProbeVolume::fetchTrilinearSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const
+{
+    // Same cell lookup and corner order as fetchHermiteSH_CPU (bit 2 = x, bit 1 = y, bit 0 = z); values only.
+    outCoeffs.assign(9, float3(0.0f));
+    if (mProbeData.empty())
+        return false;
+    const float3 rel = posW - mMinPoint;
+    int3 cell = int3(int(std::floor(rel.x / mCellSize.x)), int(std::floor(rel.y / mCellSize.y)), int(std::floor(rel.z / mCellSize.z)));
+    cell.x = std::max(0, std::min(cell.x, int(mProbeResolution.x) - 1));
+    cell.y = std::max(0, std::min(cell.y, int(mProbeResolution.y) - 1));
+    cell.z = std::max(0, std::min(cell.z, int(mProbeResolution.z) - 1));
+    float3 t = (posW - (mMinPoint + float3(cell) * mCellSize)) / mCellSize;
+    t = float3(clamp01CPU(t.x), clamp01CPU(t.y), clamp01CPU(t.z));
+    for (int k = 0; k < 8; ++k)
+    {
+        const int3 p = cell + int3((k >> 2) & 1, (k >> 1) & 1, k & 1);
+        const uint32_t idx = uint32_t(p.z * int(mCornerResolution.y) * int(mCornerResolution.x) + p.y * int(mCornerResolution.x) + p.x);
+        if (idx >= mProbeData.size())
+            return false;
+        const float w = (((k >> 2) & 1) ? t.x : 1.0f - t.x) * (((k >> 1) & 1) ? t.y : 1.0f - t.y) * ((k & 1) ? t.z : 1.0f - t.z);
+        for (int band = 0; band < 9; ++band)
+            outCoeffs[band] += w * float4ToFloat3_CPU(mProbeData[idx].coeffs[band]);
+    }
+    return true;
+}
+
 bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const
 {
     outCoeffs.clear();

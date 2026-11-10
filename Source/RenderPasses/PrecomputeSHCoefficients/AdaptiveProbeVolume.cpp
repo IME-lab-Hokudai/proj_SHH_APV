@@ -399,6 +399,29 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
     }
 }
 
+void AdaptiveProbeVolume::interpolateTrilinear_CPU(int leafIdx, float3 pos, std::vector<float3>& outCoeffs) const
+{
+    // Corner order as in interpolateHermite_CPU: bit 2 = x, bit 1 = y, bit 0 = z. Hanging corners keep their own traced
+    // values (constrainHangingNodesHermite is not called), as with Hermite.
+    outCoeffs.clear();
+    const auto& p = mProbes[leafIdx];
+    float3 t = (pos - p.minPoint) / (p.maxPoint - p.minPoint);
+    t = float3(std::max(0.0f, std::min(1.0f, t.x)), std::max(0.0f, std::min(1.0f, t.y)), std::max(0.0f, std::min(1.0f, t.z)));
+    for (int k = 0; k < 8; ++k)
+        if (p.corners[k] < 0 || p.corners[k] >= int(mCorners.size()))
+            return;
+    const size_t numBands = mCorners[p.corners[0]].shCoeffs.size();
+    outCoeffs.assign(numBands, float3(0.0f));
+    for (int k = 0; k < 8; ++k)
+    {
+        const Corner& c = mCorners[p.corners[k]];
+        if (c.shCoeffs.size() < numBands) { outCoeffs.clear(); return; }
+        const float w = (((k >> 2) & 1) ? t.x : 1.0f - t.x) * (((k >> 1) & 1) ? t.y : 1.0f - t.y) * ((k & 1) ? t.z : 1.0f - t.z);
+        for (size_t band = 0; band < numBands; ++band)
+            outCoeffs[band] += w * c.shCoeffs[band];
+    }
+}
+
 void AdaptiveProbeVolume::constrainHangingNodesHermite()
 {
     const int FACE_CORNERS[6][4] = {

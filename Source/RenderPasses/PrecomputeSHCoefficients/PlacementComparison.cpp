@@ -468,8 +468,19 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
 {
     using namespace placement;
     const std::string kManifestFile = scene + "_PlacementComparisonGrids.csv";
-    const std::string kSummaryCsv = scene + "_PlacementComparisonSummary.csv";
-    const std::string kPerPointCsv = kWritePerPointCsv ? scene + "_PlacementComparisonPoints.csv" : std::string();
+    // One summary and per-point file per interpolation of the tested grids (kEvalInterpolations): Hermite keeps the
+    // original names, trilinear adds _Trilinear. Every grid is loaded once and evaluated both ways.
+    const std::vector<EvalInterpolation> modes = kEvalInterpolations;
+    if (modes.empty()) { logError("[Placement eval] kEvalInterpolations is empty."); return; }
+    auto modeName = [](EvalInterpolation m) { return m == EvalInterpolation::Trilinear ? std::string("trilinear") : std::string("Hermite"); };
+    std::vector<std::string> summaryCsv, perPointCsv;
+    for (EvalInterpolation m : modes)
+    {
+        const std::string suffix = m == EvalInterpolation::Trilinear ? "_Trilinear" : "";
+        summaryCsv.push_back(scene + "_PlacementComparisonSummary" + suffix + ".csv");
+        const bool writePoints = kWritePerPointCsv && (m == EvalInterpolation::Hermite || kWritePerPointCsvTrilinear);
+        perPointCsv.push_back(writePoints ? scene + "_PlacementComparisonPoints" + suffix + ".csv" : std::string());
+    }
     struct Entry { std::string method, type, file; };
     std::vector<Entry> entries;
     {
@@ -600,10 +611,10 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             logWarning("[Placement eval] No {} (run \"classify sample points\" with the scene loaded); ...Away columns = all points.", kMaskFile);
     }
 
-    std::ofstream summary(kSummaryCsv);
-    summary << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
-               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
-               "memoryBytes\n";
+    // Summary columns: all points, points away from geometry (...Away: kNearSurfaceCells), and points outside objects
+    // (...Out: every point not inside an object; all points without the mask), the set used in the paper.
+    std::vector<std::ofstream> summaries;
+    for (const std::string& f : summaryCsv) summaries.emplace_back(f);
     {
         // The reference itself: zero error by definition; listed for its probe count and build time.
         const uint3 d = reference->getProbeCountDim();
@@ -611,12 +622,16 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         for (size_t i = 0; i < pointCount; ++i)
             if (refValid[i])
                 for (size_t k = 0; k < N; ++k) { sumRef += refLum[i * N + k]; ++samplesRef; }
-        summary << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
-                << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
-                << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
-                << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0,"
-                << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << "\n";
-        summary.flush();
+        std::ostringstream row;
+        row << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
+               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
+               "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut\n";
+        row << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
+            << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
+            << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
+            << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0,"
+            << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << ",0,0,0,0,0\n";
+        for (auto& summary : summaries) { summary << row.str(); summary.flush(); }
     }
 
     // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
@@ -624,7 +639,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     // e.g. where an adaptive grid is coarser or finer than the uniform grid with the same probe count.
     // relMSE per sample = (E - E_ref)^2 / max(|E_ref|, eps)^2, the squared form of the percentage error / 100.
     struct PointColumns { std::string name; std::vector<float> pct, abs, sq, rel; std::vector<int8_t> level; };
-    std::vector<PointColumns> perPoint;
+    std::vector<std::vector<PointColumns>> perPoint(modes.size());
 
     for (const Entry& e : entries)
     {
@@ -662,6 +677,16 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             continue;
         }
 
+        int uniformLevel = -1;
+        if (uniform)
+        {
+            const uint3 d = uniform->getProbeCountDim();
+            uniformLevel = int(std::lround(std::log2(double(std::max(1u, d.x - 1)))));
+        }
+        for (size_t mi = 0; mi < modes.size(); ++mi)
+        {
+        const bool trilinear = modes[mi] == EvalInterpolation::Trilinear;
+        std::ofstream& summary = summaries[mi];
         std::vector<float> ape(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> absErr(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> pointApe(pointCount, std::numeric_limits<float>::quiet_NaN());
@@ -669,12 +694,6 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         std::vector<float> pointSq(pointCount, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> pointRel(pointCount, std::numeric_limits<float>::quiet_NaN());
         std::vector<int8_t> pointLevel(pointCount, -1);
-        int uniformLevel = -1;
-        if (uniform)
-        {
-            const uint3 d = uniform->getProbeCountDim();
-            uniformLevel = int(std::lround(std::log2(double(std::max(1u, d.x - 1)))));
-        }
         parallelFor(pointCount, [&](size_t i)
         {
             if (!refValid[i]) return;
@@ -686,11 +705,17 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 const int leaf = adaptive->traverseOctreeCPU(p);
                 if (leaf >= 0)
                 {
-                    adaptive->interpolateHermite_CPU(leaf, p, c); ok = c.size() >= 9;
+                    if (trilinear) adaptive->interpolateTrilinear_CPU(leaf, p, c);
+                    else adaptive->interpolateHermite_CPU(leaf, p, c);
+                    ok = c.size() >= 9;
                     pointLevel[i] = int8_t(adaptive->getProbes()[leaf].level);
                 }
             }
-            else { ok = uniform->fetchHermiteSH_CPU(p, c) && c.size() >= 9; pointLevel[i] = int8_t(uniformLevel); }
+            else
+            {
+                ok = (trilinear ? uniform->fetchTrilinearSH_CPU(p, c) : uniform->fetchHermiteSH_CPU(p, c)) && c.size() >= 9;
+                pointLevel[i] = int8_t(uniformLevel);
+            }
             if (!ok) return;
             double sum = 0.0, sumA = 0.0, sumS = 0.0, sumR = 0.0;
             for (size_t k = 0; k < N; ++k)
@@ -712,6 +737,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         std::vector<float> valid; valid.reserve(ape.size());
         double sumAbs = 0.0, sumSq = 0.0, sumRef = 0.0; size_t failed = 0;
         double aAbs = 0.0, aSq = 0.0, aRel = 0.0, aRef = 0.0; size_t aCount = 0; // points away from geometry
+        double oAbs = 0.0, oSq = 0.0, oRel = 0.0, oPct = 0.0; size_t oCount = 0;  // points outside objects
         for (size_t i = 0; i < pointCount; ++i)
         {
             if (!refValid[i]) continue;
@@ -721,6 +747,12 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 valid.push_back(ape[i * N + k]);
                 sumAbs += absErr[i * N + k]; sumSq += double(absErr[i * N + k]) * absErr[i * N + k];
                 sumRef += refLum[i * N + k];
+                if (pointInside[i] != 1)
+                {
+                    const double rel = double(ape[i * N + k]) / 100.0;
+                    oAbs += absErr[i * N + k]; oSq += double(absErr[i * N + k]) * absErr[i * N + k];
+                    oRel += rel * rel; oPct += ape[i * N + k]; ++oCount;
+                }
                 if (away[i])
                 {
                     const double rel = double(ape[i * N + k]) / 100.0;
@@ -730,6 +762,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             }
         }
         const double na = double(std::max<size_t>(1, aCount));
+        const double no = double(std::max<size_t>(1, oCount));
         std::sort(valid.begin(), valid.end());
         const double n = double(std::max<size_t>(1, valid.size()));
         double sumApe = 0.0, sumRel = 0.0;
@@ -740,21 +773,25 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 << std::setprecision(6) << sumApe / n << "," << percentileSorted(valid, 50) << "," << percentileSorted(valid, 95) << ","
                 << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << ","
                 << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << ","
-                << memoryBytes << "\n";
+                << memoryBytes << "," << oCount << "," << oAbs / no << "," << std::sqrt(oSq / no) << "," << oRel / no << ","
+                << oPct / no << "\n";
         summary.flush();
-        logInfo("[Placement eval] {} ({} probes): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.",
-            e.method, probes, std::sqrt(sumSq / n), sumAbs / n, sumRel / n, failed, msSince(t0) / 1000.0);
+        logInfo("[Placement eval] {} ({} probes, {}): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; outside objects RMSE {:.4g}, "
+            "MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.", e.method, probes, modeName(modes[mi]),
+            std::sqrt(sumSq / n), sumAbs / n, sumRel / n, std::sqrt(oSq / no), oAbs / no, oRel / no, failed, msSince(t0) / 1000.0);
 
-        if (!kPerPointCsv.empty())
-            perPoint.push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointRel), std::move(pointLevel) });
+        if (!perPointCsv[mi].empty())
+            perPoint[mi].push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointRel), std::move(pointLevel) });
+        } // interpolation modes
     }
 
-    if (!kPerPointCsv.empty() && !perPoint.empty())
+    for (size_t mi = 0; mi < modes.size(); ++mi)
     {
-        // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_rel, <method>_lvl. About 250 MB for 25 grids at 64^3.
-        std::ofstream pts(kPerPointCsv);
+        if (perPointCsv[mi].empty() || perPoint[mi].empty()) continue;
+        // Columns per grid: <method>_pct, <method>_abs, <method>_sq, <method>_rel, <method>_lvl. About 400 MB for 37 grids at 64^3.
+        std::ofstream pts(perPointCsv[mi]);
         pts << "ix,iy,iz,x,y,z,refLum,inside,minDist";
-        for (const auto& m : perPoint) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_rel," << m.name << "_lvl";
+        for (const auto& m : perPoint[mi]) pts << "," << m.name << "_pct," << m.name << "_abs," << m.name << "_sq," << m.name << "_rel," << m.name << "_lvl";
         pts << "\n" << std::defaultfloat << std::setprecision(5);
         for (size_t i = 0; i < pointCount; ++i)
         {
@@ -762,13 +799,15 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             const float3 p = pointPos(i);
             double r = 0.0; for (size_t k = 0; k < N; ++k) r += refLum[i * N + k];
             pts << (i % R) << "," << ((i / R) % R) << "," << (i / (size_t(R) * R)) << "," << p.x << "," << p.y << "," << p.z << "," << r / double(N) << "," << int(pointInside[i]) << "," << pointMinDist[i];
-            for (const auto& m : perPoint)
+            for (const auto& m : perPoint[mi])
                 pts << "," << m.pct[i] << "," << m.abs[i] << "," << m.sq[i] << "," << m.rel[i] << "," << int(m.level[i]);
             pts << "\n";
         }
-        logInfo("[Placement eval] Wrote {}.", kPerPointCsv);
+        logInfo("[Placement eval] Wrote {}.", perPointCsv[mi]);
     }
-    logInfo("[Placement eval] Wrote {} (absolute path: {}).", kSummaryCsv, std::filesystem::absolute(kSummaryCsv).string());
+    for (size_t mi = 0; mi < modes.size(); ++mi)
+        logInfo("[Placement eval] Wrote {} ({} interpolation; absolute path: {}).", summaryCsv[mi], modeName(modes[mi]),
+                std::filesystem::absolute(summaryCsv[mi]).string());
 }
 
 // =====================================================================================================

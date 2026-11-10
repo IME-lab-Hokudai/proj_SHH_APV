@@ -112,6 +112,16 @@ inline const SceneSetup* findSceneSetup(const std::string& scene)
 //   <scene>_PlacementComparisonPoints.csv    output: error per point and grid (if kWritePerPointCsv)
 inline constexpr bool kWritePerPointCsv = true;
 
+// How the tested grids are interpolated at the evaluation points (the reference is read at its own probes, where both
+// give the probe value). One summary per entry:
+//   Hermite:   tricubic Hermite with the analytic gradients (the runtime method); <scene>_PlacementComparisonSummary.csv
+//   Trilinear: corner values only, no gradients;  <scene>_PlacementComparisonSummary_Trilinear.csv
+// Trilinear separates placement from the gradients, which leave out the visibility boundary term.
+enum class EvalInterpolation { Hermite, Trilinear };
+inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpolation::Hermite, EvalInterpolation::Trilinear };
+// Per-point file of the trilinear evaluation (<scene>_PlacementComparisonPoints_Trilinear.csv, as large as the Hermite one).
+inline constexpr bool kWritePerPointCsvTrilinear = true;
+
 inline constexpr uint32_t kEvalResolution = 64;   // uniform lattice of cell centres per axis
 inline constexpr float kRelEpsilonFraction = 0.01f; // epsilon of the percentage error, x mean reference luminance
 
