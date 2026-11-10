@@ -154,7 +154,8 @@ private:
     void SinglePassBuild(RenderContext* pRenderContext);
     // Placement comparison (PlacementComparison.cpp, settings in PlacementComparisonSettings.h).
     void BestFirstBuild(RenderContext* pRenderContext);
-    void BestFirstBuildWith(RenderContext* pRenderContext, AdaptiveProbeVolume::SplitScore score, uint3 seedResolution);
+    // gdcPercentile (GDCCombined only): the gradient threshold is this percentile of the seed corners' gradient norms.
+    void BestFirstBuildWith(RenderContext* pRenderContext, AdaptiveProbeVolume::SplitScore score, uint3 seedResolution, float gdcPercentile = -1.0f);
     void buildUniformGridToFile(RenderContext* pRenderContext, uint32_t cellsPerAxis, const std::string& file);
     void runPlacementBatch(RenderContext* pRenderContext); // every grid of the comparison, then the evaluation
     bool mRunPlacementBatch = false;

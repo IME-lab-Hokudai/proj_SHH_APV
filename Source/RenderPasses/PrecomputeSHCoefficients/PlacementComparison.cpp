@@ -127,7 +127,8 @@ void PrecomputeSHCoefficients::BestFirstBuild(RenderContext* pRenderContext)
     BestFirstBuildWith(pRenderContext, placement::kScore, placement::kSeedResolution);
 }
 
-void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext, AdaptiveProbeVolume::SplitScore score, uint3 seedResolution)
+void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext, AdaptiveProbeVolume::SplitScore score, uint3 seedResolution,
+                                                  float gdcPercentile)
 {
     using namespace placement;
     const auto buildStart = Clock::now();
@@ -135,6 +136,14 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     uint32_t rounds = 0;
     buildtiming::Stats timing; // CPU time per routine and traced probes, for <scene>_BuildTimings.csv
 
+    // The GDC 2005 combined rule as one best-first score (max of the three tests' ratios to their thresholds), stopped by
+    // the same budgets as every other method. tau_g (gradient threshold) = gdcPercentile of the seed voxels' scores.
+    const bool gdc = score == AdaptiveProbeVolume::SplitScore::GDCCombined;
+    if (gdc && !(gdcPercentile >= 0.0f && gdcPercentile <= 100.0f))
+    {
+        logError("[Best-first] GDC combined needs a gradient percentile in [0, 100] (got {}).", gdcPercentile);
+        return;
+    }
     const std::vector<Budget> budgets = bestFirstBudgets(); // increasing; probe counts or runtime bytes (kBudgetUnit)
     const bool budgetInBytes = kBudgetUnit == BudgetUnit::Memory;
     if (budgets.empty())
@@ -156,6 +165,7 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
         if (seedResolution.y != seedResolution.x || seedResolution.z != seedResolution.x)
             scoreName += "x" + std::to_string(seedResolution.y) + "x" + std::to_string(seedResolution.z);
     }
+    if (gdc) scoreName += "_p" + std::to_string(int(std::lround(gdcPercentile))); // e.g. GDC_S8_p90
     vol->setSplitScore(score);
     vol->setResidualCorrection(false);
 
@@ -182,6 +192,17 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     const bool needHessians = score == AdaptiveProbeVolume::SplitScore::Hessian ||
                               score == AdaptiveProbeVolume::SplitScore::HessianRelative;
     logInfo("[Best-first] Per-probe derivatives: gradients{}.", needHessians ? " and Hessians" : " only (score does not use Hessians)");
+    // Per-corner data of the baselines. Interpolation always uses the analytic gradients above, the same for every
+    // method; the finite-difference gradient only feeds the Gradient / GDC score.
+    const bool needGeometry = score == AdaptiveProbeVolume::SplitScore::Geometry || gdc;
+    const bool needFDGradient = score == AdaptiveProbeVolume::SplitScore::Gradient || gdc;
+    const float3 volumeExtent = vol->getVolumeExtent();
+    const float finestFraction = 1.0f / float(1u << vol->getMaxLevel());
+    const float3 fdStep = volumeExtent * (kGradientFDStepCells * finestFraction); // per axis, in world units
+    if (needFDGradient)
+        logInfo("[Best-first] Finite-difference gradients: 6 re-traced probes per corner, step ({:.4f}, {:.4f}, {:.4f}) = {} finest cells.",
+                fdStep.x, fdStep.y, fdStep.z, kGradientFDStepCells);
+    uint64_t fdTraced = 0;
 
     // Trace every pending corner and store SH, derivatives and the harmonic-mean depth.
     auto traceAllPending = [&]()
@@ -210,6 +231,7 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             std::vector<std::vector<GradSHCoeff>> grads(n);
             std::vector<std::vector<float3x3>> hessians(n);
             std::vector<float> hm(n);
+            std::vector<std::array<float, 8>> geometry(needGeometry ? n : 0);
             parallelFor(n, [&](size_t i)
             {
                 using buildtiming::nsBetween;
@@ -226,6 +248,23 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
                 accumulateDirectLightSamples(coeffs[i], &grads[i], needHessians ? &hessians[i] : nullptr, xPolar, s + dirCount, lightCount);
                 const auto c3 = Clock::now();
                 hm[i] = harmonicMeanDepth(s, dirCount);
+                if (needGeometry)
+                {
+                    // Nearest first hit per octant, as max_a |q_a| / R_a (see Corner::geometryOctant). Sampling
+                    // directions are in the grid's polar frame: world = (d.y, d.z, d.x).
+                    std::array<float, 8>& g = geometry[i];
+                    g.fill(std::numeric_limits<float>::max());
+                    for (uint32_t j = 0; j < dirCount; ++j)
+                    {
+                        const float t = s[j].hitT;
+                        if (!(t > 0.0f)) continue;
+                        const float3 d = samplingDirs[j].dir;
+                        const float3 q = float3(d.y, d.z, d.x) * t;
+                        const int octant = (q.x >= 0.f ? 1 : 0) | (q.y >= 0.f ? 2 : 0) | (q.z >= 0.f ? 4 : 0);
+                        const float v = std::max(std::abs(q.x) / volumeExtent.x, std::max(std::abs(q.y) / volumeExtent.y, std::abs(q.z) / volumeExtent.z));
+                        g[octant] = std::min(g[octant], v);
+                    }
+                }
                 const auto c4 = Clock::now();
                 timing.cpuDerivNs += nsBetween(c0, c1);
                 timing.cpuShNs += nsBetween(c1, c2);
@@ -234,7 +273,66 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
             });
             vol->setCornerDataRange(start, coeffs, grads, hessians);
             vol->setCornerHarmonicMeanDepthRange(start, hm);
+            if (needGeometry) vol->setCornerGeometryRange(start, geometry);
             shMs += msSince(t0);
+
+            if (needFDGradient)
+            {
+                // Re-trace each corner at +-h along x, y and z (6 probes) and take central differences of the 9
+                // luminance SH coefficients; the score uses the Frobenius norm. The same direction and light samples
+                // are used at every position (common random numbers in ProbeSampling.rt.slang).
+                const uint32_t m = 6 * n;
+                std::vector<float3> shifted(m);
+                for (uint32_t i = 0; i < n; ++i)
+                    for (uint32_t a = 0; a < 6; ++a)
+                    {
+                        float3 delta(0.f);
+                        const float sgn = (a & 1) ? -1.0f : 1.0f;
+                        if (a < 2) delta.x = sgn * fdStep.x; else if (a < 4) delta.y = sgn * fdStep.y; else delta.z = sgn * fdStep.z;
+                        shifted[6 * i + a] = positions[i] + delta;
+                    }
+                std::vector<std::array<float, 9>> lum(m);
+                for (uint32_t s0 = 0; s0 < m; s0 += kMaxCornersPerDispatch)
+                {
+                    const uint32_t k = std::min(kMaxCornersPerDispatch, m - s0);
+                    auto tt = Clock::now();
+                    mpProbePosBuffer->setBlob(shifted.data() + s0, 0, k * sizeof(float3));
+                    traceProbeBatch(pRenderContext, dirCount, k, lightCount);
+                    mpProbeSamplingResultBuffer->getBlob(samples.data(), 0, size_t(stride) * k * sizeof(ProbeSampleData));
+                    mpDevice->wait();
+                    traceMs += msSince(tt);
+                    fdTraced += k;
+
+                    tt = Clock::now();
+                    parallelFor(k, [&](size_t i)
+                    {
+                        const auto c0 = Clock::now();
+                        const ProbeSampleData* s = samples.data() + i * size_t(stride);
+                        const float3 p = shifted[s0 + i];
+                        const float3 xPolar(p.z, p.x, p.y);
+                        std::vector<float3> c;
+                        calculateSHCoeffs(c, s, dirCount);
+                        accumulateDirectLightSamples(c, nullptr, nullptr, xPolar, s + dirCount, lightCount);
+                        for (int b = 0; b < 9; ++b) lum[s0 + i][b] = lum709(c[b]);
+                        timing.cpuShNs += buildtiming::nsBetween(c0, Clock::now());
+                    });
+                    shMs += msSince(tt);
+                }
+                std::vector<float> gradNorm(n);
+                for (uint32_t i = 0; i < n; ++i)
+                {
+                    double sum = 0.0;
+                    const float h[3] = { fdStep.x, fdStep.y, fdStep.z };
+                    for (int a = 0; a < 3; ++a)
+                        for (int b = 0; b < 9; ++b)
+                        {
+                            const double d = (double(lum[6 * i + 2 * a][b]) - double(lum[6 * i + 2 * a + 1][b])) / (2.0 * double(h[a]));
+                            sum += d * d;
+                        }
+                    gradNorm[i] = float(std::sqrt(sum));
+                }
+                vol->setCornerFDGradientRange(start, gradNorm);
+            }
         }
     };
 
@@ -285,6 +383,17 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
         traceAllPending();
         ++rounds;
 
+        if (gdc && rounds == 1)
+        {
+            // Gradient threshold of the combined rule (the source gives no value): this percentile of the seed voxels'
+            // gradient scores (edge x max corner gradient), so the test fires on the top (100 - percentile)% of them.
+            std::vector<float> g = vol->leafGradientScores();
+            std::sort(g.begin(), g.end());
+            const float tau = g.empty() ? 0.0f : g[std::min(g.size() - 1, size_t(std::floor(gdcPercentile / 100.0f * float(g.size() - 1) + 0.5f)))];
+            vol->setGdcGradientThreshold(tau);
+            logInfo("[Best-first] GDC combined: gradient threshold tau_g = P{} of {} seed voxels = {:.4g}.", gdcPercentile, g.size(), tau);
+        }
+
         const auto t0 = Clock::now();
         const auto r = vol->finishBatchBestFirst(budgets[budgetIdx].value, kBatchFraction, kMaxBatch, budgetInBytes);
         scoreMs += msSince(t0);
@@ -292,10 +401,15 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
 
         if (r.splits == 0) // budget reached or nothing left to split: the grid is complete and traced
         {
-            saveSnapshot(budgets[budgetIdx], lastScore, r.exhausted);
+            // A rule that runs out of leaves before the budget (geometry or GDC when no leaf fires any more; every leaf
+            // at the maximum level) saves the grid it reached as <score>_exhausted.
+            const bool early = r.exhausted;
+            saveSnapshot(early ? Budget{ budgets[budgetIdx].value, "exhausted" } : budgets[budgetIdx], lastScore, r.exhausted);
             if (r.exhausted)
             {
-                logWarning("[Best-first] Every leaf is at the maximum level; stopping before budget {}.", budgets[budgetIdx].label);
+                if (early)
+                    logWarning("[Best-first] No leaf left to split (the rule no longer fires, or every leaf is at the maximum level); "
+                               "stopped below budget {} and saved the grid as _exhausted.", budgets[budgetIdx].label);
                 break;
             }
             ++budgetIdx;
@@ -309,6 +423,8 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     vol->clearPendingBatch();
     logInfo("[Best-first] Done: {} rounds, {:.1f}s (trace {:.1f}s, SH {:.1f}s, scoring {:.1f}s, file I/O {:.1f}s).",
         rounds, msSince(buildStart) / 1000.0, traceMs / 1000.0, shMs / 1000.0, scoreMs / 1000.0, ioMs / 1000.0);
+    if (fdTraced > 0)
+        logInfo("[Best-first] Finite differences re-traced {} probes (included in the trace and SH times).", fdTraced);
 }
 
 // =====================================================================================================
@@ -793,13 +909,36 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
         }
         const std::vector<Budget> budgets = bestFirstBudgets();
         const std::string lastFile = scene + "_BF_" + tag + "_" + (budgets.empty() ? std::string("0") : budgets.back().label) + ".txt";
-        if (kBatchSkipExisting && std::filesystem::exists(lastFile))
+        const std::string exhaustedFile = scene + "_BF_" + tag + "_exhausted.txt"; // a rule that stopped below the last budget
+        if (kBatchSkipExisting && (std::filesystem::exists(lastFile) || std::filesystem::exists(exhaustedFile)))
         {
-            logInfo("[Batch] best-first {}: {} exists, skipped.", tag, lastFile);
+            logInfo("[Batch] best-first {}: {} exists, skipped.", tag, std::filesystem::exists(lastFile) ? lastFile : exhaustedFile);
             continue;
         }
         step(std::string("best-first ") + AdaptiveProbeVolume::splitScoreName(sc),
              [&]() { BestFirstBuildWith(pRenderContext, sc, kSeedResolution); });
+    }
+    // GDC 2005 combined rule at the same budgets, one run per gradient-threshold percentile.
+    for (float pct : kBatchGdcPercentiles)
+    {
+        std::string tag = std::string(AdaptiveProbeVolume::splitScoreName(AdaptiveProbeVolume::SplitScore::GDCCombined));
+        if (kSeedResolution.x != 1 || kSeedResolution.y != 1 || kSeedResolution.z != 1)
+        {
+            tag += "_S" + std::to_string(kSeedResolution.x);
+            if (kSeedResolution.y != kSeedResolution.x || kSeedResolution.z != kSeedResolution.x)
+                tag += "x" + std::to_string(kSeedResolution.y) + "x" + std::to_string(kSeedResolution.z);
+        }
+        tag += "_p" + std::to_string(int(std::lround(pct)));
+        const std::vector<Budget> budgets = bestFirstBudgets();
+        const std::string lastFile = scene + "_BF_" + tag + "_" + (budgets.empty() ? std::string("0") : budgets.back().label) + ".txt";
+        const std::string exhaustedFile = scene + "_BF_" + tag + "_exhausted.txt";
+        if (kBatchSkipExisting && (std::filesystem::exists(lastFile) || std::filesystem::exists(exhaustedFile)))
+        {
+            logInfo("[Batch] GDC combined {}: {} exists, skipped.", tag, std::filesystem::exists(lastFile) ? lastFile : exhaustedFile);
+            continue;
+        }
+        step("GDC combined " + tag,
+             [&]() { BestFirstBuildWith(pRenderContext, AdaptiveProbeVolume::SplitScore::GDCCombined, kSeedResolution, pct); });
     }
     if (kBatchClassifyPoints)
         step("classify sample points", [&]() { classifyEvalPoints(pRenderContext); });

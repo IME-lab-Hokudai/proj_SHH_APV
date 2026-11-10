@@ -1670,6 +1670,9 @@ const char* AdaptiveProbeVolume::splitScoreName(SplitScore score)
     case SplitScore::Hessian: return "Hessian";
     case SplitScore::HessianRelative: return "HessianRel";
     case SplitScore::HarmonicMeanDepth: return "HarmonicMeanDepth";
+    case SplitScore::Geometry: return "Geometry";
+    case SplitScore::Gradient: return "Gradient";
+    case SplitScore::GDCCombined: return "GDC";
     }
     return "Unknown";
 }
@@ -1682,6 +1685,42 @@ void AdaptiveProbeVolume::setCornerHarmonicMeanDepthRange(uint32_t start, const 
         if (batchIndex >= mPendingNewCorners.size()) return;
         mCorners[mPendingNewCorners[batchIndex]].harmonicMeanDepth = values[i];
     }
+}
+
+void AdaptiveProbeVolume::setCornerGeometryRange(uint32_t start, const std::vector<std::array<float, 8>>& values)
+{
+    for (uint32_t i = 0; i < (uint32_t)values.size(); ++i)
+    {
+        const uint32_t batchIndex = start + i;
+        if (batchIndex >= mPendingNewCorners.size()) return;
+        Corner& c = mCorners[mPendingNewCorners[batchIndex]];
+        for (int o = 0; o < 8; ++o) c.geometryOctant[o] = values[i][o];
+    }
+}
+
+void AdaptiveProbeVolume::setCornerFDGradientRange(uint32_t start, const std::vector<float>& values)
+{
+    for (uint32_t i = 0; i < (uint32_t)values.size(); ++i)
+    {
+        const uint32_t batchIndex = start + i;
+        if (batchIndex >= mPendingNewCorners.size()) return;
+        mCorners[mPendingNewCorners[batchIndex]].fdGradientNorm = values[i];
+    }
+}
+
+std::vector<float> AdaptiveProbeVolume::leafGradientScores() const
+{
+    std::vector<float> out;
+    for (const Probe& p : mProbes)
+    {
+        if (!p.isLeaf) continue;
+        const float3 ext = p.maxPoint - p.minPoint;
+        const float e = std::max(ext.x, std::max(ext.y, ext.z));
+        float g = 0.0f;
+        for (int k = 0; k < 8; ++k) g = std::max(g, mCorners[p.corners[k]].fdGradientNorm);
+        out.push_back(e * g);
+    }
+    return out;
 }
 
 float AdaptiveProbeVolume::scoreCell(int probeIdx) const
@@ -1727,6 +1766,53 @@ float AdaptiveProbeVolume::scoreCell(int probeIdx) const
         if (minHM >= std::numeric_limits<float>::max())
             return 0.0f; // every ray from every corner missed
         return e / std::max(minHM, 1e-6f);
+    }
+    case SplitScore::Geometry:
+    case SplitScore::Gradient:
+    case SplitScore::GDCCombined:
+    {
+        const float e = std::max(ext.x, std::max(ext.y, ext.z));
+
+        // Geometry: does any corner see a first hit inside the voxel? From each corner the voxel is the octant
+        // pointing to the voxel centre, and a hit q in that octant is inside iff |q_a| <= e_a on every axis, i.e.
+        // max_a |q_a| / R_a <= e_a / R_a (every level keeps the volume's aspect ratio, so the ratio is one number).
+        auto containsGeometry = [&]() -> bool
+        {
+            const float3 R = getVolumeExtent();
+            const float limit = std::max(ext.x / std::max(R.x, 1e-12f), std::max(ext.y / std::max(R.y, 1e-12f), ext.z / std::max(R.z, 1e-12f)))
+                                * (1.0f + 1e-4f);
+            const float3 centre = (p.minPoint + p.maxPoint) * 0.5f;
+            for (int k = 0; k < 8; ++k)
+            {
+                const Corner& c = mCorners[p.corners[k]];
+                const float3 toCentre = centre - c.position;
+                const int octant = (toCentre.x >= 0.f ? 1 : 0) | (toCentre.y >= 0.f ? 2 : 0) | (toCentre.z >= 0.f ? 4 : 0);
+                if (c.geometryOctant[octant] <= limit) return true;
+            }
+            return false;
+        };
+        auto maxGradient = [&]() -> float
+        {
+            float g = 0.0f;
+            for (int k = 0; k < 8; ++k) g = std::max(g, mCorners[p.corners[k]].fdGradientNorm);
+            return g;
+        };
+
+        if (mSplitScore == SplitScore::Geometry)
+            return containsGeometry() ? e : 0.0f; // larger voxels first; voxels without geometry are never split
+        if (mSplitScore == SplitScore::Gradient)
+            return e * maxGradient(); // first-order change across the voxel; shrinks with the voxel like the others
+
+        // GDC 2005 combined: each test as a ratio to its threshold, so every test fires at 1 (depth: e / HM_min >= 1,
+        // the source's threshold; gradient: e ||grad|| / tau_g >= 1; geometry: 1 if the voxel contains a hit). The
+        // largest ratio ranks the leaf; the budget replaces the common threshold 1, as for the other methods.
+        float minHM = std::numeric_limits<float>::max();
+        for (int k = 0; k < 8; ++k)
+            minHM = std::min(minHM, mCorners[p.corners[k]].harmonicMeanDepth);
+        const float depthRatio = minHM < std::numeric_limits<float>::max() ? e / std::max(minHM, 1e-6f) : 0.0f;
+        const float gradientRatio = e * maxGradient() / std::max(mGdcGradientThreshold, 1e-20f);
+        const float geometryRatio = containsGeometry() ? 1.0f : 0.0f;
+        return std::max(depthRatio, std::max(gradientRatio, geometryRatio));
     }
     }
     return 0.0f;
@@ -1808,7 +1894,9 @@ AdaptiveProbeVolume::BestFirstRound AdaptiveProbeVolume::finishBatchBestFirst(
     {
         const Probe& p = mProbes[probeIdx];
         if (!p.isLeaf || p.level >= mMaxLevel) continue;
-        mBestFirstHeap.push_back({ scoreCell(probeIdx), p.level, probeIdx });
+        const float score = scoreCell(probeIdx);
+        if (score <= 0.0f && scoreSkipsZero()) continue; // rule does not fire: this leaf stays as it is
+        mBestFirstHeap.push_back({ score, p.level, probeIdx });
         std::push_heap(mBestFirstHeap.begin(), mBestFirstHeap.end(), HeapLess{});
     }
     mProbesPendingCheck.clear();

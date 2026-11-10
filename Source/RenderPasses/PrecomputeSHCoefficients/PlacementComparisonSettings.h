@@ -131,7 +131,22 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
     AdaptiveProbeVolume::SplitScore::HarmonicMeanDepth,
     AdaptiveProbeVolume::SplitScore::Hessian,
     AdaptiveProbeVolume::SplitScore::HessianRelative,
+    // Baselines (GDC 2005 / Greger et al. 1998). Geometry stops once no voxel with geometry can be split further and
+    // saves that grid as <scene>_BF_Geometry_S8_exhausted.txt (plus every budget it reached before). Gradient ranks by
+    // e x max corner finite-difference gradient (the first-order change across the voxel).
+    AdaptiveProbeVolume::SplitScore::Geometry,
+    AdaptiveProbeVolume::SplitScore::Gradient,
 };
+// GDC 2005 combined rule at the same memory budgets: best-first on max(e / HM_min, e ||grad|| / tau_g, geometry ? 1 : 0),
+// so every test fires at 1 and the budget replaces that threshold. tau_g sets how strongly the gradient test counts
+// against depth and geometry; the source gives no value, so one run per percentile of the seed voxels' e ||grad||
+// (p50: the gradient test fires on half the seed voxels; p90: on the top 10%).
+// Saved as <scene>_BF_GDC_S8_p<percentile>_memU<n>.txt. Empty = not built. Each run traces 7x the probes.
+//inline const std::vector<float> kBatchGdcPercentiles = { 50, 90 };
+inline const std::vector<float> kBatchGdcPercentiles = {}; // off for now: Geometry and Gradient first
+// Finite-difference step of the Gradient and GDC scores, in finest-level (U64) cells along each axis. The probes are
+// re-traced at +-h, so rays that switch objects add noise ~ 1/h: a step much below a cell gets noisy (FDVerification).
+inline constexpr float kGradientFDStepCells = 1.0f;
 inline constexpr bool kBatchEvaluateAtEnd = true;
 // Skip grids whose files already exist (uniform: the grid file; best-first: the snapshot at the largest budget),
 // so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings).

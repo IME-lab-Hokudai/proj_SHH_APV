@@ -259,6 +259,17 @@ public:
         // N / sum(1/d_i) with misses contributing 0 (Ward et al. 1988; GDC 2005).
         // FLT_MAX until set. Used by SplitScore::HarmonicMeanDepth.
         float harmonicMeanDepth = std::numeric_limits<float>::max();
+        // Geometry test (SplitScore::Geometry, GDCCombined): for each octant around the corner (bit 0: +x, bit 1: +y,
+        // bit 2: +z), the smallest max_a |q_a| / R_a over the direction samples whose first hit q (hit point - corner,
+        // world space) lies in that octant; R = extent of the probe volume. A voxel of extent e with this corner
+        // contains a sampled hit iff the value of the octant facing the voxel is <= e_a / R_a (the same on every axis).
+        float geometryOctant[8] = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                                    std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+        // Finite-difference gradient norm (SplitScore::Gradient, GDCCombined): Frobenius norm of the 9 x 3 matrix of
+        // central differences of the luminance SH coefficients, from 6 re-traced probes at +-h along the world axes.
+        float fdGradientNorm = 0.0f;
         bool residualCorrectionValid = false;
          // ------------------------------------------------------------
         // Residual-corrected Hessian scale
@@ -512,6 +523,11 @@ public:
         Hessian,           // mean over the 8 corners of 0.5 * ||lambda|| * d^2 (this paper, E_abs)
         HessianRelative,   // the same divided by max(||L||, floor) per corner (E_rel, Iwasaki & Dobashi 2025 Eq. 22)
         HarmonicMeanDepth, // voxel edge / min over corners of the harmonic-mean hit distance
+        Geometry,          // voxel edge if the voxel contains a sampled first hit, else not split (Greger et al. 1998)
+        Gradient,          // voxel edge x max over the 8 corners of the finite-difference gradient norm (GDC 2005's
+                           // gradient test with a size factor: the first-order change across the voxel)
+        GDCCombined,       // GDC 2005 rule as one score: max(e / HM_min, gradient score / tau_g, geometry ? 1 : 0); every
+                           // test fires at 1, and the budget replaces that threshold as for the other methods
     };
     void setSplitScore(SplitScore score) { mSplitScore = score; }
     SplitScore getSplitScore() const { return mSplitScore; }
@@ -519,6 +535,23 @@ public:
 
     // Per-corner harmonic-mean depth for the pending corners [start, start + values.size()).
     void setCornerHarmonicMeanDepthRange(uint32_t start, const std::vector<float>& values);
+    // Per-corner geometry octants and finite-difference gradient norms for the pending corners, as above.
+    void setCornerGeometryRange(uint32_t start, const std::vector<std::array<float, 8>>& values);
+    void setCornerFDGradientRange(uint32_t start, const std::vector<float>& values);
+    // Gradient threshold tau_g of the GDC 2005 combined rule (in units of the Gradient score).
+    void setGdcGradientThreshold(float t) { mGdcGradientThreshold = t; }
+    // Gradient score (edge x max corner gradient) of every current leaf, e.g. the seed voxels to set tau_g.
+    std::vector<float> leafGradientScores() const;
+    // Leaves with a score <= 0 are never split (Geometry: voxels without geometry).
+    bool scoreSkipsZero() const { return mSplitScore == SplitScore::Geometry; }
+    // Extent of the probe volume (all seed cells), the normalisation of Corner::geometryOctant.
+    float3 getVolumeExtent() const
+    {
+        return float3(mSeedCellSize.x * float(mSeedResolution.x), mSeedCellSize.y * float(mSeedResolution.y),
+                      mSeedCellSize.z * float(mSeedResolution.z));
+    }
+    // One corner of the grid (e.g. to read fdGradientNorm after a trace).
+    const Corner& getCorner(size_t i) const { return mCorners[i]; }
 
     float scoreCell(int probeIdx) const;
 
@@ -585,6 +618,7 @@ private:
     // (the seed), then kept fixed so scores do not drift while the grid grows.
     float mRelFloorFraction = 0.01f;
     float mRelFloor = -1.0f;
+    float mGdcGradientThreshold = std::numeric_limits<float>::max();
 
     CornerKey makeCornerKey(float3 p) const;
     // The 19 corner positions created by splitting a voxel, in the order subdivideCell() adds them.
