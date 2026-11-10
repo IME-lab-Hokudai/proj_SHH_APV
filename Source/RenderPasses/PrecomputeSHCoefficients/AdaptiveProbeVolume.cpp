@@ -86,6 +86,28 @@ float hermite1D(float t, float v0, float s0, float v1, float s1)
 }
 //
 
+// Slope limiter of monotone cubic interpolation (Fritsch & Carlson 1980), used by the placement comparison's
+// "limited Hermite" evaluation: the slopes (already times the cell size) are set to 0 where they disagree in sign with
+// the change across the cell (or the change is 0), and scaled down so that (s0/d)^2 + (s1/d)^2 <= 9, which keeps the
+// cubic within [v0, v1]. Cells whose slopes agree with the change are left unchanged.
+static float hermite1DLimited(bool limit, float t, float v0, float s0, float v1, float s1)
+{
+    if (limit)
+    {
+        const float d = v1 - v0;
+        if (d == 0.0f) { s0 = 0.0f; s1 = 0.0f; }
+        else
+        {
+            if (s0 * d < 0.0f) s0 = 0.0f;
+            if (s1 * d < 0.0f) s1 = 0.0f;
+            const float a = s0 / d, b = s1 / d;
+            const float r2 = a * a + b * b;
+            if (r2 > 9.0f) { const float k = 3.0f / std::sqrt(r2); s0 *= k; s1 *= k; }
+        }
+    }
+    return hermite1D(t, v0, s0, v1, s1);
+}
+
 // Derivative of the Cubic Hermite Basis (d/dt)
 float hermite1D_deriv(float t, float v0, float s0, float v1, float s1)
 {
@@ -243,7 +265,8 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
 void AdaptiveProbeVolume::interpolateHermite_CPU(
     int coarseProbeIdx,
     float3 pos,
-    std::vector<float3>& outCoeffs) const
+    std::vector<float3>& outCoeffs,
+    bool limitSlopes) const
 {
     const auto& p = mProbes[coarseProbeIdx];
 
@@ -360,9 +383,9 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
             int i1 = 2 * i + 1;
 
             q[i] = float3(
-                hermite1D(t.z, v[i0].x, gZ[i0].x * size.z, v[i1].x, gZ[i1].x * size.z),
-                hermite1D(t.z, v[i0].y, gZ[i0].y * size.z, v[i1].y, gZ[i1].y * size.z),
-                hermite1D(t.z, v[i0].z, gZ[i0].z * size.z, v[i1].z, gZ[i1].z * size.z)
+                hermite1DLimited(limitSlopes, t.z, v[i0].x, gZ[i0].x * size.z, v[i1].x, gZ[i1].x * size.z),
+                hermite1DLimited(limitSlopes, t.z, v[i0].y, gZ[i0].y * size.z, v[i1].y, gZ[i1].y * size.z),
+                hermite1DLimited(limitSlopes, t.z, v[i0].z, gZ[i0].z * size.z, v[i1].z, gZ[i1].z * size.z)
             );
 
             // Propagate transverse gradients by linear interpolation,
@@ -381,9 +404,9 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
             int i1 = 2 * i + 1;
 
             r[i] = float3(
-                hermite1D(t.y, q[i0].x, q_dY[i0].x * size.y, q[i1].x, q_dY[i1].x * size.y),
-                hermite1D(t.y, q[i0].y, q_dY[i0].y * size.y, q[i1].y, q_dY[i1].y * size.y),
-                hermite1D(t.y, q[i0].z, q_dY[i0].z * size.y, q[i1].z, q_dY[i1].z * size.y)
+                hermite1DLimited(limitSlopes, t.y, q[i0].x, q_dY[i0].x * size.y, q[i1].x, q_dY[i1].x * size.y),
+                hermite1DLimited(limitSlopes, t.y, q[i0].y, q_dY[i0].y * size.y, q[i1].y, q_dY[i1].y * size.y),
+                hermite1DLimited(limitSlopes, t.y, q[i0].z, q_dY[i0].z * size.y, q[i1].z, q_dY[i1].z * size.y)
             );
 
             // Propagate remaining transverse X gradient.
@@ -392,9 +415,9 @@ void AdaptiveProbeVolume::interpolateHermite_CPU(
 
         // Pass 3: Hermite along X.
         outCoeffs[band] = float3(
-            hermite1D(t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
-            hermite1D(t.x, r[0].y, r_dX[0].y * size.x, r[1].y, r_dX[1].y * size.x),
-            hermite1D(t.x, r[0].z, r_dX[0].z * size.x, r[1].z, r_dX[1].z * size.x)
+            hermite1DLimited(limitSlopes, t.x, r[0].x, r_dX[0].x * size.x, r[1].x, r_dX[1].x * size.x),
+            hermite1DLimited(limitSlopes, t.x, r[0].y, r_dX[0].y * size.x, r[1].y, r_dX[1].y * size.x),
+            hermite1DLimited(limitSlopes, t.x, r[0].z, r_dX[0].z * size.x, r[1].z, r_dX[1].z * size.x)
         );
     }
 }

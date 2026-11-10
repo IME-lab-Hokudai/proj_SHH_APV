@@ -470,15 +470,25 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     const std::string kManifestFile = scene + "_PlacementComparisonGrids.csv";
     // One summary and per-point file per interpolation of the tested grids (kEvalInterpolations): Hermite keeps the
     // original names, trilinear adds _Trilinear. Every grid is loaded once and evaluated both ways.
-    const std::vector<EvalInterpolation> modes = kEvalInterpolations;
-    if (modes.empty()) { logError("[Placement eval] kEvalInterpolations is empty."); return; }
-    auto modeName = [](EvalInterpolation m) { return m == EvalInterpolation::Trilinear ? std::string("trilinear") : std::string("Hermite"); };
-    std::vector<std::string> summaryCsv, perPointCsv;
-    for (EvalInterpolation m : modes)
+    // One evaluation per interpolation (kEvalInterpolations) and seam handling (kEvalSeamFixes).
+    struct EvalSetup { EvalInterpolation interp; bool oat; };
+    std::vector<EvalSetup> modes;
+    for (EvalInterpolation m : kEvalInterpolations)
+        for (SeamFix f : kEvalSeamFixes) modes.push_back({ m, f == SeamFix::Oat });
+    if (modes.empty()) { logError("[Placement eval] kEvalInterpolations or kEvalSeamFixes is empty."); return; }
+    auto modeName = [](const EvalSetup& m)
     {
-        const std::string suffix = m == EvalInterpolation::Trilinear ? "_Trilinear" : "";
+        const std::string i = m.interp == EvalInterpolation::Trilinear ? "trilinear"
+                             : m.interp == EvalInterpolation::LimitedHermite ? "limited Hermite" : "Hermite";
+        return i + (m.oat ? ", Oat seams" : "");
+    };
+    std::vector<std::string> summaryCsv, perPointCsv;
+    for (const EvalSetup& m : modes)
+    {
+        const std::string suffix = std::string(m.interp == EvalInterpolation::Trilinear ? "_Trilinear"
+                                 : m.interp == EvalInterpolation::LimitedHermite ? "_LimitedHermite" : "") + (m.oat ? "_Oat" : "");
         summaryCsv.push_back(scene + "_PlacementComparisonSummary" + suffix + ".csv");
-        const bool writePoints = kWritePerPointCsv && (m == EvalInterpolation::Hermite || kWritePerPointCsvTrilinear);
+        const bool writePoints = kWritePerPointCsv && (m.interp == EvalInterpolation::Hermite || kWritePerPointCsvTrilinear);
         perPointCsv.push_back(writePoints ? scene + "_PlacementComparisonPoints" + suffix + ".csv" : std::string());
     }
     struct Entry { std::string method, type, file; };
@@ -625,12 +635,12 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         std::ostringstream row;
         row << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
                "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
-               "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut\n";
+               "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut,seamSamples,seamMeanJump,seamMaxJump\n";
         row << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
             << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
             << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
             << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0,"
-            << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << ",0,0,0,0,0\n";
+            << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << ",0,0,0,0,0,0,0,0\n";
         for (auto& summary : summaries) { summary << row.str(); summary.flush(); }
     }
 
@@ -685,7 +695,45 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         }
         for (size_t mi = 0; mi < modes.size(); ++mi)
         {
-        const bool trilinear = modes[mi] == EvalInterpolation::Trilinear;
+        const bool trilinear = modes[mi].interp == EvalInterpolation::Trilinear;
+        const bool limited = modes[mi].interp == EvalInterpolation::LimitedHermite;
+        const bool oat = modes[mi].oat;
+        // Adaptive grids: plain interpolation of one leaf, and the Oat (GDC 2005) version that keeps using the samples of
+        // finer neighbours: near each face whose neighbour is finer, add (neighbour's value on the face - this leaf's
+        // value there), fading out linearly over one neighbour cell along the face normal.
+        const std::vector<AdaptiveProbeVolume::Probe>* leavesA = adaptive ? &adaptive->getProbes() : nullptr;
+        auto interpLeaf = [&](int leaf, const float3& p, std::vector<float3>& c)
+        {
+            if (trilinear) adaptive->interpolateTrilinear_CPU(leaf, p, c);
+            else adaptive->interpolateHermite_CPU(leaf, p, c, limited);
+        };
+        auto interpAdaptive = [&](int leaf, const float3& p, std::vector<float3>& c)
+        {
+            interpLeaf(leaf, p, c);
+            if (!oat || c.size() < 9) return;
+            const AdaptiveProbeVolume::Probe& L = (*leavesA)[leaf];
+            const float3 size = L.maxPoint - L.minPoint;
+            std::vector<float3> cn, cl;
+            for (int a = 0; a < 3; ++a)
+                for (int side = 0; side < 2; ++side)
+                {
+                    const float face = side ? L.maxPoint[a] : L.minPoint[a];
+                    const float d = std::max(0.0f, side ? L.maxPoint[a] - p[a] : p[a] - L.minPoint[a]);
+                    float3 q = p; q[a] = face;                       // projection onto the face
+                    float3 out = q; out[a] += (side ? 1.0f : -1.0f) * 1e-3f * size[a];
+                    const int nb = adaptive->traverseOctreeCPU(out);
+                    if (nb < 0 || nb == leaf) continue;
+                    const AdaptiveProbeVolume::Probe& Nb = (*leavesA)[nb];
+                    if (Nb.level <= L.level) continue;               // only finer neighbours
+                    const float h = Nb.maxPoint[a] - Nb.minPoint[a];   // the neighbour's cell size across the face
+                    const float w = 1.0f - d / h;
+                    if (w <= 0.0f) continue;
+                    interpLeaf(nb, q, cn);
+                    interpLeaf(leaf, q, cl);
+                    if (cn.size() < c.size() || cl.size() < c.size()) continue;
+                    for (size_t k = 0; k < c.size(); ++k) c[k] += w * (cn[k] - cl[k]);
+                }
+        };
         std::ofstream& summary = summaries[mi];
         std::vector<float> ape(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> absErr(pointCount * N, std::numeric_limits<float>::quiet_NaN());
@@ -705,15 +753,14 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 const int leaf = adaptive->traverseOctreeCPU(p);
                 if (leaf >= 0)
                 {
-                    if (trilinear) adaptive->interpolateTrilinear_CPU(leaf, p, c);
-                    else adaptive->interpolateHermite_CPU(leaf, p, c);
+                    interpAdaptive(leaf, p, c);
                     ok = c.size() >= 9;
                     pointLevel[i] = int8_t(adaptive->getProbes()[leaf].level);
                 }
             }
             else
             {
-                ok = (trilinear ? uniform->fetchTrilinearSH_CPU(p, c) : uniform->fetchHermiteSH_CPU(p, c)) && c.size() >= 9;
+                ok = (trilinear ? uniform->fetchTrilinearSH_CPU(p, c) : uniform->fetchHermiteSH_CPU(p, c, limited)) && c.size() >= 9;
                 pointLevel[i] = int8_t(uniformLevel);
             }
             if (!ok) return;
@@ -733,6 +780,50 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             pointSq[i] = float(sumS / double(N));
             pointRel[i] = float(sumR / double(N));
         });
+
+        // Seam: jump of irradiance luminance (mean over the 14 normals) across faces between leaves of different levels,
+        // at 4 x 4 points per face of each leaf whose neighbour there is finer, just inside and just outside the face.
+        double seamSum = 0.0, seamMax = 0.0; size_t seamCount = 0;
+        if (adaptive)
+        {
+            const auto& P = *leavesA;
+            std::vector<double> lSum(P.size(), 0.0), lMax(P.size(), 0.0);
+            std::vector<uint32_t> lCount(P.size(), 0);
+            parallelFor(P.size(), [&](size_t li)
+            {
+                const AdaptiveProbeVolume::Probe& L = P[li];
+                if (L.children[0] != -1) return;                     // leaves only
+                const float3 size = L.maxPoint - L.minPoint;
+                std::vector<float3> cIn, cOut;
+                for (int a = 0; a < 3; ++a)
+                    for (int side = 0; side < 2; ++side)
+                    {
+                        const int u = (a + 1) % 3, v = (a + 2) % 3;
+                        for (int iu = 0; iu < 4; ++iu)
+                            for (int iv = 0; iv < 4; ++iv)
+                            {
+                                float3 q = L.minPoint;
+                                q[a] = side ? L.maxPoint[a] : L.minPoint[a];
+                                q[u] = L.minPoint[u] + (iu + 0.5f) / 4.0f * size[u];
+                                q[v] = L.minPoint[v] + (iv + 0.5f) / 4.0f * size[v];
+                                const float off = (side ? 1.0f : -1.0f) * 1e-4f * size[a];
+                                float3 out = q; out[a] += off;
+                                float3 inPt = q; inPt[a] -= off;
+                                const int nb = adaptive->traverseOctreeCPU(out);
+                                if (nb < 0 || nb == int(li) || P[nb].level <= L.level) continue;
+                                interpAdaptive(int(li), inPt, cIn);
+                                interpAdaptive(nb, out, cOut);
+                                if (cIn.size() < 9 || cOut.size() < 9) continue;
+                                double jump = 0.0;
+                                for (size_t k = 0; k < N; ++k)
+                                    jump += std::abs(lum709(evaluateIrradiance(normals[k], cIn)) - lum709(evaluateIrradiance(normals[k], cOut)));
+                                jump /= double(N);
+                                lSum[li] += jump; lMax[li] = std::max(lMax[li], jump); ++lCount[li];
+                            }
+                    }
+            });
+            for (size_t li = 0; li < P.size(); ++li) { seamSum += lSum[li]; seamMax = std::max(seamMax, lMax[li]); seamCount += lCount[li]; }
+        }
 
         std::vector<float> valid; valid.reserve(ape.size());
         double sumAbs = 0.0, sumSq = 0.0, sumRef = 0.0; size_t failed = 0;
@@ -774,11 +865,12 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << ","
                 << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << ","
                 << memoryBytes << "," << oCount << "," << oAbs / no << "," << std::sqrt(oSq / no) << "," << oRel / no << ","
-                << oPct / no << "\n";
+                << oPct / no << "," << seamCount << "," << (seamCount ? seamSum / double(seamCount) : 0.0) << "," << seamMax << "\n";
         summary.flush();
         logInfo("[Placement eval] {} ({} probes, {}): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; outside objects RMSE {:.4g}, "
-            "MAE {:.4g}, relMSE {:.4g}; {} points outside the grid; {:.1f}s.", e.method, probes, modeName(modes[mi]),
-            std::sqrt(sumSq / n), sumAbs / n, sumRel / n, std::sqrt(oSq / no), oAbs / no, oRel / no, failed, msSince(t0) / 1000.0);
+            "MAE {:.4g}, relMSE {:.4g}; seam jump mean {:.4g} max {:.4g} ({} face points); {} points outside the grid; {:.1f}s.",
+            e.method, probes, modeName(modes[mi]), std::sqrt(sumSq / n), sumAbs / n, sumRel / n, std::sqrt(oSq / no), oAbs / no,
+            oRel / no, seamCount ? seamSum / double(seamCount) : 0.0, seamMax, seamCount, failed, msSince(t0) / 1000.0);
 
         if (!perPointCsv[mi].empty())
             perPoint[mi].push_back({ e.method, std::move(pointApe), std::move(pointAbs), std::move(pointSq), std::move(pointRel), std::move(pointLevel) });
@@ -806,7 +898,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         logInfo("[Placement eval] Wrote {}.", perPointCsv[mi]);
     }
     for (size_t mi = 0; mi < modes.size(); ++mi)
-        logInfo("[Placement eval] Wrote {} ({} interpolation; absolute path: {}).", summaryCsv[mi], modeName(modes[mi]),
+        logInfo("[Placement eval] Wrote {} ({}; absolute path: {}).", summaryCsv[mi], modeName(modes[mi]),
                 std::filesystem::absolute(summaryCsv[mi]).string());
 }
 

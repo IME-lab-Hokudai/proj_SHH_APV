@@ -306,6 +306,34 @@ namespace
         return h00 * v0 + h10 * s0 + h01 * v1 + h11 * s1;
     }
 
+    // Slope limiter of monotone cubic interpolation (Fritsch & Carlson 1980), used by the placement comparison's
+    // "limited Hermite" evaluation: the slopes (already times the cell size) are set to 0 where they disagree in sign with
+    // the change across the cell (or the change is 0), and scaled down so that (s0/d)^2 + (s1/d)^2 <= 9, which keeps the
+    // cubic within [v0, v1]. Cells whose slopes agree with the change are left unchanged.
+    static float hermite1DLimited_CPU(bool limit, float t, float v0, float s0, float v1, float s1)
+    {
+        if (limit)
+        {
+            const float d = v1 - v0;
+            if (d == 0.0f) { s0 = 0.0f; s1 = 0.0f; }
+            else
+            {
+                if (s0 * d < 0.0f) s0 = 0.0f;
+                if (s1 * d < 0.0f) s1 = 0.0f;
+                const float a = s0 / d, b = s1 / d;
+                const float r2 = a * a + b * b;
+                if (r2 > 9.0f) { const float k = 3.0f / std::sqrt(r2); s0 *= k; s1 *= k; }
+            }
+        }
+        return hermite1D_CPU(t, v0, s0, v1, s1);
+    }
+
+    static float3 hermite1DLimited_CPU(bool limit, float t, float3 v0, float3 s0, float3 v1, float3 s1)
+    {
+        return float3(hermite1DLimited_CPU(limit, t, v0.x, s0.x, v1.x, s1.x), hermite1DLimited_CPU(limit, t, v0.y, s0.y, v1.y, s1.y),
+                      hermite1DLimited_CPU(limit, t, v0.z, s0.z, v1.z, s1.z));
+    }
+
     static float3 hermite1D_CPU(float t, float3 v0, float3 s0, float3 v1, float3 s1)
     {
         return float3(
@@ -413,7 +441,7 @@ bool UniformProbeVolume::fetchTrilinearSH_CPU(float3 posW, std::vector<float3>& 
     return true;
 }
 
-bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const
+bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& outCoeffs, bool limitSlopes) const
 {
     outCoeffs.clear();
     outCoeffs.resize(9, float3(0.0f));
@@ -516,7 +544,7 @@ bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& ou
             int i0 = 2 * i;
             int i1 = 2 * i + 1;
 
-            q[i] = hermite1D_CPU(
+            q[i] = hermite1DLimited_CPU(limitSlopes, 
                 t.z,
                 v[i0],
                 gZ[i0] * mCellSize.z,
@@ -538,7 +566,7 @@ bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& ou
             int i0 = 2 * i;
             int i1 = 2 * i + 1;
 
-            r[i] = hermite1D_CPU(
+            r[i] = hermite1DLimited_CPU(limitSlopes, 
                 t.y,
                 q[i0],
                 q_dY[i0] * mCellSize.y,
@@ -550,7 +578,7 @@ bool UniformProbeVolume::fetchHermiteSH_CPU(float3 posW, std::vector<float3>& ou
         }
 
         // Pass 3: interpolate along X.
-        outCoeffs[band] = hermite1D_CPU(
+        outCoeffs[band] = hermite1DLimited_CPU(limitSlopes, 
             t.x,
             r[0],
             r_dX[0] * mCellSize.x,

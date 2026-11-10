@@ -116,10 +116,27 @@ inline constexpr bool kWritePerPointCsv = true;
 // give the probe value). One summary per entry:
 //   Hermite:   tricubic Hermite with the analytic gradients (the runtime method); <scene>_PlacementComparisonSummary.csv
 //   Trilinear: corner values only, no gradients;  <scene>_PlacementComparisonSummary_Trilinear.csv
+//   LimitedHermite: Hermite with monotone (Fritsch-Carlson) slope limiting, so a cell cannot overshoot the values at
+//              its corners (e.g. next to an emitter, where a probe's slope only holds over its distance to the light);
+//              <scene>_PlacementComparisonSummary_LimitedHermite.csv
 // Trilinear separates placement from the gradients, which leave out the visibility boundary term.
-enum class EvalInterpolation { Hermite, Trilinear };
-inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpolation::Hermite, EvalInterpolation::Trilinear };
-// Per-point file of the trilinear evaluation (<scene>_PlacementComparisonPoints_Trilinear.csv, as large as the Hermite one).
+enum class EvalInterpolation { Hermite, Trilinear, LimitedHermite };
+inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpolation::Hermite, EvalInterpolation::Trilinear,
+                                                                    EvalInterpolation::LimitedHermite };
+// Octree seams. Where a leaf meets a finer leaf, plain interpolation of the coarse leaf ignores the finer probes on the
+// shared face, so the lighting jumps across the face (Oat, "Irradiance Volumes for Games", GDC 2005, slides 42-43).
+//   None: plain interpolation of the leaf containing the point (as before; files without _Oat).
+//   Oat:  the coarse leaf keeps using the finer neighbour's samples (Oat slide 43): near each face whose neighbour is
+//         finer, the difference between the neighbour's value on the face and the leaf's own value there is added,
+//         fading out linearly over one neighbour cell (a thin transition slab). Files get _Oat. Uniform grids are
+//         unchanged. Applied to every interpolation in kEvalInterpolations.
+// The summary also reports the seam: the mean and largest jump of irradiance luminance (14 normals) across faces
+// between leaves of different levels (16 points per face; seam... columns).
+enum class SeamFix { None, Oat };
+inline const std::vector<SeamFix> kEvalSeamFixes = { SeamFix::Oat };
+
+// Per-point files of the other interpolations (<scene>_PlacementComparisonPoints_<mode>.csv, each as large as the
+// Hermite one, about 400 MB for SceneForData).
 inline constexpr bool kWritePerPointCsvTrilinear = true;
 
 inline constexpr uint32_t kEvalResolution = 64;   // uniform lattice of cell centres per axis

@@ -385,7 +385,8 @@ public:
 
     void startBuild(const ref<Scene>& pScene, float errorThreshold, bool useRelativeError = false);
     void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, std::vector<GradSHCoeff>& outGrads);
-    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs) const;
+    // limitSlopes: monotone (Fritsch-Carlson) slope limiting per axis pass; placement comparison only.
+    void interpolateHermite_CPU(int coarseProbeIdx, float3 pos, std::vector<float3>& outCoeffs, bool limitSlopes = false) const;
     // Trilinear interpolation of the leaf's 8 corner SH coefficients (gradients unused); placement comparison only.
     void interpolateTrilinear_CPU(int leafIdx, float3 pos, std::vector<float3>& outCoeffs) const;
     int getProbeLevelCPU(int probeIdx) const
