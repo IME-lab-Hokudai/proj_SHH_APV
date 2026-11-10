@@ -631,7 +631,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     const std::string kSummaryHeader =
         "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
         "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
-        "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut,seamSamples,seamMeanJump,seamMaxJump";
+        "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut,seamSamples,seamMeanJump,seamMaxJump,seamFix";
 
     // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
     // the cell the point falls in (uniform grids: log2 of the cells per axis). Lets the error be split by region,
@@ -765,7 +765,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
             << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
             << "0,0,0,0,0,0," << sumRef / double(std::max<size_t>(1, samplesRef)) << ",0,0,0,0,0,0,"
-            << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << ",0,0,0,0,0,0,0,0\n";
+            << AdaptiveProbeVolume::kRuntimeProbeBytes * uint64_t(d.x) * d.y * d.z << ",0,0,0,0,0,0,0,0,none\n";
         for (auto& summary : summaries) { summary << row.str(); summary.flush(); }
     }
 
@@ -852,32 +852,144 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             if (trilinear) adaptive->interpolateTrilinear_CPU(leaf, p, c);
             else adaptive->interpolateHermite_CPU(leaf, p, c, limited);
         };
+        // Seam handling (Oat, GDC 2005: keep using the samples of finer neighbours), made exact: in a lattice cell of the
+        // finest level that touches a finer leaf, the point is interpolated on that lattice cell, whose 8 nodes take their
+        // value (and, for Hermite, gradient) from the smallest leaf touching each node. Neighbouring lattice cells share
+        // their nodes, so every face between leaves is continuous (exactly for trilinear; for Hermite, up to the small
+        // difference between a leaf's Hermite and the lattice Hermite where a lattice cell meets a plain one). Lattice
+        // cells whose 8 nodes all belong to the leaf itself keep the leaf's own interpolation, so leaves without finer
+        // neighbours are unchanged.
+        const int latticeLevel = adaptive ? adaptive->getMaxLevel() : 0;
+        float3 volMin(std::numeric_limits<float>::max());
+        if (adaptive)
+            for (const auto& q : *leavesA)
+                volMin = float3(std::min(volMin.x, q.minPoint.x), std::min(volMin.y, q.minPoint.y), std::min(volMin.z, q.minPoint.z));
+        const float3 lcell = adaptive ? adaptive->getVolumeExtent() / float(1 << latticeLevel) : float3(1.0f);
+        auto smallestLeafAt = [&](const float3& x) -> int
+        {
+            // The leaves whose closure contains x: one just off x in each of the 8 diagonal directions; keep the finest.
+            int best = -1, bestLevel = -1;
+            for (int k = 0; k < 8; ++k)
+            {
+                const float3 o = x + float3((k & 4) ? 1.0f : -1.0f, (k & 2) ? 1.0f : -1.0f, (k & 1) ? 1.0f : -1.0f) * (1e-3f * lcell);
+                const int nb = adaptive->traverseOctreeCPU(o);
+                if (nb >= 0 && (*leavesA)[nb].level > bestLevel) { best = nb; bestLevel = (*leavesA)[nb].level; }
+            }
+            return best;
+        };
+        // Leaf gradients at x (world axes, per band, RGB): trilinear blend of the leaf's 8 corner gradients.
+        auto leafGradients = [&](int leaf, const float3& x, std::vector<float3>& gx, std::vector<float3>& gy, std::vector<float3>& gz)
+        {
+            const AdaptiveProbeVolume::Probe& L = (*leavesA)[leaf];
+            float3 t = (x - L.minPoint) / (L.maxPoint - L.minPoint);
+            t = float3(std::clamp(t.x, 0.0f, 1.0f), std::clamp(t.y, 0.0f, 1.0f), std::clamp(t.z, 0.0f, 1.0f));
+            gx.assign(9, float3(0.0f)); gy.assign(9, float3(0.0f)); gz.assign(9, float3(0.0f));
+            for (int k = 0; k < 8; ++k)
+            {
+                const auto& c = adaptive->getCorner(size_t(L.corners[k]));
+                const float w = (((k >> 2) & 1) ? t.x : 1.0f - t.x) * (((k >> 1) & 1) ? t.y : 1.0f - t.y) * ((k & 1) ? t.z : 1.0f - t.z);
+                for (size_t band = 0; band < 9 && band < c.shGradients.size(); ++band)
+                {
+                    // Stored gradient convention: .x = world Z, .y = world X, .z = world Y.
+                    const auto& g = c.shGradients[band];
+                    gx[band] += w * float3(g.r.y, g.g.y, g.b.y);
+                    gy[band] += w * float3(g.r.z, g.g.z, g.b.z);
+                    gz[band] += w * float3(g.r.x, g.g.x, g.b.x);
+                }
+            }
+        };
+        auto hermite1 = [&](float t, float v0, float s0, float v1, float s1) -> float
+        {
+            if (limited) // Fritsch-Carlson, as in AdaptiveProbeVolume::interpolateHermite_CPU
+            {
+                const float d = v1 - v0;
+                if (d == 0.0f) { s0 = 0.0f; s1 = 0.0f; }
+                else
+                {
+                    if (s0 * d < 0.0f) s0 = 0.0f;
+                    if (s1 * d < 0.0f) s1 = 0.0f;
+                    const float a = s0 / d, b = s1 / d, r2 = a * a + b * b;
+                    if (r2 > 9.0f) { const float k = 3.0f / std::sqrt(r2); s0 *= k; s1 *= k; }
+                }
+            }
+            const float t2 = t * t, t3 = t2 * t;
+            return (2.0f * t3 - 3.0f * t2 + 1.0f) * v0 + (t3 - 2.0f * t2 + t) * s0 + (-2.0f * t3 + 3.0f * t2) * v1 + (t3 - t2) * s1;
+        };
+        auto hermite3 = [&](float t, const float3& v0, const float3& s0, const float3& v1, const float3& s1)
+        {
+            return float3(hermite1(t, v0.x, s0.x, v1.x, s1.x), hermite1(t, v0.y, s0.y, v1.y, s1.y), hermite1(t, v0.z, s0.z, v1.z, s1.z));
+        };
         auto interpAdaptive = [&](int leaf, const float3& p, std::vector<float3>& c)
         {
-            interpLeaf(leaf, p, c);
-            if (!oat || c.size() < 9) return;
+            if (!oat) { interpLeaf(leaf, p, c); return; }
             const AdaptiveProbeVolume::Probe& L = (*leavesA)[leaf];
-            const float3 size = L.maxPoint - L.minPoint;
-            std::vector<float3> cn, cl;
+            // The lattice cell containing p, kept inside the leaf.
+            int lo[3], n[3], ci[3];
             for (int a = 0; a < 3; ++a)
-                for (int side = 0; side < 2; ++side)
+            {
+                lo[a] = int(std::lround((L.minPoint[a] - volMin[a]) / lcell[a]));
+                n[a] = std::max(1, int(std::lround((L.maxPoint[a] - L.minPoint[a]) / lcell[a])));
+                ci[a] = std::clamp(int(std::floor((p[a] - volMin[a]) / lcell[a])), lo[a], lo[a] + n[a] - 1);
+            }
+            int nodeLeaf[8];
+            float3 nodePos[8];
+            bool transition = false;
+            for (int k = 0; k < 8; ++k)
+            {
+                const int b[3] = { (k >> 2) & 1, (k >> 1) & 1, k & 1 };
+                bool interior = true;
+                for (int a = 0; a < 3; ++a)
                 {
-                    const float face = side ? L.maxPoint[a] : L.minPoint[a];
-                    const float d = std::max(0.0f, side ? L.maxPoint[a] - p[a] : p[a] - L.minPoint[a]);
-                    float3 q = p; q[a] = face;                       // projection onto the face
-                    float3 out = q; out[a] += (side ? 1.0f : -1.0f) * 1e-3f * size[a];
-                    const int nb = adaptive->traverseOctreeCPU(out);
-                    if (nb < 0 || nb == leaf) continue;
-                    const AdaptiveProbeVolume::Probe& Nb = (*leavesA)[nb];
-                    if (Nb.level <= L.level) continue;               // only finer neighbours
-                    const float h = Nb.maxPoint[a] - Nb.minPoint[a];   // the neighbour's cell size across the face
-                    const float w = 1.0f - d / h;
-                    if (w <= 0.0f) continue;
-                    interpLeaf(nb, q, cn);
-                    interpLeaf(leaf, q, cl);
-                    if (cn.size() < c.size() || cl.size() < c.size()) continue;
-                    for (size_t k = 0; k < c.size(); ++k) c[k] += w * (cn[k] - cl[k]);
+                    const int g = ci[a] + b[a];
+                    nodePos[k][a] = volMin[a] + float(g) * lcell[a];
+                    if (g <= lo[a] || g >= lo[a] + n[a]) interior = false;
                 }
+                nodeLeaf[k] = interior ? leaf : smallestLeafAt(nodePos[k]);
+                if (nodeLeaf[k] < 0) nodeLeaf[k] = leaf;
+                transition = transition || nodeLeaf[k] != leaf;
+            }
+            if (!transition) { interpLeaf(leaf, p, c); return; }
+            // Node data from the smallest leaf at each node.
+            std::vector<float3> nv[8], ngx[8], ngy[8], ngz[8];
+            for (int k = 0; k < 8; ++k)
+            {
+                interpLeaf(nodeLeaf[k], nodePos[k], nv[k]);
+                if (nv[k].size() < 9) { interpLeaf(leaf, p, c); return; }
+                if (!trilinear) leafGradients(nodeLeaf[k], nodePos[k], ngx[k], ngy[k], ngz[k]);
+            }
+            const float3 cellMin = nodePos[0];
+            float3 t = (p - cellMin) / lcell;
+            t = float3(std::clamp(t.x, 0.0f, 1.0f), std::clamp(t.y, 0.0f, 1.0f), std::clamp(t.z, 0.0f, 1.0f));
+            c.assign(9, float3(0.0f));
+            for (int band = 0; band < 9; ++band)
+            {
+                if (trilinear)
+                {
+                    for (int k = 0; k < 8; ++k)
+                    {
+                        const float w = (((k >> 2) & 1) ? t.x : 1.0f - t.x) * (((k >> 1) & 1) ? t.y : 1.0f - t.y) * ((k & 1) ? t.z : 1.0f - t.z);
+                        c[band] += w * nv[k][band];
+                    }
+                    continue;
+                }
+                // Same progressive tricubic Hermite as interpolateHermite_CPU (z, then y, then x; transverse gradients lerped).
+                float3 q[4], qdx[4], qdy[4];
+                for (int i = 0; i < 4; ++i)
+                {
+                    const int i0 = 2 * i, i1 = 2 * i + 1;
+                    q[i] = hermite3(t.z, nv[i0][band], ngz[i0][band] * lcell.z, nv[i1][band], ngz[i1][band] * lcell.z);
+                    qdx[i] = ngx[i0][band] + (ngx[i1][band] - ngx[i0][band]) * t.z;
+                    qdy[i] = ngy[i0][band] + (ngy[i1][band] - ngy[i0][band]) * t.z;
+                }
+                float3 r[2], rdx[2];
+                for (int i = 0; i < 2; ++i)
+                {
+                    const int i0 = 2 * i, i1 = 2 * i + 1;
+                    r[i] = hermite3(t.y, q[i0], qdy[i0] * lcell.y, q[i1], qdy[i1] * lcell.y);
+                    rdx[i] = qdx[i0] + (qdx[i1] - qdx[i0]) * t.y;
+                }
+                c[band] = hermite3(t.x, r[0], rdx[0] * lcell.x, r[1], rdx[1] * lcell.x);
+            }
         };
         std::ofstream& summary = summaries[mi];
         std::vector<float> ape(pointCount * N, std::numeric_limits<float>::quiet_NaN());
@@ -926,8 +1038,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             pointRel[i] = float(sumR / double(N));
         });
 
-        // Seam: jump of irradiance luminance (mean over the 14 normals) across faces between leaves of different levels,
-        // at 4 x 4 points per face of each leaf whose neighbour there is finer, just inside and just outside the face.
+        // Seam: jump of irradiance luminance (mean over the 14 normals) across faces between leaves, at 4 x 4 points per
+        // face of each leaf whose neighbour there is finer or of the same level, just inside and just outside the face.
         double seamSum = 0.0, seamMax = 0.0; size_t seamCount = 0;
         if (adaptive)
         {
@@ -955,7 +1067,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                                 float3 out = q; out[a] += off;
                                 float3 inPt = q; inPt[a] -= off;
                                 const int nb = adaptive->traverseOctreeCPU(out);
-                                if (nb < 0 || nb == int(li) || P[nb].level <= L.level) continue;
+                                if (nb < 0 || nb == int(li) || P[nb].level < L.level) continue; // finer and equal-level neighbours
                                 interpAdaptive(int(li), inPt, cIn);
                                 interpAdaptive(nb, out, cOut);
                                 if (cIn.size() < 9 || cOut.size() < 9) continue;
@@ -1010,7 +1122,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 << percentileSorted(valid, 99) << "," << sumAbs / n << "," << std::sqrt(sumSq / n) << "," << sumRef / n << "," << sumRel / n << ","
                 << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << ","
                 << memoryBytes << "," << oCount << "," << oAbs / no << "," << std::sqrt(oSq / no) << "," << oRel / no << ","
-                << oPct / no << "," << seamCount << "," << (seamCount ? seamSum / double(seamCount) : 0.0) << "," << seamMax << "\n";
+                << oPct / no << "," << seamCount << "," << (seamCount ? seamSum / double(seamCount) : 0.0) << "," << seamMax << ","
+                << (oat && adaptive ? "lattice" : "none") << "\n";
         summary.flush();
         logInfo("[Placement eval] {} ({} probes, {}): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; outside objects RMSE {:.4g}, "
             "MAE {:.4g}, relMSE {:.4g}; seam jump mean {:.4g} max {:.4g} ({} face points); {} points outside the grid; {:.1f}s.",

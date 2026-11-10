@@ -131,12 +131,15 @@ inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpol
 // Octree seams. Where a leaf meets a finer leaf, plain interpolation of the coarse leaf ignores the finer probes on the
 // shared face, so the lighting jumps across the face (Oat, "Irradiance Volumes for Games", GDC 2005, slides 42-43).
 //   None: plain interpolation of the leaf containing the point (as before; files without _Oat).
-//   Oat:  the coarse leaf keeps using the finer neighbour's samples (Oat slide 43): near each face whose neighbour is
-//         finer, the difference between the neighbour's value on the face and the leaf's own value there is added,
-//         fading out linearly over one neighbour cell (a thin transition slab). Files get _Oat. Uniform grids are
-//         unchanged. Applied to every interpolation in kEvalInterpolations.
-// The summary also reports the seam: the mean and largest jump of irradiance luminance (14 normals) across faces
-// between leaves of different levels (16 points per face; seam... columns).
+//   Oat:  Oat's principle (slide 43: keep using the samples of finer neighbours), made exact: in a lattice cell of the
+//         finest level that touches a finer leaf, the point is interpolated on that lattice cell, whose 8 nodes take
+//         their value (and, for Hermite, gradient) from the smallest leaf touching each node. Neighbouring lattice cells
+//         share their nodes, so faces between leaves are continuous (exactly for trilinear; for Hermite up to a small
+//         residual where a lattice cell meets the leaf's own interpolation). Lattice cells whose nodes all belong to the
+//         leaf keep the leaf's own interpolation. Files get _Oat; uniform grids are unchanged. Applied to every
+//         interpolation in kEvalInterpolations.
+// The summary reports the seam: the mean and largest jump of irradiance luminance (14 normals) across faces between
+// leaves of the same or different levels (16 points per face; seam... columns), and which seam handling was used.
 enum class SeamFix { None, Oat };
 inline const std::vector<SeamFix> kEvalSeamFixes = { SeamFix::Oat };
 
