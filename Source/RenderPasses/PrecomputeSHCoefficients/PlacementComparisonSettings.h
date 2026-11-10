@@ -89,11 +89,12 @@ struct SceneSetup
     uint32_t referenceResolution;
 };
 inline const std::vector<SceneSetup> kSceneSetups = {
-    // Bistro interior: a 6.5 x 5.35 x 6.5 m part of the dining area, floor to ceiling (pendant lamps and both ceiling
-    // fans inside), centred on the cube region of the earlier sphere-loop demo (centre x 9.52, z -1.08). Near-cubic, so
+    // Bistro interior (scene turned to the axes in the pyscene, rotationYDeg about (9.52, 0, -1.08)): a 6.5 x 5.35 x 6.5 m
+    // part of the dining area, floor to ceiling (pendant lamps and both ceiling fans inside), centred at x 9.52,
+    // z 0.42: the sphere-loop demo cube's centre moved 1.5 m in +z, off the bar counter (-z) onto the tables. Near-cubic, so
     // the cells are near-cubic too (U64: about 10 x 8.4 x 10 cm, close to SceneForData's 7.7 cm). The larger TC region
     // (3.5, 0.65, -6.5)-(16, 5, 3) gave cells 2.3x longer in x than in y, coarser than the lighting detail.
-    { "BistroInterior_Wine", true, float3(6.27f, 0.65f, -4.33f), float3(12.77f, 6.0f, 2.17f), 128 },
+    { "BistroInterior_Wine", true, float3(6.27f, 0.65f, -2.83f), float3(12.77f, 6.0f, 3.67f), 128 },
 };
 inline const SceneSetup* findSceneSetup(const std::string& scene)
 {

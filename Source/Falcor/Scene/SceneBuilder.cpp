@@ -41,6 +41,7 @@
 #include <mikktspace.h>
 #include <filesystem>
 #include <cmath>
+#include <cstdio>
 #include <execution>
 
 namespace Falcor
@@ -283,6 +284,25 @@ namespace Falcor
         mSceneData.importPaths.push_back(resolvedPath);
         mSceneData.importDicts.push_back(materialToShortName);
 
+        // Optional rotation of the imported scene about the vertical axis (pyscene dict keys, removed before the
+        // importer sees the dict):
+        //   "rotationYDeg":  angle in degrees, or "auto" = turn the scene so its walls line up with the x and z axes.
+        //   "rotationPivot": "x,y,z" point the scene turns about (default: origin).
+        // Used so axis-aligned probe grids line up with a room that was modelled at an angle.
+        std::string rotationY, rotationPivot;
+        if (auto it = materialToShortName.find("rotationYDeg"); it != materialToShortName.end())
+        {
+            rotationY = it->second;
+            materialToShortName.erase(it);
+        }
+        if (auto it = materialToShortName.find("rotationPivot"); it != materialToShortName.end())
+        {
+            rotationPivot = it->second;
+            materialToShortName.erase(it);
+        }
+        const uint32_t nodeCountBefore = (uint32_t)mSceneGraph.size();
+        const uint32_t meshCountBefore = (uint32_t)mMeshes.size();
+
         if (auto importer = Importer::create(getExtensionFromPath(resolvedPath)))
         {
             importer->importScene(resolvedPath, *this, materialToShortName);
@@ -291,6 +311,108 @@ namespace Falcor
         {
             throw ImporterError(resolvedPath, "Unknown file extension.");
         }
+
+        if (!rotationY.empty())
+            rotateImportedScene(rotationY, rotationPivot, nodeCountBefore, meshCountBefore);
+    }
+
+    void SceneBuilder::rotateImportedScene(const std::string& rotationY, const std::string& pivotText, uint32_t firstNode, uint32_t firstMesh)
+    {
+        auto worldTransform = [&](NodeID nodeID)
+        {
+            float4x4 m = float4x4::identity();
+            while (nodeID != NodeID::Invalid())
+            {
+                m = mul(mSceneGraph[nodeID.get()].transform, m);
+                nodeID = mSceneGraph[nodeID.get()].parent;
+            }
+            return m;
+        };
+
+        double angleDeg = 0.0;
+        if (rotationY == "auto")
+        {
+            // Dominant wall direction: over every near-vertical triangle of the imported meshes (|n.y| < 0.1, in world
+            // space), the area-weighted mean of 4*theta, theta = atan2(n.z, n.x), gives the wall orientation modulo 90
+            // degrees (walls facing x, -x, z and -z all count the same). Small curved objects spread over all angles
+            // and mostly cancel; the room's walls, floor trims and furniture faces dominate.
+            double c4 = 0.0, s4 = 0.0, wallArea = 0.0;
+            for (uint32_t meshIdx = firstMesh; meshIdx < (uint32_t)mMeshes.size(); ++meshIdx)
+            {
+                const MeshSpec& mesh = mMeshes[meshIdx];
+                if (mesh.topology != Vao::Topology::TriangleList || mesh.staticData.empty()) continue;
+                const uint32_t triCount = mesh.getTriangleCount();
+                for (NodeID nodeID : mesh.instances)
+                {
+                    const float4x4 m = worldTransform(nodeID);
+                    for (uint32_t t = 0; t < triCount; ++t)
+                    {
+                        uint32_t idx[3];
+                        for (uint32_t k = 0; k < 3; ++k)
+                            idx[k] = mesh.indexCount > 0 ? mesh.getIndex(3 * size_t(t) + k) : 3 * t + k;
+                        if (idx[0] >= mesh.staticData.size() || idx[1] >= mesh.staticData.size() || idx[2] >= mesh.staticData.size()) continue;
+                        const float3 p0 = transformPoint(m, mesh.staticData[idx[0]].position);
+                        const float3 p1 = transformPoint(m, mesh.staticData[idx[1]].position);
+                        const float3 p2 = transformPoint(m, mesh.staticData[idx[2]].position);
+                        const float3 c = cross(p1 - p0, p2 - p0);
+                        const double len = length(c);
+                        if (!(len > 1e-12)) continue;
+                        if (std::abs(c.y) > 0.1 * len) continue; // not a vertical face
+                        const double area = 0.5 * len;
+                        const double theta = std::atan2(double(c.z), double(c.x));
+                        c4 += area * std::cos(4.0 * theta);
+                        s4 += area * std::sin(4.0 * theta);
+                        wallArea += area;
+                    }
+                }
+            }
+            if (wallArea <= 0.0)
+            {
+                logWarning("SceneBuilder: rotationYDeg = auto found no vertical faces; the scene is not rotated.");
+                return;
+            }
+            const double wallAngleDeg = std::atan2(s4, c4) / 4.0 * 180.0 / 3.14159265358979323846; // in (-45, 45]
+            const double strength = std::sqrt(c4 * c4 + s4 * s4) / wallArea;   // 1 = all vertical faces at one angle (mod 90)
+            angleDeg = wallAngleDeg;
+            logInfo("SceneBuilder: walls of the imported scene are at {:.3f} deg from the x/z axes (agreement {:.2f} over {:.1f} m^2 of vertical faces); "
+                    "turning the scene by -{:.3f} deg about y. Put rotationYDeg = \"{:.3f}\" in the pyscene to fix this angle.",
+                    wallAngleDeg, strength, wallArea, wallAngleDeg, wallAngleDeg);
+        }
+        else
+        {
+            try { angleDeg = std::stod(rotationY); }
+            catch (...) { FALCOR_THROW("SceneBuilder: rotationYDeg must be a number or \"auto\", got '{}'.", rotationY); }
+            logInfo("SceneBuilder: turning the imported scene by -{:.3f} deg about y.", angleDeg);
+        }
+        if (angleDeg == 0.0) return;
+
+        float3 pivot(0.f);
+        if (!pivotText.empty())
+        {
+            float x = 0.f, y = 0.f, z = 0.f;
+            if (std::sscanf(pivotText.c_str(), "%f,%f,%f", &x, &y, &z) != 3)
+                FALCOR_THROW("SceneBuilder: rotationPivot must be \"x,y,z\", got '{}'.", pivotText);
+            pivot = float3(x, y, z);
+        }
+
+        // Rotation that takes a wall direction at angleDeg to the x axis: x' = x cos + z sin, z' = -x sin + z cos,
+        // about the pivot (p' = R (p - pivot) + pivot). Applied to every root node of this import.
+        const float a = float(angleDeg * 3.14159265358979323846 / 180.0), ca = std::cos(a), sa = std::sin(a);
+        float4x4 r = float4x4::identity();
+        r[0] = float4(ca, 0.f, sa, 0.f);
+        r[1] = float4(0.f, 1.f, 0.f, 0.f);
+        r[2] = float4(-sa, 0.f, ca, 0.f);
+        const float3 t = pivot - transformVector(float3x3(r), pivot);
+        r[0].w = t.x; r[1].w = t.y; r[2].w = t.z;
+
+        uint32_t roots = 0;
+        for (uint32_t i = firstNode; i < (uint32_t)mSceneGraph.size(); ++i)
+        {
+            if (mSceneGraph[i].parent != NodeID::Invalid()) continue;
+            mSceneGraph[i].transform = mul(r, mSceneGraph[i].transform);
+            ++roots;
+        }
+        logInfo("SceneBuilder: rotation applied to {} root node(s), pivot ({:.3f}, {:.3f}, {:.3f}).", roots, pivot.x, pivot.y, pivot.z);
     }
 
     void SceneBuilder::importFromMemory(const void* buffer, size_t byteSize, std::string_view extension, const pybind11::dict& dict)

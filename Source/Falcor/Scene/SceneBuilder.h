@@ -778,6 +778,9 @@ namespace Falcor
         SceneCache::Key mSceneCacheKey;
         bool mWriteSceneCache = false;  ///< True if scene cache should be written after import.
 
+        /** Turn the nodes of the last import about y (pyscene dict keys rotationYDeg / rotationPivot), see import(). */
+        void rotateImportedScene(const std::string& rotationY, const std::string& pivot, uint32_t firstNode, uint32_t firstMesh);
+
         SceneGraph mSceneGraph;
 
         MeshList mMeshes;
