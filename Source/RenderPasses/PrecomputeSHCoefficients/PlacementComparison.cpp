@@ -20,13 +20,17 @@
 #include "BuildTiming.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <cstdlib>
 #include <limits>
+#include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -624,6 +628,128 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
 
     // Summary columns: all points, points away from geometry (...Away: kNearSurfaceCells), and points outside objects
     // (...Out: every point not inside an object; all points without the mask), the set used in the paper.
+    const std::string kSummaryHeader =
+        "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
+        "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
+        "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut,seamSamples,seamMeanJump,seamMaxJump";
+
+    // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
+    // the cell the point falls in (uniform grids: log2 of the cells per axis). Lets the error be split by region,
+    // e.g. where an adaptive grid is coarser or finer than the uniform grid with the same probe count.
+    // relMSE per sample = (E - E_ref)^2 / max(|E_ref|, eps)^2, the squared form of the percentage error / 100.
+    struct PointColumns { std::string name; std::vector<float> pct, abs, sq, rel; std::vector<int8_t> level; };
+
+    // Results of the previous run that can be kept (kEvalSkipEvaluated), per interpolation: a grid is kept when its row
+    // is in the existing summary (same columns), neither its file nor the reference is newer than that summary, and
+    // (when per-point output is on) its columns are in the existing per-point file. Read before the files are rewritten.
+    std::vector<std::map<std::string, std::string>> keptRows(modes.size());
+    std::vector<std::map<std::string, PointColumns>> keptPoints(modes.size());
+    if (kEvalSkipEvaluated)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        for (size_t mi = 0; mi < modes.size(); ++mi)
+        {
+            if (!fs::exists(summaryCsv[mi])) continue;
+            const auto summaryTime = fs::last_write_time(summaryCsv[mi], ec);
+            if (ec) continue;
+            if (fs::last_write_time(refIt->file, ec) > summaryTime) continue; // reference rebuilt: evaluate everything
+            std::ifstream in(summaryCsv[mi]);
+            std::string line;
+            if (!std::getline(in, line)) continue;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line != kSummaryHeader) continue;                             // older column layout
+            std::map<std::string, std::string> rows;
+            while (std::getline(in, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                const size_t c1 = line.find(','), c2 = line.find(',', c1 + 1), c3 = line.find(',', c2 + 1);
+                if (c3 == std::string::npos) continue;
+                const std::string method = line.substr(0, c1), type = line.substr(c1 + 1, c2 - c1 - 1), file = line.substr(c2 + 1, c3 - c2 - 1);
+                if (type == "reference") continue;
+                const bool listed = std::any_of(entries.begin(), entries.end(),
+                                                [&](const Entry& e) { return e.method == method && e.file == file && e.type == type; });
+                if (!listed || !fs::exists(file) || fs::last_write_time(file, ec) > summaryTime) continue;
+                rows[method] = line;
+            }
+            // Per-point columns of those grids, from the existing per-point file of this interpolation.
+            if (!perPointCsv[mi].empty() && !rows.empty())
+            {
+                std::ifstream pin(perPointCsv[mi]);
+                std::map<std::string, std::array<int, 5>> colOf;  // method -> column of _pct, _abs, _sq, _rel, _lvl
+                int ixCol = -1, iyCol = -1, izCol = -1, nCols = 0;
+                if (pin && std::getline(pin, line))
+                {
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    std::vector<std::string> head;
+                    std::stringstream hs(line);
+                    for (std::string h; std::getline(hs, h, ',');) head.push_back(h);
+                    nCols = int(head.size());
+                    std::map<std::string, int> idx;
+                    for (int c = 0; c < nCols; ++c) idx[head[c]] = c;
+                    ixCol = idx.count("ix") ? idx["ix"] : -1; iyCol = idx.count("iy") ? idx["iy"] : -1; izCol = idx.count("iz") ? idx["iz"] : -1;
+                    for (const auto& [method, row] : rows)
+                    {
+                        const char* suffix[5] = { "_pct", "_abs", "_sq", "_rel", "_lvl" };
+                        std::array<int, 5> cols{};
+                        bool all = true;
+                        for (int k = 0; k < 5; ++k)
+                        {
+                            const auto it = idx.find(method + suffix[k]);
+                            if (it == idx.end()) { all = false; break; }
+                            cols[k] = it->second;
+                        }
+                        if (all) colOf[method] = cols;
+                    }
+                }
+                if (ixCol >= 0 && iyCol >= 0 && izCol >= 0 && !colOf.empty())
+                {
+                    for (const auto& [method, cols] : colOf)
+                    {
+                        PointColumns pc;
+                        pc.name = method;
+                        pc.pct.assign(pointCount, std::numeric_limits<float>::quiet_NaN());
+                        pc.abs = pc.pct; pc.sq = pc.pct; pc.rel = pc.pct;
+                        pc.level.assign(pointCount, int8_t(-1));
+                        keptPoints[mi].emplace(method, std::move(pc));
+                    }
+                    std::vector<const char*> field(nCols);
+                    size_t rowsRead = 0;
+                    while (std::getline(pin, line))
+                    {
+                        int c = 0;
+                        field[c++] = line.c_str();
+                        for (size_t k = 0; k < line.size() && c < nCols; ++k)
+                            if (line[k] == ',') field[c++] = line.c_str() + k + 1;
+                        if (c < nCols) continue;
+                        const long ix = std::strtol(field[ixCol], nullptr, 10), iy = std::strtol(field[iyCol], nullptr, 10),
+                                   iz = std::strtol(field[izCol], nullptr, 10);
+                        if (ix < 0 || iy < 0 || iz < 0 || ix >= long(R) || iy >= long(R) || iz >= long(R)) continue;
+                        const size_t i = (size_t(iz) * R + size_t(iy)) * R + size_t(ix);
+                        for (const auto& [method, cols] : colOf)
+                        {
+                            PointColumns& pc = keptPoints[mi][method];
+                            pc.pct[i] = std::strtof(field[cols[0]], nullptr);
+                            pc.abs[i] = std::strtof(field[cols[1]], nullptr);
+                            pc.sq[i] = std::strtof(field[cols[2]], nullptr);
+                            pc.rel[i] = std::strtof(field[cols[3]], nullptr);
+                            pc.level[i] = int8_t(std::strtol(field[cols[4]], nullptr, 10));
+                        }
+                        ++rowsRead;
+                    }
+                    size_t validPoints = 0;
+                    for (size_t i = 0; i < pointCount; ++i) validPoints += refValid[i];
+                    if (rowsRead != validPoints) keptPoints[mi].clear();   // different point set: evaluate again
+                }
+                // Keep only grids whose per-point columns were read.
+                for (auto it = rows.begin(); it != rows.end();)
+                    it = keptPoints[mi].count(it->first) ? std::next(it) : rows.erase(it);
+            }
+            keptRows[mi] = std::move(rows);
+            logInfo("[Placement eval] {}: {} grids kept from the previous run.", summaryCsv[mi], keptRows[mi].size());
+        }
+    }
+
     std::vector<std::ofstream> summaries;
     for (const std::string& f : summaryCsv) summaries.emplace_back(f);
     {
@@ -634,9 +760,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             if (refValid[i])
                 for (size_t k = 0; k < N; ++k) { sumRef += refLum[i * N + k]; ++samplesRef; }
         std::ostringstream row;
-        row << "method,type,file,probes,leaves,deepestLevel,buildTimeMs,samples,failedPoints,"
-               "meanPctErr,p50PctErr,p95PctErr,p99PctErr,mae,rmse,meanRefLum,relMSE,samplesAway,maeAway,rmseAway,relMSEAway,meanRefLumAway,"
-               "memoryBytes,samplesOut,maeOut,rmseOut,relMSEOut,meanPctErrOut,seamSamples,seamMeanJump,seamMaxJump\n";
+        row << kSummaryHeader << "\n";
         row << refIt->method << ",reference," << refIt->file << "," << uint64_t(d.x) * d.y * d.z << ","
             << uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1) << ",-1," << std::fixed << std::setprecision(1)
             << reference->getBuildTimeMs() << "," << samplesRef << ",0," << std::setprecision(6)
@@ -645,11 +769,6 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         for (auto& summary : summaries) { summary << row.str(); summary.flush(); }
     }
 
-    // Per point and grid (normal-averaged): percentage error, absolute error, squared error, and the octree level of
-    // the cell the point falls in (uniform grids: log2 of the cells per axis). Lets the error be split by region,
-    // e.g. where an adaptive grid is coarser or finer than the uniform grid with the same probe count.
-    // relMSE per sample = (E - E_ref)^2 / max(|E_ref|, eps)^2, the squared form of the percentage error / 100.
-    struct PointColumns { std::string name; std::vector<float> pct, abs, sq, rel; std::vector<int8_t> level; };
     std::vector<std::vector<PointColumns>> perPoint(modes.size());
 
     for (const Entry& e : entries)
@@ -658,6 +777,30 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         if (!std::filesystem::exists(e.file))
         {
             logWarning("[Placement eval] {}: file {} not found; skipped.", e.method, e.file);
+            continue;
+        }
+        // Interpolations whose previous result for this grid is kept (kEvalSkipEvaluated).
+        std::vector<bool> keep(modes.size(), false);
+        bool keepAll = true;
+        for (size_t mi = 0; mi < modes.size(); ++mi)
+        {
+            keep[mi] = keptRows[mi].count(e.method) > 0;
+            keepAll = keepAll && keep[mi];
+        }
+        auto writeKept = [&](size_t mi)
+        {
+            summaries[mi] << keptRows[mi][e.method] << "\n";
+            summaries[mi].flush();
+            if (!perPointCsv[mi].empty())
+            {
+                auto it = keptPoints[mi].find(e.method);
+                if (it != keptPoints[mi].end()) perPoint[mi].push_back(std::move(it->second));
+            }
+        };
+        if (keepAll)
+        {
+            for (size_t mi = 0; mi < modes.size(); ++mi) writeKept(mi);
+            logInfo("[Placement eval] {}: kept from the previous run.", e.method);
             continue;
         }
         const auto t0 = Clock::now();
@@ -696,6 +839,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         }
         for (size_t mi = 0; mi < modes.size(); ++mi)
         {
+        if (keep[mi]) { writeKept(mi); continue; }
         const bool trilinear = modes[mi].interp == EvalInterpolation::Trilinear;
         const bool limited = modes[mi].interp == EvalInterpolation::LimitedHermite;
         const bool oat = modes[mi].oat;

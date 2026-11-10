@@ -111,6 +111,11 @@ inline const SceneSetup* findSceneSetup(const std::string& scene)
 //   <scene>_PlacementComparisonSummary.csv   output: one row per grid
 //   <scene>_PlacementComparisonPoints.csv    output: error per point and grid (if kWritePerPointCsv)
 inline constexpr bool kWritePerPointCsv = true;
+// Keep the results of grids evaluated before: a grid is not evaluated again (not even loaded) when its row is in the
+// existing summary of each interpolation (same columns), neither its file nor the reference is newer than that summary,
+// and its columns are in the existing per-point file; the kept rows and columns are copied into the new files.
+// Set false (or delete the summaries) after changing the evaluation itself, e.g. the interpolation code.
+inline constexpr bool kEvalSkipEvaluated = true;
 
 // How the tested grids are interpolated at the evaluation points (the reference is read at its own probes, where both
 // give the probe value). One summary per entry:
