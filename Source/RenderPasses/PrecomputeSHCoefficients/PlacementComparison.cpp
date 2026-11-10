@@ -195,7 +195,8 @@ void PrecomputeSHCoefficients::BestFirstBuildWith(RenderContext* pRenderContext,
     // Per-corner data of the baselines. Interpolation always uses the analytic gradients above, the same for every
     // method; the finite-difference gradient only feeds the Gradient / GDC score.
     const bool needGeometry = score == AdaptiveProbeVolume::SplitScore::Geometry || gdc;
-    const bool needFDGradient = score == AdaptiveProbeVolume::SplitScore::Gradient || gdc;
+    const bool needFDGradient = score == AdaptiveProbeVolume::SplitScore::Gradient ||
+                                score == AdaptiveProbeVolume::SplitScore::GradientRaw || gdc;
     const float3 volumeExtent = vol->getVolumeExtent();
     const float finestFraction = 1.0f / float(1u << vol->getMaxLevel());
     const float3 fdStep = volumeExtent * (kGradientFDStepCells * finestFraction); // per axis, in world units

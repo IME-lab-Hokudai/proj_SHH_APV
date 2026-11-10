@@ -267,7 +267,7 @@ public:
                                     std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
-        // Finite-difference gradient norm (SplitScore::Gradient, GDCCombined): Frobenius norm of the 9 x 3 matrix of
+        // Finite-difference gradient norm (SplitScore::Gradient, GradientRaw, GDCCombined): Frobenius norm of the 9 x 3 matrix of
         // central differences of the luminance SH coefficients, from 6 re-traced probes at +-h along the world axes.
         float fdGradientNorm = 0.0f;
         bool residualCorrectionValid = false;
@@ -531,6 +531,8 @@ public:
                            // gradient test with a size factor: the first-order change across the voxel)
         GDCCombined,       // GDC 2005 rule as one score: max(e / HM_min, gradient score / tau_g, geometry ? 1 : 0); every
                            // test fires at 1, and the budget replaces that threshold as for the other methods
+        GradientRaw,       // max over the 8 corners of the finite-difference gradient norm, no size factor (GDC 2005's
+                           // gradient test as stated: refine where the lighting changes fast, whatever the voxel size)
     };
     void setSplitScore(SplitScore score) { mSplitScore = score; }
     SplitScore getSplitScore() const { return mSplitScore; }

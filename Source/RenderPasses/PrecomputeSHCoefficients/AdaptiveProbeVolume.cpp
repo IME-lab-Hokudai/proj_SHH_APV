@@ -1719,6 +1719,7 @@ const char* AdaptiveProbeVolume::splitScoreName(SplitScore score)
     case SplitScore::Geometry: return "Geometry";
     case SplitScore::Gradient: return "Gradient";
     case SplitScore::GDCCombined: return "GDC";
+    case SplitScore::GradientRaw: return "GradientRaw";
     }
     return "Unknown";
 }
@@ -1815,6 +1816,7 @@ float AdaptiveProbeVolume::scoreCell(int probeIdx) const
     }
     case SplitScore::Geometry:
     case SplitScore::Gradient:
+    case SplitScore::GradientRaw:
     case SplitScore::GDCCombined:
     {
         const float e = std::max(ext.x, std::max(ext.y, ext.z));
@@ -1848,6 +1850,9 @@ float AdaptiveProbeVolume::scoreCell(int probeIdx) const
             return containsGeometry() ? e : 0.0f; // larger voxels first; voxels without geometry are never split
         if (mSplitScore == SplitScore::Gradient)
             return e * maxGradient(); // first-order change across the voxel; shrinks with the voxel like the others
+        if (mSplitScore == SplitScore::GradientRaw)
+            return maxGradient();     // the gradient alone: a leaf keeps its score when split, so the steepest region
+                                      // is refined to the finest level before any other
 
         // GDC 2005 combined: each test as a ratio to its threshold, so every test fires at 1 (depth: e / HM_min >= 1,
         // the source's threshold; gradient: e ||grad|| / tau_g >= 1; geometry: 1 if the voxel contains a hit). The

@@ -163,6 +163,8 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
     // e x max corner finite-difference gradient (the first-order change across the voxel).
     AdaptiveProbeVolume::SplitScore::Geometry,
     AdaptiveProbeVolume::SplitScore::Gradient,
+    // The gradient test without the size factor (max corner FD gradient norm only).
+    AdaptiveProbeVolume::SplitScore::GradientRaw,
 };
 // GDC 2005 combined rule at the same memory budgets: best-first on max(e / HM_min, e ||grad|| / tau_g, geometry ? 1 : 0),
 // so every test fires at 1 and the budget replaces that threshold. tau_g sets how strongly the gradient test counts
