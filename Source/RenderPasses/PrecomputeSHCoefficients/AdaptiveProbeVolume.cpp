@@ -1,5 +1,7 @@
 #include "AdaptiveProbeVolume.h"
 #include <algorithm>
+#include <array>
+#include <map>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -443,6 +445,122 @@ void AdaptiveProbeVolume::interpolateTrilinear_CPU(int leafIdx, float3 pos, std:
         for (size_t band = 0; band < numBands; ++band)
             outCoeffs[band] += w * c.shCoeffs[band];
     }
+}
+
+std::vector<std::pair<int, AdaptiveProbeVolume::Corner>> AdaptiveProbeVolume::constrainHangingCorners(int interp)
+{
+    std::vector<std::pair<int, Corner>> saved;
+    if (mProbes.empty() || mCorners.empty()) return saved;
+    const float3 lcell = getVolumeExtent() / float(1 << std::max(0, mMaxLevel));
+
+    // Corners lie on the finest lattice: a corner's lattice coordinates identify its position. The build stores a few
+    // positions twice (separate records with slightly different traced values), so positions, not record indices,
+    // decide whether a corner is one of a leaf's corners.
+    float3 volMin(std::numeric_limits<float>::max());
+    for (const Probe& p : mProbes)
+        if (p.isLeaf) volMin = float3(std::min(volMin.x, p.minPoint.x), std::min(volMin.y, p.minPoint.y), std::min(volMin.z, p.minPoint.z));
+    std::vector<std::array<int, 3>> key(mCorners.size());
+    std::map<std::array<int, 3>, std::vector<int>> copies;
+    for (size_t i = 0; i < mCorners.size(); ++i)
+    {
+        const float3 r = (mCorners[i].position - volMin) / lcell;
+        key[i] = { int(std::lround(r.x)), int(std::lround(r.y)), int(std::lround(r.z)) };
+        copies[key[i]].push_back(int(i));
+    }
+    // 0. Copies of one position take their mean, so faces between leaves of the same level are continuous too.
+    for (const auto& [k, ids] : copies)
+    {
+        if (ids.size() < 2) continue;
+        Corner mean = mCorners[ids[0]];
+        for (size_t j = 1; j < ids.size(); ++j)
+        {
+            const Corner& o = mCorners[ids[j]];
+            for (size_t b = 0; b < mean.shCoeffs.size() && b < o.shCoeffs.size(); ++b) mean.shCoeffs[b] += o.shCoeffs[b];
+            for (size_t b = 0; b < mean.shGradients.size() && b < o.shGradients.size(); ++b)
+            {
+                mean.shGradients[b].r += o.shGradients[b].r;
+                mean.shGradients[b].g += o.shGradients[b].g;
+                mean.shGradients[b].b += o.shGradients[b].b;
+            }
+        }
+        const float inv = 1.0f / float(ids.size());
+        for (auto& v : mean.shCoeffs) v = v * inv;
+        for (auto& g : mean.shGradients) { g.r = g.r * inv; g.g = g.g * inv; g.b = g.b * inv; }
+        for (int id : ids)
+        {
+            saved.emplace_back(id, mCorners[id]);
+            mCorners[id].shCoeffs = mean.shCoeffs;
+            mCorners[id].shGradients = mean.shGradients;
+        }
+    }
+
+    // 1. For each corner, the coarsest leaf whose closure contains it without having it as a corner (looked up just
+    //    off the corner in the 8 diagonal directions).
+    struct Item { int corner; int leaf; float size; };
+    std::vector<Item> items;
+    std::vector<char> seen(mCorners.size(), 0);
+    for (const Probe& p : mProbes)
+    {
+        if (!p.isLeaf) continue;
+        for (int k = 0; k < 8; ++k)
+        {
+            const int ci = p.corners[k];
+            if (ci < 0 || ci >= int(mCorners.size()) || seen[ci]) continue;
+            seen[ci] = 1;
+            const float3 x = mCorners[ci].position;
+            int best = -1;
+            float bestSize = 0.0f;
+            for (int d = 0; d < 8; ++d)
+            {
+                const float3 o = x + float3((d & 4) ? 1.0f : -1.0f, (d & 2) ? 1.0f : -1.0f, (d & 1) ? 1.0f : -1.0f) * (1e-3f * lcell);
+                const int nb = traverseOctreeCPU(o);
+                if (nb < 0) continue;
+                const Probe& n = mProbes[nb];
+                bool isCorner = false;
+                for (int j = 0; j < 8; ++j) isCorner = isCorner || (n.corners[j] >= 0 && key[n.corners[j]] == key[ci]);
+                if (isCorner) continue;
+                const float s = n.maxPoint.x - n.minPoint.x;
+                if (s > bestSize) { best = nb; bestSize = s; }
+            }
+            if (best >= 0) items.push_back({ ci, best, bestSize });
+        }
+    }
+
+    // 2. Coarsest constraint first: a constraint leaf's own corners are final before they are used.
+    std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.size > b.size; });
+    saved.reserve(items.size());
+    for (const Item& it : items)
+    {
+        const Probe& L = mProbes[it.leaf];
+        const float3 x = mCorners[it.corner].position;
+        std::vector<float3> v;
+        if (interp == 1) interpolateTrilinear_CPU(it.leaf, x, v);
+        else interpolateHermite_CPU(it.leaf, x, v, interp == 2);
+        if (v.empty()) continue;
+        float3 t = (x - L.minPoint) / (L.maxPoint - L.minPoint);
+        t = float3(std::clamp(t.x, 0.0f, 1.0f), std::clamp(t.y, 0.0f, 1.0f), std::clamp(t.z, 0.0f, 1.0f));
+        std::vector<GradSHCoeff> g(v.size(), GradSHCoeff{ float3(0.0f), float3(0.0f), float3(0.0f) });
+        for (int k = 0; k < 8; ++k)
+        {
+            const Corner& ck = mCorners[L.corners[k]];
+            const float w = (((k >> 2) & 1) ? t.x : 1.0f - t.x) * (((k >> 1) & 1) ? t.y : 1.0f - t.y) * ((k & 1) ? t.z : 1.0f - t.z);
+            for (size_t b = 0; b < g.size() && b < ck.shGradients.size(); ++b)
+            {
+                g[b].r += w * ck.shGradients[b].r;
+                g[b].g += w * ck.shGradients[b].g;
+                g[b].b += w * ck.shGradients[b].b;
+            }
+        }
+        saved.emplace_back(it.corner, mCorners[it.corner]);
+        mCorners[it.corner].shCoeffs = v;
+        mCorners[it.corner].shGradients = g;
+    }
+    return saved;
+}
+
+void AdaptiveProbeVolume::restoreCorners(const std::vector<std::pair<int, Corner>>& saved)
+{
+    for (auto it = saved.rbegin(); it != saved.rend(); ++it) mCorners[it->first] = it->second;
 }
 
 void AdaptiveProbeVolume::constrainHangingNodesHermite()
@@ -1579,15 +1697,7 @@ void AdaptiveProbeVolume::subdivideCell(int probeIdx, bool addedByEdgeAware, std
     float3 maxP = mProbes[probeIdx].maxPoint;
     float3 center = (minP + maxP) * 0.5f;
     // 1. Setup the Lookup Logic ---------------------------------------------
-    float quantizationScale = 10000.0f; // Precision ~0.1mm
-
-    auto getCornerKey = [&](float3 p) -> CornerKey {
-        return {
-            (int)(floor(p.x * quantizationScale + 0.5f)),
-            (int)(floor(p.y * quantizationScale + 0.5f)),
-            (int)(floor(p.z * quantizationScale + 0.5f))
-        };
-        };
+    auto getCornerKey = [&](float3 p) -> CornerKey { return makeCornerKey(p); };
     // Helper: Create new corner and add to pending list
     /*auto addNewCorner = [&](float3 pos) -> int {
         Corner c; c.position = pos;
@@ -1871,7 +1981,30 @@ float AdaptiveProbeVolume::scoreCell(int probeIdx) const
 
 AdaptiveProbeVolume::CornerKey AdaptiveProbeVolume::makeCornerKey(float3 p) const
 {
-    // Must match the quantisation in subdivideCell() and startBuildSeeded().
+    // The one key of a corner position, used everywhere corners are shared (subdivideCell, finishBatchCoarseLimited,
+    // startBuildSeeded, loadFromFile). Corners lie on the lattice of the finest level, so the key is the position's
+    // index on that lattice (counted on a 4x finer one, in case a cell is ever split below mMaxLevel). An absolute
+    // 0.1 mm rounding was used before; a position lying exactly on a half step of it (in Bistro every 8th lattice
+    // plane, 0.1015625 m = 1015.625 x 0.1 mm) rounded either way depending on the last float bit of how it was computed
+    // (seed corner vs. midpoint of a split), so some positions got two corner records, traced separately.
+    float3 origin(0.f), extent(0.f);
+    if (mSeedResolution.x > 0 && mSeedCellSize.x > 0.f)
+    {
+        origin = mSeedMinPoint;
+        extent = getVolumeExtent();
+    }
+    else if (!mProbes.empty())
+    {
+        origin = mProbes[0].minPoint;
+        extent = mProbes[0].maxPoint - mProbes[0].minPoint;
+    }
+    if (extent.x > 0.f && extent.y > 0.f && extent.z > 0.f)
+    {
+        const float3 step = extent / float(1 << (std::max(0, mMaxLevel) + 2));
+        const float3 r = (p - origin) / step;
+        return { int(std::lround(r.x)), int(std::lround(r.y)), int(std::lround(r.z)) };
+    }
+    // No volume known yet (a file without a seed, before its probes are read): absolute 0.1 mm rounding as before.
     const float quantizationScale = 10000.0f;
     return {
         (int)(floor(p.x * quantizationScale + 0.5f)),
@@ -2722,11 +2855,7 @@ void AdaptiveProbeVolume::loadFromFile(const std::string& filename)
         }
 
         // Rebuild lookup table for future corner sharing.
-        CornerKey key{
-            (int)std::floor(c.position.x * 10000.0f + 0.5f),
-            (int)std::floor(c.position.y * 10000.0f + 0.5f),
-            (int)std::floor(c.position.z * 10000.0f + 0.5f)
-        };
+        CornerKey key = makeCornerKey(c.position);
 
         mCornerLookup[key] = (int)i;
     }
@@ -2906,11 +3035,7 @@ void AdaptiveProbeVolume::startBuildSeeded(
         {
             float3 p = scaledMin + float3(ix, iy, iz) * cellSize;
 
-            CornerKey key{
-                (int)std::floor(p.x * 10000.0f + 0.5f),
-                (int)std::floor(p.y * 10000.0f + 0.5f),
-                (int)std::floor(p.z * 10000.0f + 0.5f)
-            };
+            CornerKey key = makeCornerKey(p);
 
             auto it = mCornerLookup.find(key);
             if (it != mCornerLookup.end()) return it->second;
@@ -3231,15 +3356,7 @@ void AdaptiveProbeVolume::finishBatchCoarseLimited(int maxEvalLevel)
 
         mProbes[probeIdx].isLeaf = false;
 
-        float quantizationScale = 10000.0f;
-
-        auto getCornerKey = [&](float3 p) -> CornerKey {
-            return {
-                (int)(floor(p.x * quantizationScale + 0.5f)),
-                (int)(floor(p.y * quantizationScale + 0.5f)),
-                (int)(floor(p.z * quantizationScale + 0.5f))
-            };
-            };
+        auto getCornerKey = [&](float3 p) -> CornerKey { return makeCornerKey(p); };
 
         auto addNewCorner = [&](float3 pos) -> int {
             CornerKey key = getCornerKey(pos);

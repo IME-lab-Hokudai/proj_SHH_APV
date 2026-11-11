@@ -397,6 +397,16 @@ public:
         return mProbes[probeIdx].level;
     }
     void constrainHangingNodesHermite();
+    // Hanging-node constraint (placement evaluation, seam fix "Constrain"): every corner that lies on a face or edge of a
+    // coarser leaf without being one of that leaf's corners takes that leaf's interpolated value there, and the
+    // trilinear blend of its corner gradients, so the fine side matches the coarse side and the faces between leaves
+    // are continuous (exactly for trilinear). A corner touching several such leaves follows the coarsest; corners are
+    // processed coarsest leaf first, so constraints chain correctly. Copies of one corner position (the build stores a
+    // few twice) first take their mean, and positions decide what a leaf's corner is. interp: 0 Hermite, 1 trilinear, 2 limited Hermite
+    // (the interpolation the grid will be read with). Returns the original data of every changed corner, for
+    // restoreCorners.
+    std::vector<std::pair<int, Corner>> constrainHangingCorners(int interp);
+    void restoreCorners(const std::vector<std::pair<int, Corner>>& saved);
     // ----------------------------------------------------------------
     // Batch Processing Interface
     // ----------------------------------------------------------------

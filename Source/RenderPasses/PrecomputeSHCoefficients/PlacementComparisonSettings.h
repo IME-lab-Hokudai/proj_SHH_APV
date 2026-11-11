@@ -140,8 +140,15 @@ inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpol
 //         interpolation in kEvalInterpolations.
 // The summary reports the seam: the mean and largest jump of irradiance luminance (14 normals) across faces between
 // leaves of the same or different levels (16 points per face; seam... columns), and which seam handling was used.
-enum class SeamFix { None, Oat };
-inline const std::vector<SeamFix> kEvalSeamFixes = { SeamFix::Oat };
+//   Constrain: hanging-node constraint (AdaptiveProbeVolume::constrainHangingCorners): every corner on a face or edge of a
+//         coarser leaf takes that leaf's value there (and its blended gradient), so the grid itself is seamless and the
+//         runtime needs nothing extra (no lookups, no memory); uses the coarse side's data on those faces. Files get
+//         _Constrained; uniform grids are unchanged.
+enum class SeamFix { None, Oat, Constrain };
+// Oat is dropped from the comparison (2026-11-11): its runtime lookups cost the demo about 3x the frame time, too slow to
+// report; the hanging-node constraint is free at runtime. None = the raw grid (no seam handling), for comparison.
+// Add SeamFix::Oat here to evaluate it again.
+inline const std::vector<SeamFix> kEvalSeamFixes = { SeamFix::None, SeamFix::Constrain };
 
 // Per-point files of the other interpolations (<scene>_PlacementComparisonPoints_<mode>.csv, each as large as the
 // Hermite one, about 400 MB for SceneForData).
@@ -167,12 +174,14 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
     AdaptiveProbeVolume::SplitScore::Hessian,
     AdaptiveProbeVolume::SplitScore::HessianRelative,
     // Baselines (GDC 2005 / Greger et al. 1998). Geometry stops once no voxel with geometry can be split further and
-    // saves that grid as <scene>_BF_Geometry_S8_exhausted.txt (plus every budget it reached before). Gradient ranks by
-    // e x max corner finite-difference gradient (the first-order change across the voxel).
+    // saves that grid as <scene>_BF_Geometry_S8_exhausted.txt (plus every budget it reached before).
     AdaptiveProbeVolume::SplitScore::Geometry,
-    AdaptiveProbeVolume::SplitScore::Gradient,
-    // The gradient test without the size factor (max corner FD gradient norm only).
+    // Oat's gradient test as written (GDC 2005, slides 21-22 and 35: "large gradient", gradients by central differences
+    // of 6 extra samples): max corner finite-difference gradient norm, no size factor.
     AdaptiveProbeVolume::SplitScore::GradientRaw,
+    // Our extension of it, as an additional experiment: e x max corner FD gradient, the first-order change across the
+    // voxel (a size-aware version of the same test).
+    AdaptiveProbeVolume::SplitScore::Gradient,
 };
 // GDC 2005 combined rule at the same memory budgets: best-first on max(e / HM_min, e ||grad|| / tau_g, geometry ? 1 : 0),
 // so every test fires at 1 and the budget replaces that threshold. tau_g sets how strongly the gradient test counts
@@ -186,8 +195,14 @@ inline const std::vector<float> kBatchGdcPercentiles = {}; // off for now: Geome
 inline constexpr float kGradientFDStepCells = 1.0f;
 inline constexpr bool kBatchEvaluateAtEnd = true;
 // Skip grids whose files already exist (uniform: the grid file; best-first: the snapshot at the largest budget),
-// so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings).
-inline constexpr bool kBatchSkipExisting = true;
+// so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings);
+// the batch then also starts new <scene>_BuildTimings.csv and <scene>_BestFirstSnapshots.csv (the old ones are kept
+// as *_previous.csv), so old and new runs are not mixed.
+// Rebuild of 2026-11-11 (Bistro lamp textures on the build PC, corner keys on the finest lattice): false, both scenes.
+inline constexpr bool kBatchSkipExisting = false;
+// The reference grid (kSceneSetups) is the most expensive one and is normally built only when its file is missing,
+// whatever kBatchSkipExisting says. True: rebuild it as well (Bistro's U128 had the old lamp textures).
+inline constexpr bool kBatchRebuildReference = true;
 inline constexpr bool kBatchClassifyPoints = true; // classify the evaluation points before the evaluation (scene loaded)
 
 // ---- Sample points away from geometry ------------------------------------------------------------

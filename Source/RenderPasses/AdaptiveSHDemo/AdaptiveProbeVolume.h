@@ -72,6 +72,11 @@ public:
     // Resources & Debug
     // ----------------------------------------------------------------
     void uploadToGPU();
+    // Hanging-node constraint applied in uploadToGPU (seam option "constraint" of AdaptiveSHDemo; same rule as
+    // AdaptiveProbeVolume::constrainHangingCorners in PrecomputeSHCoefficients): interp 0 Hermite, 1 trilinear,
+    // 2 limited Hermite, -1 off. It changes the loaded corners, so load the grid again to switch it off.
+    void setHangingConstraint(int interp) { mHangingConstraintInterp = interp; }
+    uint32_t getConstrainedCornerCount() const { return mConstrainedCorners; }
     void printDebugInfo(const std::string& filename);
 
     ref<Buffer> getProbeBuffer() const { return mpProbeBuffer; }
@@ -116,6 +121,8 @@ private:
     // Settings
     float mCurrentThreshold = 0.01f;
     int mMaxLevel = 5;
+    int mHangingConstraintInterp = -1;
+    uint32_t mConstrainedCorners = 0;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;

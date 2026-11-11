@@ -236,6 +236,7 @@ float3 hermiteCellBand(float3 t, float3 size, float3 v[8], float3 gX[8], float3 
     float3 q[4];
     float3 q_dX[4];
     float3 q_dY[4];
+    [unroll]
     for (int i = 0; i < 4; ++i)
     {
         int i0 = 2 * i;
@@ -247,6 +248,7 @@ float3 hermiteCellBand(float3 t, float3 size, float3 v[8], float3 gX[8], float3 
 
     float3 r[2];
     float3 r_dX[2];
+    [unroll]
     for (int i = 0; i < 2; ++i)
     {
         int i0 = 2 * i;
@@ -291,6 +293,7 @@ float3 leafBand(int leaf, float3 nodeMin, float3 size, float3 pos, int band)
     float3 t = saturate((pos - nodeMin) / size);
     int cIdx[8];
     float3 v[8];
+    [unroll]
     for (int k = 0; k < 8; ++k)
     {
         cIdx[k] = gProbeBuffer[leaf].corners[k];
@@ -302,6 +305,7 @@ float3 leafBand(int leaf, float3 nodeMin, float3 size, float3 pos, int band)
     float3 gX[8];
     float3 gY[8];
     float3 gZ[8];
+    [unroll]
     for (int k = 0; k < 8; ++k) cornerGradientsBand(cIdx[k], band, gX[k], gY[k], gZ[k]);
     return hermiteCellBand(t, size, v, gX, gY, gZ);
 #endif
@@ -314,6 +318,7 @@ void leafGradientsBand(int leaf, float3 nodeMin, float3 size, float3 pos, int ba
     gX = float3(0.f);
     gY = float3(0.f);
     gZ = float3(0.f);
+    [unroll]
     for (int k = 0; k < 8; ++k)
     {
         float w = (((k >> 2) & 1) != 0 ? t.x : 1.f - t.x) * (((k >> 1) & 1) != 0 ? t.y : 1.f - t.y) * ((k & 1) != 0 ? t.z : 1.f - t.z);
@@ -325,8 +330,35 @@ void leafGradientsBand(int leaf, float3 nodeMin, float3 size, float3 pos, int ba
     }
 }
 
+// One band of a leaf at pos (Hermite or limited Hermite) together with its gradients there (trilinear blend of the
+// corner gradients, as leafGradientsBand), loading each corner once. Used for the Oat lattice nodes.
+float3 leafBandAndGradients(int leaf, float3 nodeMin, float3 size, float3 pos, int band, out float3 oX, out float3 oY, out float3 oZ)
+{
+    float3 t = saturate((pos - nodeMin) / size);
+    float3 v[8];
+    float3 gX[8];
+    float3 gY[8];
+    float3 gZ[8];
+    oX = float3(0.f);
+    oY = float3(0.f);
+    oZ = float3(0.f);
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+    {
+        int ci = gProbeBuffer[leaf].corners[k];
+        v[k] = gCornerBuffer[ci].coeffs[band].rgb;
+        cornerGradientsBand(ci, band, gX[k], gY[k], gZ[k]);
+        float w = (((k >> 2) & 1) != 0 ? t.x : 1.f - t.x) * (((k >> 1) & 1) != 0 ? t.y : 1.f - t.y) * ((k & 1) != 0 ? t.z : 1.f - t.z);
+        oX += w * gX[k];
+        oY += w * gY[k];
+        oZ += w * gZ[k];
+    }
+    return hermiteCellBand(t, size, v, gX, gY, gZ);
+}
+
 void fetchLeafSH(int leaf, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
 {
+    [unroll]
     for (int band = 0; band < 9; ++band) finalCoeffs[band] = leafBand(leaf, nodeMin, size, pos, band);
 }
 
@@ -394,6 +426,7 @@ int smallestLeafAt(float3 x, out float3 leafMin, out float3 leafSize)
     float bestSize = 3.402823e38f;
     leafMin = float3(0.f);
     leafSize = float3(0.f);
+    [unroll]
     for (int k = 0; k < 8; ++k)
     {
         float3 o = x + float3((k & 4) != 0 ? 1.f : -1.f, (k & 2) != 0 ? 1.f : -1.f, (k & 1) != 0 ? 1.f : -1.f) * (1e-3f * gLatticeCellSize);
@@ -411,13 +444,54 @@ int smallestLeafAt(float3 x, out float3 leafMin, out float3 leafSize)
 }
 
 #if SH_SEAM_OAT
+// The finest leaf strictly finer than maxSize whose closure contains the lattice node x, or -1. Looks just off x in the
+// 8 diagonal directions like smallestLeafAt, but skips the directions that stay inside the current leaf (side 0 or
+// opposite the node's side on an axis) or lead into a neighbour region without finer leaves (finerMask), since neither
+// can hold a finer leaf. Same choice as smallestLeafAt restricted to finer leaves (first of the finest).
+int finerLeafAt(float3 x, int3 side, uint finerMask, float maxSize, out float3 leafMin, out float3 leafSize)
+{
+    int best = -1;
+    float bestSize = 0.75f * maxSize;
+    leafMin = float3(0.f);
+    leafSize = float3(0.f);
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+    {
+        int3 s = int3((k & 4) != 0 ? 1 : -1, (k & 2) != 0 ? 1 : -1, (k & 1) != 0 ? 1 : -1);
+        int3 d = int3(s.x == side.x ? side.x : 0, s.y == side.y ? side.y : 0, s.z == side.z ? side.z : 0);
+        if (all(d == int3(0))) continue;
+        uint bit = uint((d.x + 1) * 9 + (d.y + 1) * 3 + (d.z + 1));
+        if (((finerMask >> bit) & 1u) == 0u) continue;
+        float3 mn, sz;
+        int nb = traverseOctree(x + float3(s) * (1e-3f * gLatticeCellSize), mn, sz);
+        if (nb >= 0 && sz.x < bestSize)
+        {
+            best = nb;
+            bestSize = sz.x;
+            leafMin = mn;
+            leafSize = sz;
+        }
+    }
+    return best;
+}
+#endif
+
+#if SH_SEAM_OAT
 // Exact Oat seam handling (port of interpAdaptive in PlacementComparison.cpp). The lattice is the finest level of the
 // grid, starting at the volume minimum (= gSeedMinPoint). In the lattice cell containing pos (kept inside the leaf),
-// each node on the leaf boundary takes the smallest leaf touching it; if any node's leaf differs from this leaf, pos is
-// interpolated on the lattice cell from those nodes, otherwise the leaf's own interpolation is used. Neighbouring
+// each node on the leaf boundary takes the smallest leaf touching it; if any node belongs to a strictly finer leaf, pos
+// is interpolated on the lattice cell from those nodes, otherwise the leaf's own interpolation is used. Only nodes that
+// face a neighbour direction flagged in the leaf's finer mask are looked up; leaves without one skip all of it. Neighbouring
 // lattice cells share their nodes, so faces between leaves are continuous (exactly for trilinear).
 void fetchOatSH(int leaf, float3 leafMin, float3 leafSize, float3 pos, out float3 finalCoeffs[9])
 {
+    // Leaves store which neighbour directions hold a finer leaf (AdaptiveProbeVolume::uploadToGPU): none -> no seam.
+    const uint finerMask = uint(-1 - gProbeBuffer[leaf].firstChild);
+    if (finerMask == 0u)
+    {
+        fetchLeafSH(leaf, leafMin, leafSize, pos, finalCoeffs);
+        return;
+    }
     float3 lcell = gLatticeCellSize;
     float3 volMin = gSeedMinPoint;
     int3 lo = int3(round((leafMin - volMin) / lcell));
@@ -429,6 +503,7 @@ void fetchOatSH(int leaf, float3 leafMin, float3 leafSize, float3 pos, out float
     float3 nodeSize[8];
     float3 nodePos[8];
     bool transition = false;
+    [unroll]
     for (int k = 0; k < 8; ++k)
     {
         int3 g = ci + int3((k >> 2) & 1, (k >> 1) & 1, k & 1);
@@ -436,19 +511,25 @@ void fetchOatSH(int leaf, float3 leafMin, float3 leafSize, float3 pos, out float
         nodeLeaf[k] = leaf;
         nodeMin[k] = leafMin;
         nodeSize[k] = leafSize;
-        bool interior = all(g > lo) && all(g < lo + n);
-        if (!interior)
+        // Side of the leaf the node lies on, per axis (-1 min face, +1 max face, 0 inside). The neighbour directions
+        // the node touches combine each axis' side with 0; only those flagged in finerMask can hold a finer leaf.
+        int3 side = int3(g.x == lo.x ? -1 : (g.x == lo.x + n.x ? 1 : 0),
+                         g.y == lo.y ? -1 : (g.y == lo.y + n.y ? 1 : 0),
+                         g.z == lo.z ? -1 : (g.z == lo.z + n.z ? 1 : 0));
+        if (any(side != int3(0)))
         {
+            // Only a strictly finer leaf changes the node (an equal-level neighbour shares this leaf's face values),
+            // as in the evaluation (PlacementComparison.cpp).
             float3 mn, sz;
-            int nb = smallestLeafAt(nodePos[k], mn, sz);
+            int nb = finerLeafAt(nodePos[k], side, finerMask, leafSize.x, mn, sz);
             if (nb >= 0)
             {
                 nodeLeaf[k] = nb;
                 nodeMin[k] = mn;
                 nodeSize[k] = sz;
+                transition = true;
             }
         }
-        transition = transition || nodeLeaf[k] != leaf;
     }
 
     if (!transition)
@@ -458,17 +539,80 @@ void fetchOatSH(int leaf, float3 leafMin, float3 leafSize, float3 pos, out float
     }
 
     float3 t = saturate((pos - nodePos[0]) / lcell);
+    // Node data, cheapest source first (same values as interpolating each node's leaf at the node):
+    //   node in this leaf      -> this leaf's interpolation at the node; its 8 corners are loaded once per band for all
+    //                             such nodes (tOwn = node position in the leaf);
+    //   node = a corner of its (finer) leaf, the usual case -> that probe corner directly (nodeCorner);
+    //   otherwise              -> the node's leaf interpolated at the node.
+    float3 tOwn[8];
+    int nodeCorner[8];
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+    {
+        tOwn[k] = saturate((nodePos[k] - leafMin) / leafSize);
+        nodeCorner[k] = -1;
+        if (nodeLeaf[k] != leaf)
+        {
+            float3 u = (nodePos[k] - nodeMin[k]) / nodeSize[k];
+            float3 r = round(u);
+            if (all(abs(u - r) < 1e-3f) && all(r >= 0.f) && all(r <= 1.f))
+                nodeCorner[k] = gProbeBuffer[nodeLeaf[k]].corners[(r.x > 0.5f ? 4 : 0) | (r.y > 0.5f ? 2 : 0) | (r.z > 0.5f ? 1 : 0)];
+        }
+    }
+    int own[8];
+    [unroll]
+    for (int k = 0; k < 8; ++k) own[k] = gProbeBuffer[leaf].corners[k];
+    [unroll]
     for (int band = 0; band < 9; ++band)
     {
+        float3 ov[8];
+        [unroll]
+        for (int k = 0; k < 8; ++k) ov[k] = gCornerBuffer[own[k]].coeffs[band].rgb;
         float3 v[8];
-        for (int k = 0; k < 8; ++k) v[k] = leafBand(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band);
 #if SH_INTERP == 1
+        [unroll]
+        for (int k = 0; k < 8; ++k)
+        {
+            if (nodeLeaf[k] == leaf) v[k] = trilinearCellBand(tOwn[k], ov);
+            else if (nodeCorner[k] >= 0) v[k] = gCornerBuffer[nodeCorner[k]].coeffs[band].rgb;
+            else v[k] = leafBand(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band);
+        }
         finalCoeffs[band] = trilinearCellBand(t, v);
 #else
+        float3 ogX[8];
+        float3 ogY[8];
+        float3 ogZ[8];
+        [unroll]
+        for (int k = 0; k < 8; ++k) cornerGradientsBand(own[k], band, ogX[k], ogY[k], ogZ[k]);
         float3 gX[8];
-    float3 gY[8];
-    float3 gZ[8];
-        for (int k = 0; k < 8; ++k) leafGradientsBand(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band, gX[k], gY[k], gZ[k]);
+        float3 gY[8];
+        float3 gZ[8];
+        [unroll]
+        for (int k = 0; k < 8; ++k)
+        {
+            if (nodeLeaf[k] == leaf)
+            {
+                v[k] = hermiteCellBand(tOwn[k], leafSize, ov, ogX, ogY, ogZ);
+                gX[k] = float3(0.f);
+                gY[k] = float3(0.f);
+                gZ[k] = float3(0.f);
+                [unroll]
+                for (int j = 0; j < 8; ++j)
+                {
+                    float w = (((j >> 2) & 1) != 0 ? tOwn[k].x : 1.f - tOwn[k].x) * (((j >> 1) & 1) != 0 ? tOwn[k].y : 1.f - tOwn[k].y) *
+                              ((j & 1) != 0 ? tOwn[k].z : 1.f - tOwn[k].z);
+                    gX[k] += w * ogX[j];
+                    gY[k] += w * ogY[j];
+                    gZ[k] += w * ogZ[j];
+                }
+            }
+            else if (nodeCorner[k] >= 0)
+            {
+                v[k] = gCornerBuffer[nodeCorner[k]].coeffs[band].rgb;
+                cornerGradientsBand(nodeCorner[k], band, gX[k], gY[k], gZ[k]);
+            }
+            else v[k] = leafBandAndGradients(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band, gX[k], gY[k], gZ[k]);
+        }
         finalCoeffs[band] = hermiteCellBand(t, lcell, v, gX, gY, gZ);
 #endif
     }

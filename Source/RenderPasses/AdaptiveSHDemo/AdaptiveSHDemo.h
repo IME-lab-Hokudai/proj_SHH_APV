@@ -73,9 +73,12 @@ private:
     // SH interpolation of the probe grid (shader defines SH_INTERP and SH_SEAM_OAT in XAtlasSceneShader.slang):
     // 0 = Hermite, 1 = trilinear, 2 = Hermite with slope limiting; Oat = exact seam handling for adaptive grids.
     uint32_t mShInterpolation = 2;
-    bool mShSeamOat = true;
+    // Seam handling of adaptive grids: 0 none, 1 Oat (runtime lookups in the shader), 2 hanging-node constraint (baked
+    // into the grid when it is loaded; the shader then runs the plain interpolation).
+    uint32_t mShSeam = 2;
     DefineList getShInterpolationDefines() const;
     void applyShInterpolationDefines();
+    void loadAdaptiveGrid(); // (re)load loadFromFileName with the current seam handling and upload it
     // View dump for the offline image evaluation (PrecomputeSHCoefficients, PlacementComparison.cpp): writes
     // <scene tag>_View_<name>.dump with per-pixel position, normal, albedo, emission, SH mask and the demo frame.
     void bindShadingVars(ShaderVar var);

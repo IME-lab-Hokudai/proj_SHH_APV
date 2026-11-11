@@ -1,3 +1,5 @@
+#include <map>
+#include <array>
 #include "AdaptiveProbeVolume.h"
 #include <algorithm>
 #include <cmath>
@@ -434,6 +436,248 @@ void AdaptiveProbeVolume::uploadToGPU()
                 if (newIndex[p.children[k]] != gp.firstChild + k) { gp.firstChild = -1; break; }
         for (int i = 0; i < 8; ++i) gp.corners[i] = p.corners[i];
         gpuProbes.push_back(gp);
+    }
+
+    // Oat seam directions for the shader (XAtlasSceneShader.slang, fetchOatSH). For every leaf, a mask of the 26
+    // neighbour directions d in {-1, 0, 1}^3 (bit (dx+1)*9 + (dy+1)*3 + (dz+1)) whose same-size neighbour cell is
+    // subdivided, i.e. holds leaves finer than this one that touch it. Stored in the leaf as firstChild = -1 - mask
+    // (mask 0 = -1, a plain leaf). The shader does the seam lookups only at lattice nodes facing such a direction and
+    // uses the plain leaf interpolation everywhere else (e.g. in every finest-level leaf).
+    {
+        const size_t nodeCount = gpuProbes.size();
+        std::vector<float3> nodeMin(nodeCount, float3(0.f)), nodeSize(nodeCount, float3(0.f));
+        for (uint32_t z = 0; z < mGpuSeedResolution.z; ++z)
+            for (uint32_t y = 0; y < mGpuSeedResolution.y; ++y)
+                for (uint32_t x = 0; x < mGpuSeedResolution.x; ++x)
+                {
+                    const size_t si = (size_t(z) * mGpuSeedResolution.y + y) * mGpuSeedResolution.x + x;
+                    const int r = si < seedRoots.size() && seedRoots[si] >= 0 ? newIndex[seedRoots[si]] : -1;
+                    if (r < 0) continue;
+                    nodeMin[r] = mGpuSeedMinPoint + float3(float(x), float(y), float(z)) * mGpuSeedCellSize;
+                    nodeSize[r] = mGpuSeedCellSize;
+                }
+        for (size_t i = 0; i < nodeCount; ++i) // parents come before their children (breadth-first order)
+        {
+            const int fc = gpuProbes[i].firstChild;
+            if (fc < 0) continue;
+            const float3 h = 0.5f * nodeSize[i];
+            for (int k = 0; k < 8; ++k)
+            {
+                nodeMin[fc + k] = nodeMin[i] + float3((k & 4) ? h.x : 0.f, (k & 2) ? h.y : 0.f, (k & 1) ? h.z : 0.f);
+                nodeSize[fc + k] = h;
+            }
+        }
+        // True when the node of size ~s containing q (q = centre of a cell of size s) has children.
+        auto subdividedAt = [&](const float3& q, float s) -> bool
+        {
+            const float3 rel = (q - mGpuSeedMinPoint) / mGpuSeedCellSize;
+            if (rel.x < 0.f || rel.y < 0.f || rel.z < 0.f || rel.x >= float(mGpuSeedResolution.x) ||
+                rel.y >= float(mGpuSeedResolution.y) || rel.z >= float(mGpuSeedResolution.z))
+                return false;
+            const size_t si = (size_t(rel.z) * mGpuSeedResolution.y + size_t(rel.y)) * mGpuSeedResolution.x + size_t(rel.x);
+            int idx = si < seedRoots.size() && seedRoots[si] >= 0 ? newIndex[seedRoots[si]] : -1;
+            while (idx >= 0)
+            {
+                const int fc = gpuProbes[idx].firstChild;
+                if (fc < 0) return false;                          // a leaf as large as the cell or larger
+                if (nodeSize[idx].x < 1.5f * s) return true;      // the same-size cell itself, subdivided
+                const float3 cen = nodeMin[idx] + 0.5f * nodeSize[idx];
+                idx = fc + ((q.x >= cen.x) ? 4 : 0) + ((q.y >= cen.y) ? 2 : 0) + ((q.z >= cen.z) ? 1 : 0);
+            }
+            return false;
+        };
+        uint32_t seamLeaves = 0;
+        for (size_t i = 0; i < nodeCount; ++i)
+        {
+            if (gpuProbes[i].firstChild >= 0 || nodeSize[i].x <= 0.f) continue;
+            const float3 s = nodeSize[i], cen = nodeMin[i] + 0.5f * s;
+            int mask = 0;
+            for (int dx = -1; dx <= 1; ++dx)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dz = -1; dz <= 1; ++dz)
+                        if ((dx | dy | dz) != 0 && subdividedAt(cen + float3(float(dx), float(dy), float(dz)) * s, s.x))
+                            mask |= 1 << ((dx + 1) * 9 + (dy + 1) * 3 + (dz + 1));
+            gpuProbes[i].firstChild = -1 - mask;
+            seamLeaves += mask != 0;
+        }
+        logInfo("[AdaptiveProbeVolume] {} leaves touch a finer leaf (Oat seam handling).", seamLeaves);
+
+        // Hanging-node constraint (setHangingConstraint; PrecomputeSHCoefficients' constrainHangingCorners with the
+        // seeded tree as uploaded): every corner on a face or edge of a coarser leaf, without being one of its corners,
+        // takes that leaf's value there for the runtime interpolation, and the trilinear blend of its corner gradients.
+        // Coarsest constraint first. The corners below are packed after this, so the GPU gets the constrained data and
+        // the shader needs no seam handling (SH_SEAM_OAT 0).
+        mConstrainedCorners = 0;
+        if (mHangingConstraintInterp >= 0)
+        {
+            const int interp = mHangingConstraintInterp;
+            const float3 lcell = mGpuLatticeCellSize;
+            auto leafAt = [&](const float3& q) -> int
+            {
+                const float3 rel = (q - mGpuSeedMinPoint) / mGpuSeedCellSize;
+                if (rel.x < 0.f || rel.y < 0.f || rel.z < 0.f || rel.x > float(mGpuSeedResolution.x) ||
+                    rel.y > float(mGpuSeedResolution.y) || rel.z > float(mGpuSeedResolution.z))
+                    return -1;
+                const uint32_t cx = std::min(uint32_t(rel.x), mGpuSeedResolution.x - 1);
+                const uint32_t cy = std::min(uint32_t(rel.y), mGpuSeedResolution.y - 1);
+                const uint32_t cz = std::min(uint32_t(rel.z), mGpuSeedResolution.z - 1);
+                const size_t si = (size_t(cz) * mGpuSeedResolution.y + cy) * mGpuSeedResolution.x + cx;
+                int idx = si < seedRoots.size() && seedRoots[si] >= 0 ? newIndex[seedRoots[si]] : -1;
+                while (idx >= 0 && gpuProbes[idx].firstChild >= 0)
+                {
+                    const float3 cen = nodeMin[idx] + 0.5f * nodeSize[idx];
+                    idx = gpuProbes[idx].firstChild + ((q.x >= cen.x) ? 4 : 0) + ((q.y >= cen.y) ? 2 : 0) + ((q.z >= cen.z) ? 1 : 0);
+                }
+                return idx;
+            };
+            auto hermite1 = [&](float t, float v0, float s0, float v1, float s1) -> float
+            {
+                if (interp == 2)
+                {
+                    const float d = v1 - v0;
+                    if (d == 0.f) { s0 = 0.f; s1 = 0.f; }
+                    else
+                    {
+                        if (s0 * d < 0.f) s0 = 0.f;
+                        if (s1 * d < 0.f) s1 = 0.f;
+                        const float a = s0 / d, b = s1 / d, r2 = a * a + b * b;
+                        if (r2 > 9.f) { const float k = 3.f / std::sqrt(r2); s0 *= k; s1 *= k; }
+                    }
+                }
+                const float t2 = t * t, t3 = t2 * t;
+                return (2.f * t3 - 3.f * t2 + 1.f) * v0 + (t3 - 2.f * t2 + t) * s0 + (-2.f * t3 + 3.f * t2) * v1 + (t3 - t2) * s1;
+            };
+            auto hermite3 = [&](float t, const float3& v0, const float3& s0, const float3& v1, const float3& s1)
+            {
+                return float3(hermite1(t, v0.x, s0.x, v1.x, s1.x), hermite1(t, v0.y, s0.y, v1.y, s1.y), hermite1(t, v0.z, s0.z, v1.z, s1.z));
+            };
+            // Value of one band of leaf L at x, as the shader interpolates it (stored gradients: .x = world Z,
+            // .y = world X, .z = world Y).
+            auto leafValue = [&](int L, const float3& x, size_t band) -> float3
+            {
+                const float3 s = nodeSize[L];
+                float3 t = (x - nodeMin[L]) / s;
+                t = float3(std::clamp(t.x, 0.f, 1.f), std::clamp(t.y, 0.f, 1.f), std::clamp(t.z, 0.f, 1.f));
+                float3 v[8], gX[8], gY[8], gZ[8];
+                for (int k = 0; k < 8; ++k)
+                {
+                    const Corner& ck = mCorners[gpuProbes[L].corners[k]];
+                    v[k] = band < ck.shCoeffs.size() ? ck.shCoeffs[band] : float3(0.f);
+                    const GradSHCoeff g = band < ck.shGradients.size() ? ck.shGradients[band] : GradSHCoeff{ float3(0.f), float3(0.f), float3(0.f) };
+                    gX[k] = float3(g.r.y, g.g.y, g.b.y);
+                    gY[k] = float3(g.r.z, g.g.z, g.b.z);
+                    gZ[k] = float3(g.r.x, g.g.x, g.b.x);
+                }
+                if (interp == 1)
+                {
+                    float3 r(0.f);
+                    for (int k = 0; k < 8; ++k)
+                        r += (((k >> 2) & 1) ? t.x : 1.f - t.x) * (((k >> 1) & 1) ? t.y : 1.f - t.y) * ((k & 1) ? t.z : 1.f - t.z) * v[k];
+                    return r;
+                }
+                float3 q[4], qX[4], qY[4];
+                for (int i = 0; i < 4; ++i)
+                {
+                    q[i] = hermite3(t.z, v[2 * i], gZ[2 * i] * s.z, v[2 * i + 1], gZ[2 * i + 1] * s.z);
+                    qX[i] = gX[2 * i] + (gX[2 * i + 1] - gX[2 * i]) * t.z;
+                    qY[i] = gY[2 * i] + (gY[2 * i + 1] - gY[2 * i]) * t.z;
+                }
+                float3 r[2], rX[2];
+                for (int i = 0; i < 2; ++i)
+                {
+                    r[i] = hermite3(t.y, q[2 * i], qY[2 * i] * s.y, q[2 * i + 1], qY[2 * i + 1] * s.y);
+                    rX[i] = qX[2 * i] + (qX[2 * i + 1] - qX[2 * i]) * t.y;
+                }
+                return hermite3(t.x, r[0], rX[0] * s.x, r[1], rX[1] * s.x);
+            };
+
+            // Lattice coordinates of each corner identify its position; the build stores a few positions twice (separate
+            // records with slightly different traced values): those copies take their mean first, and positions, not
+            // record indices, decide what a leaf's corner is.
+            std::vector<std::array<int, 3>> key(mCorners.size());
+            std::map<std::array<int, 3>, std::vector<int>> copies;
+            for (size_t i = 0; i < mCorners.size(); ++i)
+            {
+                const float3 r = (mCorners[i].position - mGpuSeedMinPoint) / lcell;
+                key[i] = { int(std::lround(r.x)), int(std::lround(r.y)), int(std::lround(r.z)) };
+                copies[key[i]].push_back(int(i));
+            }
+            for (const auto& [k, ids] : copies)
+            {
+                if (ids.size() < 2) continue;
+                Corner mean = mCorners[ids[0]];
+                for (size_t j = 1; j < ids.size(); ++j)
+                {
+                    const Corner& o = mCorners[ids[j]];
+                    for (size_t b = 0; b < mean.shCoeffs.size() && b < o.shCoeffs.size(); ++b) mean.shCoeffs[b] += o.shCoeffs[b];
+                    for (size_t b = 0; b < mean.shGradients.size() && b < o.shGradients.size(); ++b)
+                    {
+                        mean.shGradients[b].r += o.shGradients[b].r;
+                        mean.shGradients[b].g += o.shGradients[b].g;
+                        mean.shGradients[b].b += o.shGradients[b].b;
+                    }
+                }
+                const float inv = 1.f / float(ids.size());
+                for (auto& v : mean.shCoeffs) v = v * inv;
+                for (auto& g : mean.shGradients) { g.r = g.r * inv; g.g = g.g * inv; g.b = g.b * inv; }
+                for (int id : ids) { mCorners[id].shCoeffs = mean.shCoeffs; mCorners[id].shGradients = mean.shGradients; }
+            }
+
+            struct Item { int corner; int leaf; float size; };
+            std::vector<Item> items;
+            std::vector<char> seen(mCorners.size(), 0);
+            for (size_t i = 0; i < nodeCount; ++i)
+            {
+                if (gpuProbes[i].firstChild >= 0) continue;
+                for (int k = 0; k < 8; ++k)
+                {
+                    const int ci = gpuProbes[i].corners[k];
+                    if (ci < 0 || ci >= int(mCorners.size()) || seen[ci]) continue;
+                    seen[ci] = 1;
+                    const float3 x = mCorners[ci].position;
+                    int best = -1;
+                    float bestSize = 0.f;
+                    for (int d = 0; d < 8; ++d)
+                    {
+                        const float3 o = x + float3((d & 4) ? 1.f : -1.f, (d & 2) ? 1.f : -1.f, (d & 1) ? 1.f : -1.f) * (1e-3f * lcell);
+                        const int nb = leafAt(o);
+                        if (nb < 0) continue;
+                        bool isCorner = false;
+                        for (int j = 0; j < 8; ++j)
+                            isCorner = isCorner || (gpuProbes[nb].corners[j] >= 0 && key[gpuProbes[nb].corners[j]] == key[ci]);
+                        if (!isCorner && nodeSize[nb].x > bestSize) { best = nb; bestSize = nodeSize[nb].x; }
+                    }
+                    if (best >= 0) items.push_back({ ci, best, bestSize });
+                }
+            }
+            std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.size > b.size; });
+            for (const Item& it : items)
+            {
+                Corner& c = mCorners[it.corner];
+                const size_t bands = c.shCoeffs.size();
+                std::vector<float3> v(bands);
+                for (size_t b = 0; b < bands; ++b) v[b] = leafValue(it.leaf, c.position, b);
+                float3 t = (c.position - nodeMin[it.leaf]) / nodeSize[it.leaf];
+                t = float3(std::clamp(t.x, 0.f, 1.f), std::clamp(t.y, 0.f, 1.f), std::clamp(t.z, 0.f, 1.f));
+                std::vector<GradSHCoeff> g(bands, GradSHCoeff{ float3(0.f), float3(0.f), float3(0.f) });
+                for (int k = 0; k < 8; ++k)
+                {
+                    const Corner& ck = mCorners[gpuProbes[it.leaf].corners[k]];
+                    const float w = (((k >> 2) & 1) ? t.x : 1.f - t.x) * (((k >> 1) & 1) ? t.y : 1.f - t.y) * ((k & 1) ? t.z : 1.f - t.z);
+                    for (size_t b = 0; b < bands && b < ck.shGradients.size(); ++b)
+                    {
+                        g[b].r += w * ck.shGradients[b].r;
+                        g[b].g += w * ck.shGradients[b].g;
+                        g[b].b += w * ck.shGradients[b].b;
+                    }
+                }
+                c.shCoeffs = v;
+                c.shGradients = g;
+                ++mConstrainedCorners;
+            }
+            logInfo("[AdaptiveProbeVolume] Hanging-node constraint ({}): {} of {} corners constrained.",
+                interp == 1 ? "trilinear" : interp == 2 ? "limited Hermite" : "Hermite", mConstrainedCorners, mCorners.size());
+        }
     }
 
     std::vector<int> gpuSeedIndices(seedRoots.size());

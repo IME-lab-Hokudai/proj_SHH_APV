@@ -571,22 +571,22 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     // One summary and per-point file per interpolation of the tested grids (kEvalInterpolations): Hermite keeps the
     // original names, trilinear adds _Trilinear. Every grid is loaded once and evaluated both ways.
     // One evaluation per interpolation (kEvalInterpolations) and seam handling (kEvalSeamFixes).
-    struct EvalSetup { EvalInterpolation interp; bool oat; };
+    struct EvalSetup { EvalInterpolation interp; bool oat; bool constrain; };
     std::vector<EvalSetup> modes;
     for (EvalInterpolation m : kEvalInterpolations)
-        for (SeamFix f : kEvalSeamFixes) modes.push_back({ m, f == SeamFix::Oat });
+        for (SeamFix f : kEvalSeamFixes) modes.push_back({ m, f == SeamFix::Oat, f == SeamFix::Constrain });
     if (modes.empty()) { logError("[Placement eval] kEvalInterpolations or kEvalSeamFixes is empty."); return; }
     auto modeName = [](const EvalSetup& m)
     {
         const std::string i = m.interp == EvalInterpolation::Trilinear ? "trilinear"
                              : m.interp == EvalInterpolation::LimitedHermite ? "limited Hermite" : "Hermite";
-        return i + (m.oat ? ", Oat seams" : "");
+        return i + (m.oat ? ", Oat seams" : m.constrain ? ", hanging-node constraint" : "");
     };
     std::vector<std::string> summaryCsv, perPointCsv, modeSuffix;
     for (const EvalSetup& m : modes)
     {
         const std::string suffix = std::string(m.interp == EvalInterpolation::Trilinear ? "_Trilinear"
-                                 : m.interp == EvalInterpolation::LimitedHermite ? "_LimitedHermite" : "") + (m.oat ? "_Oat" : "");
+                                 : m.interp == EvalInterpolation::LimitedHermite ? "_LimitedHermite" : "") + (m.oat ? "_Oat" : m.constrain ? "_Constrained" : "");
         modeSuffix.push_back(suffix);
         summaryCsv.push_back(scene + "_PlacementComparisonSummary" + suffix + ".csv");
         const bool writePoints = kWritePerPointCsv && (m.interp == EvalInterpolation::Hermite || kWritePerPointCsvTrilinear);
@@ -984,6 +984,20 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         const bool trilinear = modes[mi].interp == EvalInterpolation::Trilinear;
         const bool limited = modes[mi].interp == EvalInterpolation::LimitedHermite;
         const bool oat = modes[mi].oat;
+        // Hanging-node constraint: the grid's hanging corners take the coarse side's values for this mode's
+        // interpolation; undone when this mode is finished (the other modes read the original grid).
+        struct CornerRestore
+        {
+            AdaptiveProbeVolume* a = nullptr;
+            std::vector<std::pair<int, AdaptiveProbeVolume::Corner>> saved;
+            ~CornerRestore() { if (a) a->restoreCorners(saved); }
+        } cornerRestore;
+        if (modes[mi].constrain && adaptive)
+        {
+            cornerRestore.a = adaptive.get();
+            cornerRestore.saved = adaptive->constrainHangingCorners(trilinear ? 1 : limited ? 2 : 0);
+            logInfo("[Placement eval] {}: {} hanging corners constrained ({}).", e.method, cornerRestore.saved.size(), modeName(modes[mi]));
+        }
         // Adaptive grids: plain interpolation of one leaf, and the Oat (GDC 2005) version that keeps using the samples of
         // finer neighbours: near each face whose neighbour is finer, add (neighbour's value on the face - this leaf's
         // value there), fading out linearly over one neighbour cell along the face normal.
@@ -1087,7 +1101,10 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 }
                 nodeLeaf[k] = interior ? leaf : smallestLeafAt(nodePos[k]);
                 if (nodeLeaf[k] < 0) nodeLeaf[k] = leaf;
-                transition = transition || nodeLeaf[k] != leaf;
+                // Lattice interpolation only where a node belongs to a strictly finer leaf. An equal-level neighbour
+                // gives the node the same value and gradient as this leaf (shared face), so the leaf's own
+                // interpolation is kept there; this is what the runtime shader does (XAtlasSceneShader.slang).
+                transition = transition || (*leavesA)[nodeLeaf[k]].level > L.level;
             }
             if (!transition) { interpLeaf(leaf, p, c); return; }
             // Node data from the smallest leaf at each node.
@@ -1288,7 +1305,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 << aCount << "," << aAbs / na << "," << std::sqrt(aSq / na) << "," << aRel / na << "," << aRef / na << ","
                 << memoryBytes << "," << oCount << "," << oAbs / no << "," << std::sqrt(oSq / no) << "," << oRel / no << ","
                 << oPct / no << "," << seamCount << "," << (seamCount ? seamSum / double(seamCount) : 0.0) << "," << seamMax << ","
-                << (oat && adaptive ? "lattice" : "none") << "\n";
+                << (oat && adaptive ? "lattice" : modes[mi].constrain && adaptive ? "constrained" : "none") << "\n";
         summary.flush();
         logInfo("[Placement eval] {} ({} probes, {}): RMSE {:.4g}, MAE {:.4g}, relMSE {:.4g}; outside objects RMSE {:.4g}, "
             "MAE {:.4g}, relMSE {:.4g}; seam jump mean {:.4g} max {:.4g} ({} face points); {} points outside the grid; {:.1f}s.",
@@ -1423,6 +1440,18 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
                     b.minPoint.x, b.minPoint.y, b.minPoint.z, b.maxPoint.x, b.maxPoint.y, b.maxPoint.z);
         else logInfo("[Batch] Scene {}: probe volume = scene bounds with the 2% inset.", scene);
     }
+    // Full rebuild: start new timing and snapshot logs (both append), keeping the old ones as *_previous.csv.
+    if (!kBatchSkipExisting)
+        for (const std::string logFile : { scene + "_BuildTimings.csv", scene + "_BestFirstSnapshots.csv" })
+        {
+            std::error_code ec;
+            if (!std::filesystem::exists(logFile, ec)) continue;
+            const std::string prev = logFile.substr(0, logFile.size() - 4) + "_previous.csv";
+            std::filesystem::remove(prev, ec);
+            std::filesystem::rename(logFile, prev, ec);
+            if (ec) logWarning("[Batch] Could not rename {} to {}: {}; new rows are appended to it.", logFile, prev, ec.message());
+            else logInfo("[Batch] {} kept as {}; this run starts a new one.", logFile, prev);
+        }
     auto step = [&](const std::string& name, const std::function<void()>& fn)
     {
         const auto ts = Clock::now();
@@ -1443,12 +1472,12 @@ void PrecomputeSHCoefficients::runPlacementBatch(RenderContext* pRenderContext)
         }
         step("uniform U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
     }
-    // Reference grid of this scene (kSceneSetups), built only when its file is missing.
+    // Reference grid of this scene (kSceneSetups), built only when its file is missing (or kBatchRebuildReference).
     if (const SceneSetup* setup = findSceneSetup(scene); setup && setup->referenceResolution > 0)
     {
         const uint32_t res = setup->referenceResolution;
         const std::string file = scene + "_U" + std::to_string(res) + ".txt";
-        if (std::filesystem::exists(file)) logInfo("[Batch] reference U{}: {} exists, skipped.", res, file);
+        if (!kBatchRebuildReference && std::filesystem::exists(file)) logInfo("[Batch] reference U{}: {} exists, skipped.", res, file);
         else step("reference U" + std::to_string(res), [&]() { buildUniformGridToFile(pRenderContext, res, file); });
     }
     for (AdaptiveProbeVolume::SplitScore sc : kBatchScores)

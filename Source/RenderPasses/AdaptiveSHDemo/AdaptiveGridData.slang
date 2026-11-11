@@ -51,7 +51,7 @@ struct GPUCorner
 // while descending, from the seed cell halved once per level.
 struct GPUProbe
 {
-    int firstChild;  // index of child 0 in the node buffer; -1 = leaf
+    int firstChild;  // index of child 0 in the node buffer; < 0 = leaf, -1 - (mask of neighbour directions with finer leaves)
     int corners[8];  // Indices into GPUCorner buffer
 };
 

@@ -43,8 +43,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -72,7 +72,7 @@
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 
-const std::string loadFromFileName = "SceneForData_BF_HarmonicMeanDepth_70000.txt";
+const std::string loadFromFileName = "BistroInterior_Wine_BF_HessianRel_S8_memU32.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
 
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";
@@ -96,6 +96,7 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
 //const std::string loadFromFileName = "U64Shadowboundary.txt"; 
 const std::string loadFromFileName = "BistroInterior_Wine_U32.txt"; 
+//const std::string loadFromFileName = "U8DataScene.txt";
 //const std::string loadFromFileName = "U64BistroCubeGridKPathAllDiffuse.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
@@ -112,7 +113,7 @@ AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : R
 {
     mEnableGlass = props.get<bool>("runtimeGlass", mEnableGlass);
     mShInterpolation = std::min(props.get<uint32_t>("shInterpolation", mShInterpolation), 2u);
-    mShSeamOat = props.get<bool>("shSeamOat", mShSeamOat);
+    mShSeam = std::min(props.get<uint32_t>("shSeam", mShSeam), 2u);
     mGlassRefractionStrength = std::clamp(props.get<float>("glassRefraction", mGlassRefractionStrength), 0.f, 3.f);
     mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 10.0f);
     mpFbo = Fbo::create(mpDevice);
@@ -876,7 +877,7 @@ Properties AdaptiveSHDemo::getProperties() const
     Properties props;
     props["runtimeGlass"] = mEnableGlass;
     props["shInterpolation"] = mShInterpolation;
-    props["shSeamOat"] = mShSeamOat;
+    props["shSeam"] = mShSeam;
     props["glassRefraction"] = mGlassRefractionStrength;
     props["liquidOpticalDepth"] = mLiquidOpticalDepth;
     return props;
@@ -1184,11 +1185,27 @@ void AdaptiveSHDemo::dumpView(RenderContext* pRenderContext, const ref<Texture>&
     logInfo("[View dump] {}: {} x {}, {} pixels shaded by the SH grid.", file, w, h, shPixels);
 }
 
+void AdaptiveSHDemo::loadAdaptiveGrid()
+{
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+    mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
+
+    // A missing grid file leaves the volume empty, and the upload then fails with "Can't create GPU buffer of size
+    // zero". Stop here with the file name instead.
+    if (!std::ifstream(loadFromFileName))
+        FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
+    mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+    mAdaptiveProbeVolume->setHangingConstraint(mShSeam == 2 ? int(mShInterpolation) : -1);
+    mAdaptiveProbeVolume->uploadToGPU();
+    if (mpProbeVisualizePass) mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+#endif
+}
+
 DefineList AdaptiveSHDemo::getShInterpolationDefines() const
 {
     DefineList d;
     d.add("SH_INTERP", std::to_string(mShInterpolation));
-    d.add("SH_SEAM_OAT", mShSeamOat ? "1" : "0");
+    d.add("SH_SEAM_OAT", mShSeam == 1 ? "1" : "0");
     return d;
 }
 
@@ -1218,12 +1235,21 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
         // Same interpolation modes as the placement evaluation (PlacementComparison.cpp).
         static const Gui::DropdownList kShInterpolationList = {
             { 0, "Hermite" }, { 1, "Trilinear" }, { 2, "Hermite, limited slopes" } };
+        const uint32_t oldInterp = mShInterpolation, oldSeam = mShSeam;
         bool changed = widget.dropdown("SH interpolation", kShInterpolationList, mShInterpolation);
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-        changed |= widget.checkbox("Oat seam handling", mShSeamOat);
-        widget.tooltip("Exact Oat (GDC 2005) seams: lattice cells that touch a finer leaf are interpolated on the finest-level lattice.");
+        static const Gui::DropdownList kSeamList = {
+            { 0, "None" }, { 1, "Oat (runtime lookups)" }, { 2, "Hanging-node constraint (baked)" } };
+        changed |= widget.dropdown("Seam handling", kSeamList, mShSeam);
+        widget.tooltip("Oat: lattice interpolation next to finer leaves, in the shader (slow). Constraint: hanging corners take "
+                       "the coarse side's values when the grid is loaded; the shader runs the plain interpolation.");
 #endif
         if (changed) applyShInterpolationDefines();
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        // The constraint is baked into the corners for one interpolation: load the grid again when it is switched on or
+        // off, or when the interpolation changes while it is on.
+        if ((mShSeam == 2) != (oldSeam == 2) || (mShSeam == 2 && mShInterpolation != oldInterp)) loadAdaptiveGrid();
+#endif
     }
     if (auto g = widget.group("View dump (offline image evaluation)", false))
     {
@@ -1496,15 +1522,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             mShowNormalVoxels
         );
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-        mAdaptiveProbeVolume = AdaptiveProbeVolume::create(mpDevice);
-
-        // A missing grid file leaves the volume empty, and the upload then fails with "Can't create GPU buffer of size
-        // zero". Stop here with the file name instead.
-        if (!std::ifstream(loadFromFileName))
-            FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
-        mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
-        mAdaptiveProbeVolume->uploadToGPU();
-        mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+        loadAdaptiveGrid();
 #else
         mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
         if (!std::ifstream(loadFromFileName))
