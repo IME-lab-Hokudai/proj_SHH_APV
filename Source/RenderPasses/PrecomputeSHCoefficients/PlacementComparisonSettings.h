@@ -95,6 +95,10 @@ inline const std::vector<SceneSetup> kSceneSetups = {
     // the cells are near-cubic too (U64: about 10 x 8.4 x 10 cm, close to SceneForData's 7.7 cm). The larger TC region
     // (3.5, 0.65, -6.5)-(16, 5, 3) gave cells 2.3x longer in x than in y, coarser than the lighting detail.
     { "BistroInterior_Wine", true, float3(6.27f, 0.65f, -2.83f), float3(12.77f, 6.0f, 3.67f), 128 },
+    // SceneForData: its usual bounds (scene bounds with the 2% inset, not manual); listed so the batch builds its
+    // reference SceneForData_U128.txt with the current tracer, like the other grids (it was U128DataScene.txt, built
+    // separately on 2026-11-02).
+    { "SceneForData", false, float3(0.f), float3(0.f), 128 },
 };
 inline const SceneSetup* findSceneSetup(const std::string& scene)
 {
