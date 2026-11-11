@@ -199,4 +199,11 @@ inline constexpr uint32_t kClassifyDirections = 64;
 // One finest cell: closer than that, neighbouring probes can lie on both sides of a surface and interpolation is not
 // meaningful (with 0.5 a few such points remained and skewed relMSE in coarse regions).
 inline constexpr float kNearSurfaceCells = 1.0f;
+
+// View evaluation (offline images, PlacementComparison.cpp): the evaluation also reconstructs the irradiance at the
+// pixels of every <scene>_View_*.dump written by AdaptiveSHDemo ("Dump view"), for every grid and mode.
+inline constexpr bool kEvalViews = true;
+// Each pixel is evaluated (and its reference traced) this far off the surface along its normal, in scene units
+// (metres in Bistro), so a dynamic object touching static geometry is not evaluated inside it.
+inline constexpr float kViewSurfaceOffset = 0.003f;
 } // namespace placement

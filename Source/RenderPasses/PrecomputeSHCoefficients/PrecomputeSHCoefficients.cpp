@@ -1105,6 +1105,14 @@ void PrecomputeSHCoefficients::execute(RenderContext* pRenderContext, const Rend
             mRunPlacementBatch = false;
             runPlacementBatch(pRenderContext);
         }
+        // View evaluation (PlacementComparison.cpp), from the UI: path-traced reference at the view pixels, then the
+        // evaluation of every grid (points and view pixels; finished results are kept).
+        if (mRunViewEval)
+        {
+            mRunViewEval = false;
+            traceViewReferences(pRenderContext);
+            exportPlacementComparison();
+        }
         // Placement comparison evaluation (PlacementComparison.cpp), from the UI or on load.
         if (mRunPlacementEval)
         {
@@ -2184,6 +2192,8 @@ void PrecomputeSHCoefficients::renderUI(
     if (widget.button("Placement comparison: build everything + evaluate")) mRunPlacementBatch = true;
     // Runs on the next frame; scene required. Writes <scene>_EvalPointMask.csv, used by the evaluation.
     if (widget.button("Placement comparison: classify sample points")) mRunClassifyEvalPoints = true;
+    // Runs on the next frame; scene required, loaded WITHOUT the dynamic object. Reads <scene>_View_*.dump (AdaptiveSHDemo).
+    if (widget.button("View evaluation: trace references + evaluate grids")) mRunViewEval = true;
 
     if (widget.checkbox(
         "Show Reconstructed Env Map",

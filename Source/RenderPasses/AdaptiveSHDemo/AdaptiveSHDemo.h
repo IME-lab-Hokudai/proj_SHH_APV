@@ -70,6 +70,24 @@ private:
     ref<Texture> mpOpaqueColor;
     ref<Texture> mpOpaqueDepth;
     bool mEnableGlass = true;
+    // SH interpolation of the probe grid (shader defines SH_INTERP and SH_SEAM_OAT in XAtlasSceneShader.slang):
+    // 0 = Hermite, 1 = trilinear, 2 = Hermite with slope limiting; Oat = exact seam handling for adaptive grids.
+    uint32_t mShInterpolation = 2;
+    bool mShSeamOat = true;
+    DefineList getShInterpolationDefines() const;
+    void applyShInterpolationDefines();
+    // View dump for the offline image evaluation (PrecomputeSHCoefficients, PlacementComparison.cpp): writes
+    // <scene tag>_View_<name>.dump with per-pixel position, normal, albedo, emission, SH mask and the demo frame.
+    void bindShadingVars(ShaderVar var);
+    void dumpView(RenderContext* pRenderContext, const ref<Texture>& pOutput);
+    ref<Program> mpDumpProgram;
+    ref<ProgramVars> mpDumpVars;
+    ref<GraphicsState> mpDumpState;
+    ref<Fbo> mpDumpFbo;
+    bool mDumpViewRequested = false;
+    std::string mViewDumpScene;          // must match the precompute scene tag (its .pyscene file name)
+    std::string mViewDumpName = "view1";
+    std::string mLastViewDump;
     float mGlassRefractionStrength = 1.f;
     ref<Buffer> mpLiquidMaterialMask;
     bool mHasLiquidMaterials = false;

@@ -388,6 +388,15 @@ void AdaptiveProbeVolume::uploadToGPU()
         seedRoots = { mProbes.empty() ? -1 : 0 };
     }
 
+    // Lattice of the Oat seam handling: the finest node size (= volume extent / 2^maxLevel, as in PlacementComparison).
+    mGpuLatticeCellSize = mGpuSeedCellSize;
+    for (const Probe& p : mProbes)
+    {
+        const float3 s = p.maxPoint - p.minPoint;
+        if (s.x > 0.f && s.y > 0.f && s.z > 0.f)
+            mGpuLatticeCellSize = float3(std::min(mGpuLatticeCellSize.x, s.x), std::min(mGpuLatticeCellSize.y, s.y), std::min(mGpuLatticeCellSize.z, s.z));
+    }
+
     std::vector<int> newIndex(mProbes.size(), -1);
     std::vector<int> order; // order[newIdx] = old index
     order.reserve(mProbes.size());

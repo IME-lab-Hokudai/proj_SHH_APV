@@ -148,6 +148,10 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
     if (any(pos < gGridMin) || any(pos > gridMax))
         return false;
 
-    fetchHermiteInterpolatedSH(pos, coeffs);
+#if SH_INTERP == 1
+    fetchTrilinearInterpolatedSH(pos, coeffs);
+#else
+    fetchHermiteInterpolatedSH(pos, coeffs); // limited when SH_INTERP == 2 (hermite1D in XAtlasSceneShader.slang)
+#endif
     return true;
 }

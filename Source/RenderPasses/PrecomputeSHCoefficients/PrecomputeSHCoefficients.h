@@ -166,6 +166,9 @@ private:
     void exportPlacementComparison();                          // no scene needed; see PlacementComparison.cpp
     void evaluatePlacementManifest(const std::string& scene); // one <scene>_PlacementComparisonGrids.csv
     bool mRunPlacementEval = false;
+    // View evaluation (PlacementComparison.cpp): SH traced at every pixel of <scene>_View_*.dump -> <stem>_Traced.irr.
+    void traceViewReferences(RenderContext* pRenderContext);
+    bool mRunViewEval = false; // trace the view references, then evaluate every grid (also at the view pixels)
     // The manual grid bounds (true) or none, in which case builds use the scene bounds with a 2% inset.
     bool getManualGridBounds(AABB& out) const;
     void ProgressiveRefineBuild(RenderContext* pRenderContext);

@@ -70,6 +70,7 @@ cbuffer SeedGridCB
     float3 gSeedMinPoint;
     float3 gSeedCellSize;
     uint3 gSeedResolution;
+    float3 gLatticeCellSize; // finest leaf size of the grid (Oat seam lattice), set by AdaptiveSHDemo
 };
 
 #endif
@@ -162,13 +163,51 @@ float3 sampleBistroAtlas(
 
 
 // ------------------------------------------------------------------
-// 1D Hermite Interpolation (RGB)
+// Interpolation mode, as in the placement evaluation (PlacementComparison.cpp). AdaptiveSHDemo sets both from its UI.
+//   SH_INTERP:   0 = tricubic Hermite, 1 = trilinear, 2 = Hermite with Fritsch-Carlson slope limiting.
+//   SH_SEAM_OAT: adaptive grids only. 1 = exact Oat (GDC 2005) seam handling: in a lattice cell of the finest level
+//                that touches a finer leaf, interpolate on that lattice cell, with node values (and gradients) from the
+//                smallest leaf touching each node. 0 = interpolate each leaf on its own (seams between levels).
+// ------------------------------------------------------------------
+#ifndef SH_INTERP
+#define SH_INTERP 2
+#endif
+#ifndef SH_SEAM_OAT
+#define SH_SEAM_OAT 1
+#endif
+
+// ------------------------------------------------------------------
+// 1D Hermite Interpolation, per channel
 // t: Normalized distance (0..1)
 // v0, v1: Values at endpoints
 // s0, s1: Slopes at endpoints (Must be scaled by segment length!)
+// With SH_INTERP == 2 the slopes are limited first, exactly as hermite1DLimited in AdaptiveProbeVolume.cpp
+// (PrecomputeSHCoefficients): a slope whose sign disagrees with the secant d = v1 - v0 (or any slope when d = 0) is
+// set to 0, and both are scaled down when (s0/d)^2 + (s1/d)^2 > 9.
 // ------------------------------------------------------------------
-float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
+float hermite1DScalar(float t, float v0, float s0, float v1, float s1)
 {
+#if SH_INTERP == 2
+    float d = v1 - v0;
+    if (d == 0.f)
+    {
+        s0 = 0.f;
+        s1 = 0.f;
+    }
+    else
+    {
+        if (s0 * d < 0.f) s0 = 0.f;
+        if (s1 * d < 0.f) s1 = 0.f;
+        float a = s0 / d, b = s1 / d;
+        float r2 = a * a + b * b;
+        if (r2 > 9.f)
+        {
+            float k = 3.f / sqrt(r2);
+            s0 *= k;
+            s1 *= k;
+        }
+    }
+#endif
     float t2 = t * t;
     float t3 = t2 * t;
 
@@ -181,136 +220,114 @@ float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
     return h00 * v0 + h10 * s0 + h01 * v1 + h11 * s1;
 }
 
-// ------------------------------------------------------------------
-// Standard Trilinear Interpolation (Baseline)
-// Traversal Order: Z -> Y -> X (Matches C++ Bit Packing)
-// ------------------------------------------------------------------
+float3 hermite1D(float t, float3 v0, float3 s0, float3 v1, float3 s1)
+{
+    return float3(
+        hermite1DScalar(t, v0.x, s0.x, v1.x, s1.x),
+        hermite1DScalar(t, v0.y, s0.y, v1.y, s1.y),
+        hermite1DScalar(t, v0.z, s0.z, v1.z, s1.z));
+}
+
+// Progressive tricubic Hermite of one band in one cell: along Falcor Z (corner bit 1), then Y (bit 2), then X (bit 4);
+// the transverse gradients are interpolated linearly. v: corner values; gX, gY, gZ: corner gradients in world axes;
+// size: cell size (world-space derivatives are scaled to the 0..1 parameter).
+float3 hermiteCellBand(float3 t, float3 size, float3 v[8], float3 gX[8], float3 gY[8], float3 gZ[8])
+{
+    float3 q[4];
+    float3 q_dX[4];
+    float3 q_dY[4];
+    for (int i = 0; i < 4; ++i)
+    {
+        int i0 = 2 * i;
+        int i1 = 2 * i + 1;
+        q[i] = hermite1D(t.z, v[i0], gZ[i0] * size.z, v[i1], gZ[i1] * size.z);
+        q_dX[i] = lerp(gX[i0], gX[i1], t.z);
+        q_dY[i] = lerp(gY[i0], gY[i1], t.z);
+    }
+
+    float3 r[2];
+    float3 r_dX[2];
+    for (int i = 0; i < 2; ++i)
+    {
+        int i0 = 2 * i;
+        int i1 = 2 * i + 1;
+        r[i] = hermite1D(t.y, q[i0], q_dY[i0] * size.y, q[i1], q_dY[i1] * size.y);
+        r_dX[i] = lerp(q_dX[i0], q_dX[i1], t.y);
+    }
+
+    return hermite1D(t.x, r[0], r_dX[0] * size.x, r[1], r_dX[1] * size.x);
+}
+
+// Trilinear of one band in one cell (corner bits x = 4, y = 2, z = 1).
+float3 trilinearCellBand(float3 t, float3 v[8])
+{
+    float3 z0 = lerp(v[0], v[1], t.z);
+    float3 z1 = lerp(v[2], v[3], t.z);
+    float3 z2 = lerp(v[4], v[5], t.z);
+    float3 z3 = lerp(v[6], v[7], t.z);
+    float3 y0 = lerp(z0, z1, t.y);
+    float3 y1 = lerp(z2, z3, t.y);
+    return lerp(y0, y1, t.x);
+}
+
 #if SH_GRID_UNIFORM
 #include "UniformGridSampling.slang"
 #else
-// nodeMin, size: bounds of the leaf, from traverseOctree (not stored in the node).
-void fetchTrilinearInterpolatedSH(int probeIdx, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
+// Stored gradient convention: .x = world Z, .y = world X, .z = world Y.
+void cornerGradientsBand(int corner, int band, out float3 gX, out float3 gY, out float3 gZ)
 {
-    GPUProbe p = gProbeBuffer[probeIdx];
+    float4 r = gCornerBuffer[corner].gradR[band];
+    float4 g = gCornerBuffer[corner].gradG[band];
+    float4 b = gCornerBuffer[corner].gradB[band];
+    gX = float3(r.y, g.y, b.y);
+    gY = float3(r.z, g.z, b.z);
+    gZ = float3(r.x, g.x, b.x);
+}
 
-    // Normalized position within voxel (0..1)
+// One band of a leaf, interpolated at pos (Hermite, limited Hermite or trilinear, by SH_INTERP).
+// nodeMin, size: bounds of the leaf, from traverseOctree (not stored in the node).
+float3 leafBand(int leaf, float3 nodeMin, float3 size, float3 pos, int band)
+{
     float3 t = saturate((pos - nodeMin) / size);
-
-    // Pre-load indices for the 8 corners
     int cIdx[8];
-    [unroll]
-    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
-
-    [unroll]
-    for (int band = 0; band < 9; ++band)
+    float3 v[8];
+    for (int k = 0; k < 8; ++k)
     {
-        // 1. Fetch Corner Values (No Gradients needed!)
-        float3 v[8];
-        for (int i = 0; i < 8; ++i)
-        {
-            v[i] = gCornerBuffer[cIdx[i]].coeffs[band].rgb;
-        }
+        cIdx[k] = gProbeBuffer[leaf].corners[k];
+        v[k] = gCornerBuffer[cIdx[k]].coeffs[band].rgb;
+    }
+#if SH_INTERP == 1
+    return trilinearCellBand(t, v);
+#else
+    float3 gX[8];
+    float3 gY[8];
+    float3 gZ[8];
+    for (int k = 0; k < 8; ++k) cornerGradientsBand(cIdx[k], band, gX[k], gY[k], gZ[k]);
+    return hermiteCellBand(t, size, v, gX, gY, gZ);
+#endif
+}
 
-        // 2. Interpolate along Z (Stride 1, Bit 0)
-        // Pairs (0,1), (2,3), (4,5), (6,7)
-        float3 z0 = lerp(v[0], v[1], t.z);
-        float3 z1 = lerp(v[2], v[3], t.z);
-        float3 z2 = lerp(v[4], v[5], t.z);
-        float3 z3 = lerp(v[6], v[7], t.z);
-
-        // 3. Interpolate along Y (Stride 2, Bit 1)
-        // Pairs (z0, z1) -> Low Y
-        // Pairs (z2, z3) -> High Y
-        float3 y0 = lerp(z0, z1, t.y);
-        float3 y1 = lerp(z2, z3, t.y);
-
-        // 4. Interpolate along X (Stride 4, Bit 2)
-        finalCoeffs[band] = lerp(y0, y1, t.x);
+// Gradients of one band of a leaf at pos: trilinear blend of its 8 corner gradients (as leafGradients in the evaluation).
+void leafGradientsBand(int leaf, float3 nodeMin, float3 size, float3 pos, int band, out float3 gX, out float3 gY, out float3 gZ)
+{
+    float3 t = saturate((pos - nodeMin) / size);
+    gX = float3(0.f);
+    gY = float3(0.f);
+    gZ = float3(0.f);
+    for (int k = 0; k < 8; ++k)
+    {
+        float w = (((k >> 2) & 1) != 0 ? t.x : 1.f - t.x) * (((k >> 1) & 1) != 0 ? t.y : 1.f - t.y) * ((k & 1) != 0 ? t.z : 1.f - t.z);
+        float3 cx, cy, cz;
+        cornerGradientsBand(gProbeBuffer[leaf].corners[k], band, cx, cy, cz);
+        gX += w * cx;
+        gY += w * cy;
+        gZ += w * cz;
     }
 }
 
-// ------------------------------------------------------------------
-// Progressive Tricubic Hermite Interpolation
-// ------------------------------------------------------------------
-void fetchHermiteInterpolatedSH(int probeIdx, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
+void fetchLeafSH(int leaf, float3 nodeMin, float3 size, float3 pos, out float3 finalCoeffs[9])
 {
-    GPUProbe p = gProbeBuffer[probeIdx];
-    float3 t = saturate((pos - nodeMin) / size);
-
-    int cIdx[8];
-    for (int k = 0; k < 8; ++k) cIdx[k] = p.corners[k];
-
-    for (int band = 0; band < 9; ++band)
-    {
-        float3 v[8];
-        // Gradients mapped to Falcor Axes
-        float3 g_FalcorX[8];
-        float3 g_FalcorY[8];
-        float3 g_FalcorZ[8];
-
-        for (int i = 0; i < 8; ++i)
-        {
-            GPUCorner c = gCornerBuffer[cIdx[i]];
-            v[i] = c.coeffs[band].rgb;
-
-            // ----------------------------------------------------------------
-            // FIXED MAPPING:
-            // Falcor X = SH Y  --> Use .y (d/dy_sh)
-            // Falcor Y = SH Z  --> Use .z (d/dz_sh)
-            // Falcor Z = SH X  --> Use .x (d/dx_sh)
-            // ----------------------------------------------------------------
-            g_FalcorX[i] = float3(c.gradR[band].y, c.gradG[band].y, c.gradB[band].y);
-            g_FalcorY[i] = float3(c.gradR[band].z, c.gradG[band].z, c.gradB[band].z);
-            g_FalcorZ[i] = float3(c.gradR[band].x, c.gradG[band].x, c.gradB[band].x);
-        }
-
-        // ----------------------------------------------------------------
-        // PASS 1: Interpolate along Falcor Z (Stride 1)
-        // C++: i and i+1 differ by size.z
-        // ----------------------------------------------------------------
-        float3 q[4];
-        float3 q_dX[4];
-        float3 q_dY[4];
-
-        for (int i = 0; i < 4; ++i)
-        {
-            int i0 = 2 * i;
-            int i1 = 2 * i + 1;
-
-            // Hermite using Z-Gradient (g_FalcorZ)
-            // Note: Multiply by size.z to scale world-derivative to 0..1 space
-            q[i] = hermite1D(t.z, v[i0], g_FalcorZ[i0] * size.z, v[i1], g_FalcorZ[i1] * size.z);
-
-            // Linearly interpolate the other gradients
-            q_dX[i] = lerp(g_FalcorX[i0], g_FalcorX[i1], t.z);
-            q_dY[i] = lerp(g_FalcorY[i0], g_FalcorY[i1], t.z);
-        }
-
-        // ----------------------------------------------------------------
-        // PASS 2: Interpolate along Falcor Y (Stride 2)
-        // C++: i and i+2 differ by size.y
-        // ----------------------------------------------------------------
-        float3 r[2];
-        float3 r_dX[2];
-
-        for (int i = 0; i < 2; ++i)
-        {
-            int i0 = 2 * i;
-            int i1 = 2 * i + 1;
-
-            // Hermite using Y-Gradient (g_FalcorY)
-            r[i] = hermite1D(t.y, q[i0], q_dY[i0] * size.y, q[i1], q_dY[i1] * size.y);
-
-            r_dX[i] = lerp(q_dX[i0], q_dX[i1], t.y);
-        }
-
-        // ----------------------------------------------------------------
-        // PASS 3: Interpolate along Falcor X (Stride 4)
-        // C++: i and i+4 differ by size.x
-        // ----------------------------------------------------------------
-        // Hermite using X-Gradient (g_FalcorX)
-        finalCoeffs[band] = hermite1D(t.x, r[0], r_dX[0] * size.x, r[1], r_dX[1] * size.x);
-    }
+    for (int band = 0; band < 9; ++band) finalCoeffs[band] = leafBand(leaf, nodeMin, size, pos, band);
 }
 
 // Seed cell containing pos: its root node, and its bounds (cellMin, cellSize). Every grid has a seed on the GPU
@@ -369,6 +386,95 @@ int traverseOctree(float3 pos, out float3 nodeMin, out float3 nodeSize)
     return currentIdx;
 }
 
+// The finest leaf whose closure contains x: look just off x in each of the 8 diagonal directions (same order and
+// tie rule as smallestLeafAt in the evaluation: the first of the finest wins).
+int smallestLeafAt(float3 x, out float3 leafMin, out float3 leafSize)
+{
+    int best = -1;
+    float bestSize = 3.402823e38f;
+    leafMin = float3(0.f);
+    leafSize = float3(0.f);
+    for (int k = 0; k < 8; ++k)
+    {
+        float3 o = x + float3((k & 4) != 0 ? 1.f : -1.f, (k & 2) != 0 ? 1.f : -1.f, (k & 1) != 0 ? 1.f : -1.f) * (1e-3f * gLatticeCellSize);
+        float3 mn, sz;
+        int nb = traverseOctree(o, mn, sz);
+        if (nb >= 0 && sz.x < 0.75f * bestSize)
+        {
+            best = nb;
+            bestSize = sz.x;
+            leafMin = mn;
+            leafSize = sz;
+        }
+    }
+    return best;
+}
+
+#if SH_SEAM_OAT
+// Exact Oat seam handling (port of interpAdaptive in PlacementComparison.cpp). The lattice is the finest level of the
+// grid, starting at the volume minimum (= gSeedMinPoint). In the lattice cell containing pos (kept inside the leaf),
+// each node on the leaf boundary takes the smallest leaf touching it; if any node's leaf differs from this leaf, pos is
+// interpolated on the lattice cell from those nodes, otherwise the leaf's own interpolation is used. Neighbouring
+// lattice cells share their nodes, so faces between leaves are continuous (exactly for trilinear).
+void fetchOatSH(int leaf, float3 leafMin, float3 leafSize, float3 pos, out float3 finalCoeffs[9])
+{
+    float3 lcell = gLatticeCellSize;
+    float3 volMin = gSeedMinPoint;
+    int3 lo = int3(round((leafMin - volMin) / lcell));
+    int3 n = max(int3(1), int3(round(leafSize / lcell)));
+    int3 ci = clamp(int3(floor((pos - volMin) / lcell)), lo, lo + n - 1);
+
+    int nodeLeaf[8];
+    float3 nodeMin[8];
+    float3 nodeSize[8];
+    float3 nodePos[8];
+    bool transition = false;
+    for (int k = 0; k < 8; ++k)
+    {
+        int3 g = ci + int3((k >> 2) & 1, (k >> 1) & 1, k & 1);
+        nodePos[k] = volMin + float3(g) * lcell;
+        nodeLeaf[k] = leaf;
+        nodeMin[k] = leafMin;
+        nodeSize[k] = leafSize;
+        bool interior = all(g > lo) && all(g < lo + n);
+        if (!interior)
+        {
+            float3 mn, sz;
+            int nb = smallestLeafAt(nodePos[k], mn, sz);
+            if (nb >= 0)
+            {
+                nodeLeaf[k] = nb;
+                nodeMin[k] = mn;
+                nodeSize[k] = sz;
+            }
+        }
+        transition = transition || nodeLeaf[k] != leaf;
+    }
+
+    if (!transition)
+    {
+        fetchLeafSH(leaf, leafMin, leafSize, pos, finalCoeffs);
+        return;
+    }
+
+    float3 t = saturate((pos - nodePos[0]) / lcell);
+    for (int band = 0; band < 9; ++band)
+    {
+        float3 v[8];
+        for (int k = 0; k < 8; ++k) v[k] = leafBand(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band);
+#if SH_INTERP == 1
+        finalCoeffs[band] = trilinearCellBand(t, v);
+#else
+        float3 gX[8];
+    float3 gY[8];
+    float3 gZ[8];
+        for (int k = 0; k < 8; ++k) leafGradientsBand(nodeLeaf[k], nodeMin[k], nodeSize[k], nodePos[k], band, gX[k], gY[k], gZ[k]);
+        finalCoeffs[band] = hermiteCellBand(t, lcell, v, gX, gY, gZ);
+#endif
+    }
+}
+#endif
+
 bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
 {
     [unroll]
@@ -376,8 +482,11 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
     float3 nodeMin, nodeSize;
     int probeIdx = traverseOctree(pos, nodeMin, nodeSize);
     if (probeIdx < 0) return false;
-    fetchHermiteInterpolatedSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
-    //fetchTrilinearInterpolatedSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
+#if SH_SEAM_OAT
+    fetchOatSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
+#else
+    fetchLeafSH(probeIdx, nodeMin, nodeSize, pos, coeffs);
+#endif
     return true;
 }
 #endif
@@ -523,6 +632,48 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentr
         }
     }
     return float4(litColor + emission, 1.f);
+}
+
+// View dump for the offline image evaluation (AdaptiveSHDemo "Dump view"): per pixel, the data needed to shade it with
+// any probe grid offline. Same surface data as psMain: shading position and normal, albedo, emission; pos.w = 1 where
+// psMain shades with the SH grid (geometry without a lightmap, e.g. the dynamic object), 0 elsewhere.
+struct ViewDumpOut
+{
+    float4 pos : SV_Target0;
+    float4 normal : SV_Target1;
+    float4 albedo : SV_Target2;
+    float4 emission : SV_Target3;
+};
+
+ViewDumpOut psDump(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentrics : SV_Barycentrics)
+{
+    let materialLod = ExplicitGradientTextureSampler(ddx(vsOut.texC), ddy(vsOut.texC));
+    if (alphaTest(vsOut, triangleIndex, materialLod)) discard;
+
+    float3 viewDir = normalize(gScene.camera.getPosition() - vsOut.posW);
+    ShadingData shadingData = prepareShadingData(vsOut, triangleIndex, viewDir);
+
+    BasicMaterialData material = gScene.materials.getBasicMaterialData(vsOut.materialID);
+    if (gGlassEnabled != 0 && transmissionAmount(material) > 0.01f) discard;
+    let header = gScene.materials.getMaterialHeader(vsOut.materialID);
+    SamplerState materialSampler = gScene.materials.getTextureSampler(header.getDefaultTextureSamplerID());
+    float3 albedo = gScene.materials.sampleTexture(
+        material.texBaseColor, materialSampler, vsOut.texC,
+        (float4)material.baseColor, materialLod).rgb;
+    float3 emission = gScene.materials.sampleTexture(
+        material.texEmissive, materialSampler, vsOut.texC,
+        float4(material.emissive, 1.f), materialLod).rgb * material.emissiveFactor;
+
+    uint lightmapPage;
+    float2 lightmapUV;
+    bool lightmapped = getBistroLightmapLookup(vsOut, triangleIndex, barycentrics, lightmapPage, lightmapUV);
+
+    ViewDumpOut o;
+    o.pos = float4(shadingData.posW, lightmapped ? 0.f : 1.f);
+    o.normal = float4(shadingData.frame.N, 0.f);
+    o.albedo = float4(albedo, 0.f);
+    o.emission = float4(emission, 0.f);
+    return o;
 }
 
 bool projectGlassPoint(float3 p, out float2 uv, out float depth)

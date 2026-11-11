@@ -26,6 +26,7 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include <fstream>
+#include <iomanip>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -42,8 +43,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -93,7 +94,8 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64DataScene_4096spp.txt";
 //const std::string loadFromFileName = "U64Bistro.txt";
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
-const std::string loadFromFileName = "U64Shadowboundary.txt"; 
+//const std::string loadFromFileName = "U64Shadowboundary.txt"; 
+const std::string loadFromFileName = "BistroInterior_Wine_U32.txt"; 
 //const std::string loadFromFileName = "U64BistroCubeGridKPathAllDiffuse.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
 #endif
@@ -109,6 +111,8 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice)
 {
     mEnableGlass = props.get<bool>("runtimeGlass", mEnableGlass);
+    mShInterpolation = std::min(props.get<uint32_t>("shInterpolation", mShInterpolation), 2u);
+    mShSeamOat = props.get<bool>("shSeamOat", mShSeamOat);
     mGlassRefractionStrength = std::clamp(props.get<float>("glassRefraction", mGlassRefractionStrength), 0.f, 3.f);
     mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 10.0f);
     mpFbo = Fbo::create(mpDevice);
@@ -871,6 +875,8 @@ Properties AdaptiveSHDemo::getProperties() const
 {
     Properties props;
     props["runtimeGlass"] = mEnableGlass;
+    props["shInterpolation"] = mShInterpolation;
+    props["shSeamOat"] = mShSeamOat;
     props["glassRefraction"] = mGlassRefractionStrength;
     props["liquidOpticalDepth"] = mLiquidOpticalDepth;
     return props;
@@ -931,28 +937,7 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         // ------------------------------------------------------------------
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
-        auto applyVar = mpStaticVars->getRootVar();
-        applyVar["GlassCB"]["gGlassEnabled"] = mEnableGlass ? 1u : 0u;
-        bindBistroXAtlasLightmapTest(
-            applyVar,
-            mpLinearSampler
-        );
-        // Atlas-mapped geometry uses lightmaps; unmapped geometry uses the selected SH grid.
-#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-        applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
-        applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
-
-        applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
-
-        // The uploaded seed (a grid without a seed gets one 1 x 1 x 1 cell): the shader derives node bounds from it.
-        applyVar["SeedGridCB"]["gUseSeedGrid"] = 1u;
-        applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getGpuSeedMinPoint();
-        applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getGpuSeedCellSize();
-        applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getGpuSeedResolution();
-
-#else
-        mUniformProbeVolume->bindShaderData(applyVar);
-#endif
+        bindShadingVars(mpStaticVars->getRootVar());
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
 
         if (mEnableGlass)
@@ -1045,6 +1030,13 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
 
         frameIndex++;
 
+        // View dump (UI): after the frame, before the grid overlays, so the saved frame shows the scene only.
+        if (mDumpViewRequested)
+        {
+            mDumpViewRequested = false;
+            dumpView(pRenderContext, pTargetFbo);
+        }
+
         if (mbShowAdaptiveGrid)
         {
             mpProbeVisualizePass->setCameraData(
@@ -1097,11 +1089,150 @@ void AdaptiveSHDemo::updateFDPlaneVis()
     mpFDPlaneVisPass->setPointGroups(groups);
 }
 
+// Lightmap, glass flag and probe grid of the static shading program (psMain); the dump program uses the same.
+void AdaptiveSHDemo::bindShadingVars(ShaderVar applyVar)
+{
+    applyVar["GlassCB"]["gGlassEnabled"] = mEnableGlass ? 1u : 0u;
+    bindBistroXAtlasLightmapTest(
+        applyVar,
+        mpLinearSampler
+    );
+    // Atlas-mapped geometry uses lightmaps; unmapped geometry uses the selected SH grid.
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+    applyVar["gCornerBuffer"] = mAdaptiveProbeVolume->getCornerBuffer();
+    applyVar["gProbeBuffer"] = mAdaptiveProbeVolume->getProbeBuffer();
+
+    applyVar["gSeedProbeIndices"] = mAdaptiveProbeVolume->getSeedProbeIndexBuffer();
+
+    // The uploaded seed (a grid without a seed gets one 1 x 1 x 1 cell): the shader derives node bounds from it.
+    applyVar["SeedGridCB"]["gUseSeedGrid"] = 1u;
+    applyVar["SeedGridCB"]["gSeedMinPoint"] = mAdaptiveProbeVolume->getGpuSeedMinPoint();
+    applyVar["SeedGridCB"]["gSeedCellSize"] = mAdaptiveProbeVolume->getGpuSeedCellSize();
+    applyVar["SeedGridCB"]["gSeedResolution"] = mAdaptiveProbeVolume->getGpuSeedResolution();
+    applyVar["SeedGridCB"]["gLatticeCellSize"] = mAdaptiveProbeVolume->getGpuLatticeCellSize();
+#else
+    mUniformProbeVolume->bindShaderData(applyVar);
+#endif
+}
+
+// Writes <scene tag>_View_<name>.dump (binary, little-endian) in the working directory:
+//   char[8] "SHVIEW1", uint32 width, uint32 height,
+//   float[16] camera: position xyz, target xyz, up xyz, focal length, frame height, aspect ratio, near, far, 0, 0,
+//   then 5 planes of width x height float4, row 0 = top: position (w = 1 where the SH grid shades the pixel),
+//   shading normal, albedo, emission, and the demo frame (MSAA resolved; what this pass rendered this frame).
+// Plus <...>.camera.txt with the camera as Mogwai Python, to restore the view. Pixels are single-sample.
+void AdaptiveSHDemo::dumpView(RenderContext* pRenderContext, const ref<Texture>& pOutput)
+{
+    if (!mpScene || !mpDumpProgram) return;
+    const uint32_t w = pOutput->getWidth(), h = pOutput->getHeight();
+    if (!mpDumpFbo || mpDumpFbo->getWidth() != w || mpDumpFbo->getHeight() != h)
+    {
+        mpDumpFbo = Fbo::create(mpDevice);
+        for (uint32_t i = 0; i < 4; ++i)
+            mpDumpFbo->attachColorTarget(mpDevice->createTexture2D(w, h, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+                ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource), i);
+        mpDumpFbo->attachDepthStencilTarget(mpDevice->createTexture2D(w, h, ResourceFormat::D32Float, 1, 1, nullptr,
+            ResourceBindFlags::DepthStencil));
+    }
+    pRenderContext->clearFbo(mpDumpFbo.get(), float4(0.f), 1.f, 0, FboAttachmentType::All);
+    mpDumpState->setFbo(mpDumpFbo);
+    bindShadingVars(mpDumpVars->getRootVar());
+    mpScene->rasterize(pRenderContext, mpDumpState.get(), mpDumpVars.get(), mpRasterState, mpRasterState);
+
+    ref<Texture> pFrame = mpDevice->createTexture2D(w, h, ResourceFormat::RGBA32Float, 1, 1, nullptr,
+        ResourceBindFlags::RenderTarget | ResourceBindFlags::ShaderResource);
+    if (pOutput->getSampleCount() > 1) pRenderContext->resolveResource(pOutput, pFrame);
+    else pRenderContext->copyResource(pFrame.get(), pOutput.get());
+
+    std::vector<std::vector<uint8_t>> planes;
+    for (uint32_t i = 0; i < 4; ++i) planes.push_back(pRenderContext->readTextureSubresource(mpDumpFbo->getColorTexture(i).get(), 0));
+    planes.push_back(pRenderContext->readTextureSubresource(pFrame.get(), 0));
+
+    const std::string stem = (mViewDumpScene.empty() ? std::string("Scene") : mViewDumpScene) + "_View_" +
+                             (mViewDumpName.empty() ? std::string("view") : mViewDumpName);
+    const std::string file = stem + ".dump";
+    std::ofstream out(file, std::ios::binary);
+    if (!out) { logError("[View dump] Cannot write {}.", file); return; }
+    const char magic[8] = { 'S', 'H', 'V', 'I', 'E', 'W', '1', 0 };
+    out.write(magic, 8);
+    out.write(reinterpret_cast<const char*>(&w), 4);
+    out.write(reinterpret_cast<const char*>(&h), 4);
+    const auto& cam = mpScene->getCamera();
+    const float3 p = cam->getPosition(), t = cam->getTarget(), u = cam->getUpVector();
+    const float camData[16] = { p.x, p.y, p.z, t.x, t.y, t.z, u.x, u.y, u.z, cam->getFocalLength(), cam->getFrameHeight(),
+                                cam->getAspectRatio(), cam->getNearPlane(), cam->getFarPlane(), 0.f, 0.f };
+    out.write(reinterpret_cast<const char*>(camData), sizeof(camData));
+    const size_t planeBytes = size_t(w) * h * 16;
+    for (const auto& pl : planes)
+    {
+        if (pl.size() < planeBytes) { logError("[View dump] Read-back of {} bytes, expected {}.", pl.size(), planeBytes); return; }
+        out.write(reinterpret_cast<const char*>(pl.data()), std::streamsize(planeBytes));
+    }
+    out.close();
+    size_t shPixels = 0;
+    const float* posPlane = reinterpret_cast<const float*>(planes[0].data());
+    for (size_t i = 0; i < size_t(w) * h; ++i) shPixels += posPlane[4 * i + 3] > 0.5f;
+    std::ofstream camOut(stem + ".camera.txt");
+    camOut << std::setprecision(9) << "# Mogwai: paste into the script console to restore the view of " << file << "\n"
+           << "camera = m.scene.camera\n"
+           << "camera.position = float3(" << p.x << ", " << p.y << ", " << p.z << ")\n"
+           << "camera.target = float3(" << t.x << ", " << t.y << ", " << t.z << ")\n"
+           << "camera.up = float3(" << u.x << ", " << u.y << ", " << u.z << ")\n"
+           << "camera.focalLength = " << cam->getFocalLength() << "\n"
+           << "# frame " << w << " x " << h << ", grid file in the demo: " << loadFromFileName << "\n";
+    mLastViewDump = file + " (" + std::to_string(w) + " x " + std::to_string(h) + ", " + std::to_string(shPixels) + " SH pixels)";
+    logInfo("[View dump] {}: {} x {}, {} pixels shaded by the SH grid.", file, w, h, shPixels);
+}
+
+DefineList AdaptiveSHDemo::getShInterpolationDefines() const
+{
+    DefineList d;
+    d.add("SH_INTERP", std::to_string(mShInterpolation));
+    d.add("SH_SEAM_OAT", mShSeamOat ? "1" : "0");
+    return d;
+}
+
+// Changing the defines recompiles the programs; the vars are rebuilt for the new reflection (all of them are bound
+// every frame in execute()).
+void AdaptiveSHDemo::applyShInterpolationDefines()
+{
+    const DefineList d = getShInterpolationDefines();
+    if (mpStaticProgram)
+    {
+        mpStaticProgram->addDefines(d);
+        mpStaticVars = ProgramVars::create(mpDevice, mpStaticProgram->getReflector());
+    }
+    if (mpGlassProgram)
+    {
+        mpGlassProgram->addDefines(d);
+        mpGlassVars = ProgramVars::create(mpDevice, mpGlassProgram->getReflector());
+    }
+}
+
 void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     widget.checkbox("Runtime glass", mEnableGlass);
     widget.var("Glass refraction", mGlassRefractionStrength, 0.f, 3.f);
     widget.var("Liquid color depth", mLiquidOpticalDepth, 0.f, 10.0f, 0.001f);
     widget.text("Loaded probe file: " + loadFromFileName);
+    {
+        // Same interpolation modes as the placement evaluation (PlacementComparison.cpp).
+        static const Gui::DropdownList kShInterpolationList = {
+            { 0, "Hermite" }, { 1, "Trilinear" }, { 2, "Hermite, limited slopes" } };
+        bool changed = widget.dropdown("SH interpolation", kShInterpolationList, mShInterpolation);
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        changed |= widget.checkbox("Oat seam handling", mShSeamOat);
+        widget.tooltip("Exact Oat (GDC 2005) seams: lattice cells that touch a finer leaf are interpolated on the finest-level lattice.");
+#endif
+        if (changed) applyShInterpolationDefines();
+    }
+    if (auto g = widget.group("View dump (offline image evaluation)", false))
+    {
+        // The scene tag must be the precompute scene's .pyscene name (the evaluation reads <tag>_View_*.dump).
+        g.textbox("Scene tag", mViewDumpScene);
+        g.textbox("View name", mViewDumpName);
+        if (g.button("Dump view")) mDumpViewRequested = true;
+        if (!mLastViewDump.empty()) g.text("Last: " + mLastViewDump);
+    }
 
     if (auto orbitGroup = widget.group("Camera Orbit", true))
     {
@@ -1394,7 +1525,9 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
             .vsEntry("vsMain")
             .psEntry("psMain");
 
-        mpStaticProgram = Program::create(mpDevice, previewDesc, mpScene->getSceneDefines());
+        DefineList staticDefines = mpScene->getSceneDefines();
+        staticDefines.add(getShInterpolationDefines());
+        mpStaticProgram = Program::create(mpDevice, previewDesc, staticDefines);
         mpStaticVars = ProgramVars::create(mpDevice, mpStaticProgram->getReflector());
 
         // rasterizer state
@@ -1418,8 +1551,25 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         glassDesc.addShaderModules(mpScene->getShaderModules());
         glassDesc.addTypeConformances(mpScene->getTypeConformances());
         glassDesc.addShaderLibrary(kShaderFile).vsEntry("vsMain").psEntry("psGlass");
-        mpGlassProgram = Program::create(mpDevice, glassDesc, mpScene->getSceneDefines());
+        DefineList glassDefines = mpScene->getSceneDefines();
+        glassDefines.add(getShInterpolationDefines());
+        mpGlassProgram = Program::create(mpDevice, glassDesc, glassDefines);
         mpGlassVars = ProgramVars::create(mpDevice, mpGlassProgram->getReflector());
+        ProgramDesc dumpDesc;
+        dumpDesc.addShaderModules(mpScene->getShaderModules());
+        dumpDesc.addShaderLibrary(kShaderFile).vsEntry("vsMain").psEntry("psDump");
+        mpDumpProgram = Program::create(mpDevice, dumpDesc, staticDefines);
+        mpDumpVars = ProgramVars::create(mpDevice, mpDumpProgram->getReflector());
+        mpDumpState = GraphicsState::create(mpDevice);
+        mpDumpState->setProgram(mpDumpProgram);
+        mpDumpState->setRasterizerState(mpRasterState);
+        mpDumpState->setDepthStencilState(pDsState);
+        // Default scene tag: the loaded scene's file name; change it to the precompute scene's name if they differ.
+        if (mViewDumpScene.empty())
+        {
+            const auto paths = mpScene->getImportPaths();
+            if (!paths.empty()) mViewDumpScene = paths.front().stem().string();
+        }
         mpGlassState = GraphicsState::create(mpDevice);
         mpGlassState->setProgram(mpGlassProgram);
         mpGlassState->setFbo(mpFbo);

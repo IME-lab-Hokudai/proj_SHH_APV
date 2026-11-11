@@ -12,6 +12,14 @@
 //                 lattice of points x 14 normals and compares it with the reference grid; one summary row
 //                 per grid and, optionally, the per-point error. File names start with the scene name.
 //
+// View evaluation (offline images)
+//                 AdaptiveSHDemo "Dump view" writes <scene>_View_<name>.dump (per-pixel position, normal, albedo,
+//                 emission, the pixels shaded by the SH grid, and the demo frame). traceViewReferences traces the SH at
+//                 every such pixel (scene without the dynamic object, same tracer and samples as a probe) and writes
+//                 <stem>_Traced.irr; the manifest evaluation reconstructs the irradiance at the same pixels from every grid,
+//                 the reference grid included, in every interpolation mode, with the same code as the point evaluation,
+//                 and writes <stem>_<method><mode suffix>.irr. Images and metrics: scripts/view_compare.py.
+//
 // Settings: PlacementComparisonSettings.h.
 #include "PrecomputeSHCoefficients.h"
 #include "PlacementComparisonSettings.h"
@@ -20,6 +28,7 @@
 #include "BuildTiming.h"
 
 #include <algorithm>
+#include <initializer_list>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -120,6 +129,92 @@ double percentileSorted(const std::vector<float>& v, double pct)
 }
 
 using probepar::parallelFor;
+
+// ---- View evaluation (offline images) ----
+// A view dump (AdaptiveSHDemo::dumpView): the pixels shaded by the SH grid, with their evaluation position (surface
+// point + kViewSurfaceOffset along the normal, so a surface touching static geometry is not evaluated inside it) and
+// shading normal. Pixel order = raster order of the dump; every .irr file of the dump uses the same order.
+struct ViewDump
+{
+    std::string file, stem;
+    uint32_t width = 0, height = 0;
+    std::vector<uint32_t> pixel;
+    std::vector<float3> pos, normal;
+};
+
+std::vector<std::string> listViewDumps(const std::string& scene)
+{
+    const std::string prefix = scene + "_View_", suffix = ".dump";
+    std::vector<std::string> files;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::current_path(), ec))
+    {
+        if (!entry.is_regular_file()) continue;
+        const std::string name = entry.path().filename().string();
+        if (name.size() > prefix.size() + suffix.size() && name.compare(0, prefix.size(), prefix) == 0 &&
+            name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+            files.push_back(name);
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+bool readViewDump(const std::string& file, ViewDump& v)
+{
+    std::ifstream in(file, std::ios::binary);
+    char magic[8] = {};
+    in.read(magic, 8);
+    if (!in || std::string(magic, 7) != "SHVIEW1") return false;
+    in.read(reinterpret_cast<char*>(&v.width), 4);
+    in.read(reinterpret_cast<char*>(&v.height), 4);
+    float cam[16];
+    in.read(reinterpret_cast<char*>(cam), sizeof(cam));
+    const size_t n = size_t(v.width) * v.height;
+    std::vector<float> posPlane(4 * n), normalPlane(4 * n);
+    in.read(reinterpret_cast<char*>(posPlane.data()), std::streamsize(16 * n));
+    in.read(reinterpret_cast<char*>(normalPlane.data()), std::streamsize(16 * n));
+    if (!in) return false;
+    for (size_t i = 0; i < n; ++i)
+    {
+        if (posPlane[4 * i + 3] < 0.5f) continue;
+        const float3 nr(normalPlane[4 * i], normalPlane[4 * i + 1], normalPlane[4 * i + 2]);
+        const float len = length(nr);
+        if (!(len > 0.0f)) continue;
+        const float3 nn = nr / len;
+        v.pixel.push_back(uint32_t(i));
+        v.normal.push_back(nn);
+        v.pos.push_back(float3(posPlane[4 * i], posPlane[4 * i + 1], posPlane[4 * i + 2]) + placement::kViewSurfaceOffset * nn);
+    }
+    v.file = file;
+    v.stem = file.substr(0, file.size() - 5);
+    return true;
+}
+
+// <stem>_<name>.irr: char[8] "SHVIRR1", uint32 count, count x float3 irradiance (RGB; NaN where the grid has no value).
+bool writeViewIrradiance(const std::string& file, const std::vector<float3>& e)
+{
+    std::ofstream out(file, std::ios::binary);
+    if (!out) return false;
+    const char magic[8] = { 'S', 'H', 'V', 'I', 'R', 'R', '1', 0 };
+    const uint32_t n = uint32_t(e.size());
+    out.write(magic, 8);
+    out.write(reinterpret_cast<const char*>(&n), 4);
+    for (const float3& v : e) { const float f[3] = { v.x, v.y, v.z }; out.write(reinterpret_cast<const char*>(f), 12); }
+    return bool(out);
+}
+
+// True when out exists and is not older than any of the inputs.
+bool viewOutputCurrent(const std::string& out, std::initializer_list<std::string> inputs)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::exists(out, ec)) return false;
+    const auto t = fs::last_write_time(out, ec);
+    if (ec) return false;
+    for (const std::string& in : inputs)
+        if (fs::exists(in, ec) && fs::last_write_time(in, ec) > t) return false;
+    return true;
+}
 } // namespace
 
 // =====================================================================================================
@@ -487,11 +582,12 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                              : m.interp == EvalInterpolation::LimitedHermite ? "limited Hermite" : "Hermite";
         return i + (m.oat ? ", Oat seams" : "");
     };
-    std::vector<std::string> summaryCsv, perPointCsv;
+    std::vector<std::string> summaryCsv, perPointCsv, modeSuffix;
     for (const EvalSetup& m : modes)
     {
         const std::string suffix = std::string(m.interp == EvalInterpolation::Trilinear ? "_Trilinear"
                                  : m.interp == EvalInterpolation::LimitedHermite ? "_LimitedHermite" : "") + (m.oat ? "_Oat" : "");
+        modeSuffix.push_back(suffix);
         summaryCsv.push_back(scene + "_PlacementComparisonSummary" + suffix + ".csv");
         const bool writePoints = kWritePerPointCsv && (m.interp == EvalInterpolation::Hermite || kWritePerPointCsvTrilinear);
         perPointCsv.push_back(writePoints ? scene + "_PlacementComparisonPoints" + suffix + ".csv" : std::string());
@@ -577,6 +673,48 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             for (size_t k = 0; k < N; ++k) { sumAbsRef += std::abs(refLum[i * N + k]); ++refCount; }
     const float eps = kRelEpsilonFraction * float(refCount ? sumAbsRef / double(refCount) : 1.0);
     logInfo("[Placement eval] Reference {}: {}^3 points x {} normals, epsilon {:.4g}.", refIt->file, R, N, eps);
+
+    // View evaluation (offline images): every grid of the manifest, the reference grid included, at the pixels of every
+    // <scene>_View_*.dump, in every mode -> <dump stem>_<method><mode suffix>.irr; kept while newer than the dump and
+    // the grid file. The path-traced reference (<stem>_Traced.irr) comes from traceViewReferences.
+    std::vector<ViewDump> views;
+    if (kEvalViews)
+        for (const std::string& f : listViewDumps(scene))
+        {
+            ViewDump v;
+            if (readViewDump(f, v))
+            {
+                logInfo("[View eval] {}: {} x {}, {} pixels shaded by the SH grid.", f, v.width, v.height, v.pos.size());
+                views.push_back(std::move(v));
+            }
+            else logError("[View eval] {} is not a view dump (SHVIEW1); skipped.", f);
+        }
+    auto viewOut = [&](const ViewDump& v, const std::string& method, size_t mi) { return v.stem + "_" + method + modeSuffix[mi] + ".irr"; };
+    auto viewPending = [&](const std::string& method, const std::string& gridFile, size_t mi)
+    {
+        for (const ViewDump& v : views)
+            if (!viewOutputCurrent(viewOut(v, method, mi), { v.file, gridFile })) return true;
+        return false;
+    };
+    for (size_t mi = 0; mi < modes.size(); ++mi)
+    {
+        const bool tri = modes[mi].interp == EvalInterpolation::Trilinear;
+        const bool lim = modes[mi].interp == EvalInterpolation::LimitedHermite;
+        for (const ViewDump& v : views)
+        {
+            const std::string out = viewOut(v, refIt->method, mi);
+            if (viewOutputCurrent(out, { v.file, refIt->file })) continue;
+            std::vector<float3> E(v.pos.size(), float3(std::numeric_limits<float>::quiet_NaN()));
+            parallelFor(v.pos.size(), [&](size_t i)
+            {
+                std::vector<float3> c;
+                if ((tri ? reference->fetchTrilinearSH_CPU(v.pos[i], c) : reference->fetchHermiteSH_CPU(v.pos[i], c, lim)) && c.size() >= 9)
+                    E[i] = evaluateIrradiance(v.normal[i], c);
+            });
+            if (writeViewIrradiance(out, E)) logInfo("[View eval] {} ({}).", out, modeName(modes[mi]));
+            else logError("[View eval] Cannot write {}.", out);
+        }
+    }
 
     // Sample-point mask (classifyEvalPoints): points inside objects or near surfaces. Without the file, every point
     // counts as "away" and the ...Away columns equal the all-point ones.
@@ -797,7 +935,9 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 if (it != keptPoints[mi].end()) perPoint[mi].push_back(std::move(it->second));
             }
         };
-        if (keepAll)
+        bool viewsDueAny = false;
+        for (size_t mi = 0; mi < modes.size(); ++mi) viewsDueAny = viewsDueAny || viewPending(e.method, e.file, mi);
+        if (keepAll && !viewsDueAny)
         {
             for (size_t mi = 0; mi < modes.size(); ++mi) writeKept(mi);
             logInfo("[Placement eval] {}: kept from the previous run.", e.method);
@@ -839,7 +979,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         }
         for (size_t mi = 0; mi < modes.size(); ++mi)
         {
-        if (keep[mi]) { writeKept(mi); continue; }
+        const bool viewsDue = viewPending(e.method, e.file, mi);
+        if (keep[mi] && !viewsDue) { writeKept(mi); continue; }
         const bool trilinear = modes[mi].interp == EvalInterpolation::Trilinear;
         const bool limited = modes[mi].interp == EvalInterpolation::LimitedHermite;
         const bool oat = modes[mi].oat;
@@ -991,6 +1132,30 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 c[band] = hermite3(t.x, r[0], rdx[0] * lcell.x, r[1], rdx[1] * lcell.x);
             }
         };
+        // View pixels (offline images), with the same interpolation as the points below.
+        if (viewsDue)
+            for (const ViewDump& v : views)
+            {
+                const std::string out = viewOut(v, e.method, mi);
+                if (viewOutputCurrent(out, { v.file, e.file })) continue;
+                std::vector<float3> E(v.pos.size(), float3(std::numeric_limits<float>::quiet_NaN()));
+                parallelFor(v.pos.size(), [&](size_t i)
+                {
+                    const float3 p = v.pos[i];
+                    std::vector<float3> c;
+                    bool ok = false;
+                    if (adaptive)
+                    {
+                        const int leaf = adaptive->traverseOctreeCPU(p);
+                        if (leaf >= 0) { interpAdaptive(leaf, p, c); ok = c.size() >= 9; }
+                    }
+                    else ok = (trilinear ? uniform->fetchTrilinearSH_CPU(p, c) : uniform->fetchHermiteSH_CPU(p, c, limited)) && c.size() >= 9;
+                    if (ok) E[i] = evaluateIrradiance(v.normal[i], c);
+                });
+                if (writeViewIrradiance(out, E)) logInfo("[View eval] {} ({}).", out, modeName(modes[mi]));
+                else logError("[View eval] Cannot write {}.", out);
+            }
+        if (keep[mi]) { writeKept(mi); continue; }
         std::ofstream& summary = summaries[mi];
         std::vector<float> ape(pointCount * N, std::numeric_limits<float>::quiet_NaN());
         std::vector<float> absErr(pointCount * N, std::numeric_limits<float>::quiet_NaN());
@@ -1420,4 +1585,67 @@ void PrecomputeSHCoefficients::classifyEvalPoints(RenderContext* pRenderContext)
     }
     logInfo("[Placement classify] {} points, {} rays each: {} inside objects ({:.1f}%). Wrote {} in {:.1f}s.",
         pointCount, K, inside, 100.0 * inside / pointCount, out, msSince(t0) / 1000.0);
+}
+
+// =====================================================================================================
+// View evaluation: path-traced reference at every pixel of the view dumps
+// =====================================================================================================
+// For every <scene>_View_*.dump: the SH at each pixel shaded by the SH grid, traced like a probe (same directions, light
+// samples and tracer) at the pixel's evaluation position, in the loaded scene, which must not contain the dynamic
+// object (probes never see it either); irradiance for the pixel's normal -> <stem>_Traced.irr. Kept while newer than
+// the dump.
+void PrecomputeSHCoefficients::traceViewReferences(RenderContext* pRenderContext)
+{
+    if (!mpScene) { logError("[View eval] Tracing the view references needs the scene (without the dynamic object)."); return; }
+    const std::string scene = sceneTag(mpScene);
+    const std::vector<std::string> files = listViewDumps(scene);
+    if (files.empty())
+    {
+        logWarning("[View eval] No {}_View_*.dump in {} (AdaptiveSHDemo: View dump, with scene tag {}).", scene,
+                   std::filesystem::current_path().string(), scene);
+        return;
+    }
+    const uint32_t dirCount = (uint32_t)samplingDirs.size();
+    const uint32_t lightCount = getLightSamplesPerProbe();
+    const uint32_t stride = dirCount + lightCount;
+    const uint32_t kMaxProbesPerDispatch = 2048;
+    for (const std::string& file : files)
+    {
+        ViewDump v;
+        if (!readViewDump(file, v)) { logError("[View eval] {} is not a view dump (SHVIEW1); skipped.", file); continue; }
+        const std::string out = v.stem + "_Traced.irr";
+        if (viewOutputCurrent(out, { file })) { logInfo("[View eval] {} is up to date.", out); continue; }
+        const auto t0 = Clock::now();
+        mpProbePosBuffer = mpDevice->createStructuredBuffer(sizeof(float3), kMaxProbesPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal);
+        mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(sizeof(ProbeSampleData), size_t(stride) * kMaxProbesPerDispatch,
+            ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal);
+        std::vector<ProbeSampleData> samples(size_t(stride) * kMaxProbesPerDispatch);
+        std::vector<float3> positions(kMaxProbesPerDispatch);
+        std::vector<float3> E(v.pos.size(), float3(std::numeric_limits<float>::quiet_NaN()));
+        const uint32_t total = uint32_t(v.pos.size());
+        for (uint32_t b = 0; b < total; b += kMaxProbesPerDispatch)
+        {
+            const uint32_t n = std::min(kMaxProbesPerDispatch, total - b);
+            for (uint32_t i = 0; i < n; ++i) positions[i] = v.pos[b + i];
+            mpProbePosBuffer->setBlob(positions.data(), 0, n * sizeof(float3));
+            traceProbeBatch(pRenderContext, dirCount, n, lightCount);
+            pRenderContext->submit(true);
+            mpProbeSamplingResultBuffer->getBlob(samples.data(), 0, size_t(stride) * n * sizeof(ProbeSampleData));
+            mpDevice->wait();
+            parallelFor(n, [&](size_t i)
+            {
+                const float3 p = positions[i];
+                const float3 xPolar(p.z, p.x, p.y);
+                const ProbeSampleData* s = samples.data() + i * size_t(stride);
+                std::vector<float3> c;
+                calculateSHCoeffs(c, s, dirCount);
+                accumulateDirectLightSamples(c, nullptr, nullptr, xPolar, s + dirCount, lightCount);
+                if (c.size() >= 9) E[b + i] = evaluateIrradiance(v.normal[b + i], c);
+            });
+        }
+        if (writeViewIrradiance(out, E))
+            logInfo("[View eval] {}: {} pixels traced ({} directions + {} light samples) in {:.1f}s.", out, total, dirCount, lightCount,
+                    msSince(t0) / 1000.0);
+        else logError("[View eval] Cannot write {}.", out);
+    }
 }

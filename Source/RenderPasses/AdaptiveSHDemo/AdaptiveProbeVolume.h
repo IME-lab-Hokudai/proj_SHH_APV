@@ -93,6 +93,9 @@ public:
     float3 getGpuSeedMinPoint() const { return mGpuSeedMinPoint; }
     float3 getGpuSeedCellSize() const { return mGpuSeedCellSize; }
     uint3 getGpuSeedResolution() const { return mGpuSeedResolution; }
+    // Size of the finest node (the lattice of the Oat seam handling in XAtlasSceneShader.slang, starting at the GPU seed
+    // minimum); bind to SeedGridCB.gLatticeCellSize.
+    float3 getGpuLatticeCellSize() const { return mGpuLatticeCellSize; }
 
     // Runtime GPU memory of the uploaded grid (compact layout), in bytes.
     uint64_t getGpuNodeBytes() const { return mGpuNodeBytes; }
@@ -132,5 +135,6 @@ private:
     float3 mGpuSeedMinPoint = float3(0.f);
     float3 mGpuSeedCellSize = float3(0.f);
     uint3 mGpuSeedResolution = uint3(0);
+    float3 mGpuLatticeCellSize = float3(1.f);
     uint64_t mGpuNodeBytes = 0, mGpuCornerBytes = 0, mGpuSeedBytes = 0;
 };
