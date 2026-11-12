@@ -77,6 +77,10 @@ public:
     // 2 limited Hermite, -1 off. It changes the loaded corners, so load the grid again to switch it off.
     void setHangingConstraint(int interp) { mHangingConstraintInterp = interp; }
     uint32_t getConstrainedCornerCount() const { return mConstrainedCorners; }
+    // SH deringing per corner (Sloan 2017, SHNonNegative.h), applied in uploadToGPU before the hanging-node
+    // constraint. It changes the loaded corners, so load the grid again to switch it off.
+    void setNonNegativeIrradiance(bool on) { mNonNegative = on; }
+    uint32_t getNonNegativeCornerCount() const { return mNonNegativeCorners; }
     void printDebugInfo(const std::string& filename);
 
     ref<Buffer> getProbeBuffer() const { return mpProbeBuffer; }
@@ -123,6 +127,8 @@ private:
     int mMaxLevel = 5;
     int mHangingConstraintInterp = -1;
     uint32_t mConstrainedCorners = 0;
+    bool mNonNegative = false;
+    uint32_t mNonNegativeCorners = 0;
     bool mUseRelativeError = false;
 
     ref<Buffer> mpProbeBuffer;

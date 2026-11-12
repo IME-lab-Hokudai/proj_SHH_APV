@@ -27,6 +27,8 @@
  **************************************************************************/
 #pragma once
 #include "Falcor.h"
+#include "Core/API/GpuTimer.h"
+#include <chrono>
 #include "RenderGraph/RenderPass.h"
 #include "RenderGraph/RenderPassHelpers.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
@@ -72,13 +74,18 @@ private:
     bool mEnableGlass = true;
     // SH interpolation of the probe grid (shader defines SH_INTERP and SH_SEAM_OAT in XAtlasSceneShader.slang):
     // 0 = Hermite, 1 = trilinear, 2 = Hermite with slope limiting; Oat = exact seam handling for adaptive grids.
-    uint32_t mShInterpolation = 2;
+    uint32_t mShInterpolation = 0; // plain Hermite, as in the paper
     // Seam handling of adaptive grids: 0 none, 1 Oat (runtime lookups in the shader), 2 hanging-node constraint (baked
     // into the grid when it is loaded; the shader then runs the plain interpolation).
-    uint32_t mShSeam = 2;
+    uint32_t mShSeam = 0; // raw grid, as in the paper's main results; the constraint is in the supplement (seams)
+    // SH deringing (Sloan 2017): window every probe whose order-2 irradiance goes below zero in some direction (near
+    // small bright emitters) just enough to remove it, when the grid is loaded (SHNonNegative.h), and the interpolated
+    // SH at shading points the same way (SH_NONNEG, SHNonNegative.slang).
+    bool mShNonNegative = true;
     DefineList getShInterpolationDefines() const;
     void applyShInterpolationDefines();
     void loadAdaptiveGrid(); // (re)load loadFromFileName with the current seam handling and upload it
+    void loadUniformGrid();  // (re)load loadFromFileName (uniform build) and upload it
     // View dump for the offline image evaluation (PrecomputeSHCoefficients, PlacementComparison.cpp): writes
     // <scene tag>_View_<name>.dump with per-pixel position, normal, albedo, emission, SH mask and the demo frame.
     void bindShadingVars(ShaderVar var);
@@ -175,4 +182,33 @@ private:
     float mCameraOrbitSpeedDeg = 22.0f;
 
     std::chrono::steady_clock::time_point mCameraOrbitLastTime;
+
+    // Runtime measurement. After kMeasureWarmupFrames frames, the next kMeasureFrames frames are timed and one row is
+    // appended to AdaptiveSHDemo_RuntimeTiming.csv. Runs once after a scene is loaded and again from the UI button.
+    //   Frame (CPU): wall clock between consecutive frames = the whole Mogwai frame (all passes, UI, present, and the
+    //                v-sync wait if v-sync is on).
+    //   GPU:         timestamp queries around this pass's own work, independent of v-sync:
+    //                total   = scene raster + glass,
+    //                shading = the scene raster (lightmaps and probe lookups, incl. deringing),
+    //                glass   = the glass/liquid stages (0 when glass is off).
+    //                A frame's timers are read kTimerRing frames later, when the GPU has finished with them.
+    static constexpr uint32_t kMeasureWarmupFrames = 100;
+    static constexpr uint32_t kMeasureFrames = 1000;
+    static constexpr uint32_t kTimerRing = 8;
+    struct FrameTimers
+    {
+        ref<GpuTimer> total, shading, glass;
+        bool measured = false; // this frame belongs to a measurement
+        bool glassUsed = false;
+    };
+    std::vector<FrameTimers> mFrameTimers;
+    uint64_t mTimerFrame = 0;
+    bool mMeasureRequested = true; // first measurement after the scene loads
+    bool mMeasureActive = false;
+    uint32_t mMeasureFrame = 0;    // frames since the measurement started (warm-up included)
+    std::chrono::high_resolution_clock::time_point mLastFrameTime;
+    bool mHasLastFrameTime = false;
+    std::vector<double> mMeasCpuMs, mMeasGpuTotalMs, mMeasGpuShadingMs, mMeasGpuGlassMs;
+    std::string mLastMeasurement;
+    void writeRuntimeMeasurement();
 };

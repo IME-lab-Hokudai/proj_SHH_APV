@@ -1,4 +1,7 @@
 #include "AdaptiveProbeVolume.h"
+#include "../AdaptiveSHDemo/SHNonNegative.h"
+#include "ParallelFor.h"
+#include <atomic>
 #include <algorithm>
 #include <array>
 #include <map>
@@ -4759,4 +4762,24 @@ float AdaptiveProbeVolume::computeParentPointHessianPrediction(
 int AdaptiveProbeVolume::findLeafProbeIndexCPU(float3 posW) const
 {
     return traverseOctreeCPU(posW);
+}
+
+uint32_t AdaptiveProbeVolume::deringCorners()
+{
+    std::atomic<uint32_t> windowed{ 0 };
+    probepar::parallelFor(mCorners.size(), [&](size_t i)
+    {
+        auto& c = mCorners[i];
+        double s1, s2;
+        if (c.shCoeffs.size() < 9 || !SHNonNegative::deringProbe(c.shCoeffs.data(), s1, s2)) return;
+        for (size_t j = 1; j < 9 && j < c.shGradients.size(); ++j)
+        {
+            const float s = float(j < 4 ? s1 : s2);
+            c.shGradients[j].r *= s;
+            c.shGradients[j].g *= s;
+            c.shGradients[j].b *= s;
+        }
+        ++windowed;
+    });
+    return windowed.load();
 }

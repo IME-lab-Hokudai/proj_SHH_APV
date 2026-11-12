@@ -155,3 +155,4 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
 #endif
     return true;
 }
+

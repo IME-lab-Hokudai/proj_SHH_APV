@@ -42,6 +42,10 @@ public:
     // Trilinear interpolation of the 8 corner SH coefficients (gradients unused); placement comparison only.
     bool fetchTrilinearSH_CPU(float3 posW, std::vector<float3>& outCoeffs) const;
     float3 evaluateIrradianceHermiteCPU(float3 posW, float3 normalW) const;
+    // SH deringing (Sloan 2017, ../AdaptiveSHDemo/SHNonNegative.h), as the demo applies it when a grid is loaded: every
+    // probe whose irradiance goes below zero in some direction gets the least window that removes it, the same for R, G
+    // and B, and its gradients the same band scales. Placement comparison (kEvalDering). Returns the windowed probe count.
+    uint32_t deringProbes();
 
 private:
     UniformProbeVolume(ref<Device> pDevice);

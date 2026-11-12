@@ -1,4 +1,7 @@
 #include "UniformProbeVolume.h"
+#include "../AdaptiveSHDemo/SHNonNegative.h"
+#include "ParallelFor.h"
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -598,4 +601,24 @@ float3 UniformProbeVolume::evaluateIrradianceHermiteCPU(float3 posW, float3 norm
         return float3(0.0f);
 
     return evaluateIrradiance(normalW, coeffs);
+}
+
+uint32_t UniformProbeVolume::deringProbes()
+{
+    std::atomic<uint32_t> windowed{ 0 };
+    probepar::parallelFor(mProbeData.size(), [&](size_t i)
+    {
+        auto& p = mProbeData[i];
+        double s1, s2;
+        if (!SHNonNegative::deringProbe(p.coeffs, s1, s2)) return;
+        for (int j = 1; j < 9; ++j)
+        {
+            const float s = float(j < 4 ? s1 : s2);
+            p.gradR[j] *= s;
+            p.gradG[j] *= s;
+            p.gradB[j] *= s;
+        }
+        ++windowed;
+    });
+    return windowed.load();
 }

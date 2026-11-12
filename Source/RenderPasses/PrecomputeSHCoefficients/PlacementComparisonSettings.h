@@ -120,6 +120,11 @@ inline constexpr bool kWritePerPointCsv = true;
 // and its columns are in the existing per-point file; the kept rows and columns are copied into the new files.
 // Set false (or delete the summaries) after changing the evaluation itself, e.g. the interpolation code.
 inline constexpr bool kEvalSkipEvaluated = true;
+// SH deringing (Sloan 2017), as the demo shows it (paper setting, 2026-11-12): every grid, the U128 reference included, is
+// windowed per probe when it is loaded (before the hanging-node constraint), the traced view reference per pixel, and the
+// interpolated SH at every point and view pixel gets the shading-point scale of SHNonNegative.slang. Changing it makes the
+// next evaluation redo every result (<scene>_EvalSettings.txt), even with kEvalSkipEvaluated.
+inline constexpr bool kEvalDering = true;
 
 // How the tested grids are interpolated at the evaluation points (the reference is read at its own probes, where both
 // give the probe value). One summary per entry:
@@ -130,8 +135,8 @@ inline constexpr bool kEvalSkipEvaluated = true;
 //              <scene>_PlacementComparisonSummary_LimitedHermite.csv
 // Trilinear separates placement from the gradients, which leave out the visibility boundary term.
 enum class EvalInterpolation { Hermite, Trilinear, LimitedHermite };
-inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpolation::Hermite, EvalInterpolation::Trilinear,
-                                                                    EvalInterpolation::LimitedHermite };
+// LimitedHermite is left out (not reported in the paper); add it back to evaluate it.
+inline const std::vector<EvalInterpolation> kEvalInterpolations = { EvalInterpolation::Hermite, EvalInterpolation::Trilinear };
 // Octree seams. Where a leaf meets a finer leaf, plain interpolation of the coarse leaf ignores the finer probes on the
 // shared face, so the lighting jumps across the face (Oat, "Irradiance Volumes for Games", GDC 2005, slides 42-43).
 //   None: plain interpolation of the leaf containing the point (as before; files without _Oat).
@@ -193,7 +198,7 @@ inline const std::vector<AdaptiveProbeVolume::SplitScore> kBatchScores = {
 // (p50: the gradient test fires on half the seed voxels; p90: on the top 10%).
 // Saved as <scene>_BF_GDC_S8_p<percentile>_memU<n>.txt. Empty = not built. Each run traces 7x the probes.
 //inline const std::vector<float> kBatchGdcPercentiles = { 50, 90 };
-inline const std::vector<float> kBatchGdcPercentiles = {}; // off for now: Geometry and Gradient first
+inline const std::vector<float> kBatchGdcPercentiles = {}; // dropped from the comparison (2026-11-12): its three tests are compared one by one
 // Finite-difference step of the Gradient and GDC scores, in finest-level (U64) cells along each axis. The probes are
 // re-traced at +-h, so rays that switch objects add noise ~ 1/h: a step much below a cell gets noisy (FDVerification).
 inline constexpr float kGradientFDStepCells = 1.0f;
@@ -202,11 +207,13 @@ inline constexpr bool kBatchEvaluateAtEnd = true;
 // so adding a resolution or a score only builds what is missing. Set false to rebuild everything (e.g. new timings);
 // the batch then also starts new <scene>_BuildTimings.csv and <scene>_BestFirstSnapshots.csv (the old ones are kept
 // as *_previous.csv), so old and new runs are not mixed.
-// Rebuild of 2026-11-11 (Bistro lamp textures on the build PC, corner keys on the finest lattice): false, both scenes.
-inline constexpr bool kBatchSkipExisting = false;
+// Rebuild of 2026-11-11 (Bistro lamp textures on the build PC, corner keys on the finest lattice) is done for both scenes;
+// true from 2026-11-12, so the batch only evaluates (deringing).
+inline constexpr bool kBatchSkipExisting = true;
 // The reference grid (kSceneSetups) is the most expensive one and is normally built only when its file is missing,
-// whatever kBatchSkipExisting says. True: rebuild it as well (Bistro's U128 had the old lamp textures).
-inline constexpr bool kBatchRebuildReference = true;
+// whatever kBatchSkipExisting says. True: rebuild it as well (was true for the 2026-11-11 rebuild: Bistro's U128 had the
+// old lamp textures).
+inline constexpr bool kBatchRebuildReference = false;
 inline constexpr bool kBatchClassifyPoints = true; // classify the evaluation points before the evaluation (scene loaded)
 
 // ---- Sample points away from geometry ------------------------------------------------------------

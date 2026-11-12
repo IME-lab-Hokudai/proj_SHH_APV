@@ -10,6 +10,14 @@ import Scene.Raster;
 #define SH_WINDOW_WIDTH 4  // larger = weaker windowing
 #endif
 
+// ---- SH deringing at shading points (AdaptiveSHDemo "SH deringing (Sloan 2017)"; SHNonNegative.slang) ----
+// 1: where the interpolated SH has a negative irradiance lobe, scale its bands 1-2 down just enough to remove it, the
+// same for R, G and B (the probes themselves are windowed with Sloan's method when the grid is loaded).
+#ifndef SH_NONNEG
+#define SH_NONNEG 0
+#endif
+#include "SHNonNegative.slang"
+
 
 // Shared material, xatlas, and glass rendering for both probe layouts.
 SamplerState gLinearSampler;
@@ -635,6 +643,36 @@ bool sampleGridSH(float3 pos, out float3 coeffs[MAX_SH_BASIS])
 }
 #endif
 
+// Band weights of the irradiance (cosine lobe, Sloan 2002), with the optional SH window: used by evaluateIrradiance
+// and by the non-negative blend (SHNonNegative.slang), so both see the same irradiance.
+float3 shIrradianceBandWeights()
+{
+    // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
+    float A[3] = { 3.141593f, 2.094395f, 0.785398f };
+
+    // SH windowing (de-ringing test). Scales band l by sigma_l before evaluation.
+    // Per-band constants, so this equals windowing every probe's coefficients
+    // and gradients: consistent with the Hermite/trilinear interpolation.
+    // No rebake needed. Band 0 is untouched (mean irradiance preserved).
+    //   SH_WINDOW 0 = off (original), 1 = Hanning, 2 = Lanczos
+    //   SH_WINDOW_WIDTH w: larger = weaker. Hanning w=4: (1, 0.854, 0.5); w=3: (1, 0.75, 0.25)
+    //                                        Lanczos w=3: (1, 0.827, 0.413)
+#if SH_WINDOW != 0
+    [unroll]
+    for (int l = 1; l < 3; ++l)
+    {
+        const float t = M_PI * float(l) / float(SH_WINDOW_WIDTH);
+#if SH_WINDOW == 1
+        const float sigma = 0.5f * (1.f + cos(t));
+#else
+        const float sigma = sin(t) / t;
+#endif
+        A[l] *= sigma;
+    }
+#endif
+    return float3(A[0], A[1], A[2]);
+}
+
 // Evaluate 9 SH basis functions at direction n
 float3 evaluateIrradiance(float3 n, float3 shCoeffs[MAX_SH_BASIS])
 {
@@ -682,29 +720,8 @@ float3 evaluateIrradiance(float3 n, float3 shCoeffs[MAX_SH_BASIS])
     float Y7 = -1.0925484305920792f * x * z;                      // l=2, m=1
     float Y8 = 0.546274f * (x * x - y * y);                       // l=2, m=2
 
-    // Cosine lobe coefficients for irradiance (Peter-Pike Sloan 2002)
-    float A[3] = { 3.141593f, 2.094395f, 0.785398f };
-
-    // SH windowing (de-ringing test). Scales band l by sigma_l before evaluation.
-    // Per-band constants, so this equals windowing every probe's coefficients
-    // and gradients: consistent with the Hermite/trilinear interpolation.
-    // No rebake needed. Band 0 is untouched (mean irradiance preserved).
-    //   SH_WINDOW 0 = off (original), 1 = Hanning, 2 = Lanczos
-    //   SH_WINDOW_WIDTH w: larger = weaker. Hanning w=4: (1, 0.854, 0.5); w=3: (1, 0.75, 0.25)
-    //                                        Lanczos w=3: (1, 0.827, 0.413)
-#if SH_WINDOW != 0
-    [unroll]
-    for (int l = 1; l < 3; ++l)
-    {
-        const float t = M_PI * float(l) / float(SH_WINDOW_WIDTH);
-#if SH_WINDOW == 1
-        const float sigma = 0.5f * (1.f + cos(t));
-#else
-        const float sigma = sin(t) / t;
-#endif
-        A[l] *= sigma;
-    }
-#endif
+    float3 Aw = shIrradianceBandWeights();
+    float A[3] = { Aw.x, Aw.y, Aw.z };
 
 
     // Dot product: coeffs · basis
@@ -722,6 +739,14 @@ float3 evaluateIrradiance(float3 n, float3 shCoeffs[MAX_SH_BASIS])
     // Clamp negative lighting
      //return max(result, float3(0.f));
     return result;
+}
+
+// SH deringing at a shading point (SH_NONNEG, SHNonNegative.slang): the probes are windowed when the grid is loaded
+// (Sloan 2017); where Hermite interpolation still overshoots below zero, bands 1-2 are scaled down just enough to remove
+// it, the same for R, G and B.
+void applyNonNegativeIrradiance(inout float3 sh[MAX_SH_BASIS])
+{
+    shDeringShadingPoint(sh, shIrradianceBandWeights());
 }
 
 VSOut vsMain(VSIn vIn)
@@ -763,6 +788,9 @@ float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID, float3 barycentr
         float3 finalSH[MAX_SH_BASIS];
         if (sampleGridSH(shadingData.posW, finalSH))
         {
+#if SH_NONNEG
+            applyNonNegativeIrradiance(finalSH);
+#endif
             float3 irradiance = max(
                 evaluateIrradiance(shadingData.frame.N, finalSH),
                 float3(0.f)

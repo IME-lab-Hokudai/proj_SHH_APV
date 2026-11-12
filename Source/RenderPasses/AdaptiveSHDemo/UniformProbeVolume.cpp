@@ -1,4 +1,6 @@
 #include "UniformProbeVolume.h"
+#include "SHNonNegative.h"
+#include <chrono>
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -98,6 +100,30 @@ void UniformProbeVolume::setProbeData(uint32_t probeIndex, const std::vector<flo
 void UniformProbeVolume::uploadToGPU()
 {
     if (mTotalProbes == 0) return;
+
+    // Deringing (setNonNegativeIrradiance; Sloan 2017, SHNonNegative.h): every probe whose irradiance goes below zero in
+    // some direction gets the least window that removes it, the same for R, G and B; its gradients get the same band
+    // scales.
+    mNonNegativeProbes = 0;
+    if (mNonNegative)
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        for (auto& p : mProbeData)
+        {
+            double s1, s2;
+            if (!SHNonNegative::deringProbe(p.coeffs, s1, s2)) continue;
+            for (int j = 1; j < 9; ++j)
+            {
+                const float s = float(j < 4 ? s1 : s2);
+                p.gradR[j] *= s;
+                p.gradG[j] *= s;
+                p.gradB[j] *= s;
+            }
+            ++mNonNegativeProbes;
+        }
+        logInfo("[UniformProbeVolume] SH deringing (Sloan 2017): {} of {} probes windowed ({:.2f} s).", mNonNegativeProbes,
+                mProbeData.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    }
 
     mpProbeDataBuffer = mpDevice->createStructuredBuffer(
         sizeof(UniformGridCorner),

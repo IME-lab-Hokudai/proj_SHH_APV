@@ -44,7 +44,7 @@ static const uint kMaxInvisibleSkips = 32;
 
 bool isProbeInvisible(const HitInfo hit)
 {
-#if PROBE_IGNORE_TRANSMISSIVEssssssssss
+#if PROBE_IGNORE_TRANSMISSIVE
     if (hit.getType() != HitType::Triangle) return false;
     const TriangleHit th = hit.getTriangleHit();
     const uint materialID = gScene.getMaterialID(th.instanceID);

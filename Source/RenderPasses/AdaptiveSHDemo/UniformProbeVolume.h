@@ -33,6 +33,11 @@ public:
     void loadFromFile(const std::string& filename);
 
     double getBuildTimeMs() const { return mBuildTimeMs; }
+
+    // SH deringing per probe (Sloan 2017, SHNonNegative.h), applied in uploadToGPU. It changes the loaded probes, so
+    // load the grid again to switch it off.
+    void setNonNegativeIrradiance(bool on) { mNonNegative = on; }
+    uint32_t getNonNegativeProbeCount() const { return mNonNegativeProbes; }
     void setBuildTimeMs(double t) { mBuildTimeMs = t; }
 
 private:
@@ -55,4 +60,7 @@ private:
 
     //statistic
     double mBuildTimeMs = 0.0;
+
+    bool mNonNegative = false;
+    uint32_t mNonNegativeProbes = 0;
 };

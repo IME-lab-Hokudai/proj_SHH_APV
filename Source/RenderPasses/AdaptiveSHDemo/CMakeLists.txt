@@ -12,6 +12,8 @@ target_sources(AdaptiveSHDemo PRIVATE
 	AdaptiveProbeVolume.cpp
     UniformProbeVolume.h
     UniformProbeVolume.cpp
+    SHNonNegative.h
+    SHNonNegative.slang
 	ProbeVisualizePass.h
 	ProbeVisualizePass.cpp
 	UniformGridShader.slang

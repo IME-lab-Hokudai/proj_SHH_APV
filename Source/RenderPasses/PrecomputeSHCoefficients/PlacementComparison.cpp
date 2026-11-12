@@ -20,12 +20,19 @@
 //                 the reference grid included, in every interpolation mode, with the same code as the point evaluation,
 //                 and writes <stem>_<method><mode suffix>.irr. Images and metrics: scripts/view_compare.py.
 //
+// Deringing (kEvalDering): what the demo shows with "SH deringing (Sloan 2017)" on. Every grid, the reference included,
+//                 is windowed per probe when it is loaded (before the hanging-node constraint), the traced view reference
+//                 per pixel (it is a probe at that pixel), and the interpolated SH at every point and pixel gets the same
+//                 shading-point scale as SHNonNegative.slang (Hermite can overshoot between windowed probes).
+//                 <scene>_EvalSettings.txt records the setting; when it changes, every kept result is evaluated again.
+//
 // Settings: PlacementComparisonSettings.h.
 #include "PrecomputeSHCoefficients.h"
 #include "PlacementComparisonSettings.h"
 #include "envMap_SH.h"
 #include "ParallelFor.h"
 #include "BuildTiming.h"
+#include "../AdaptiveSHDemo/SHNonNegative.h"
 
 #include <algorithm>
 #include <initializer_list>
@@ -214,6 +221,54 @@ bool viewOutputCurrent(const std::string& out, std::initializer_list<std::string
     for (const std::string& in : inputs)
         if (fs::exists(in, ec) && fs::last_write_time(in, ec) > t) return false;
     return true;
+}
+
+// Settings that change every evaluation output. <scene>_EvalSettings.txt is rewritten when they differ from the last
+// run, so it is newer than every earlier result, which is then evaluated again (it is an input of every output).
+std::string evalSettingsStamp(const std::string& scene)
+{
+    const std::string file = scene + "_EvalSettings.txt";
+    const std::string content = std::string("dering=") + (placement::kEvalDering ? "1" : "0") + "\n";
+    std::string old;
+    {
+        std::ifstream in(file);
+        if (in) { std::stringstream ss; ss << in.rdbuf(); old = ss.str(); }
+    }
+    if (old != content)
+    {
+        std::ofstream(file) << content;
+        logInfo("[Placement eval] {} changed ({}): every result is evaluated again.", file, placement::kEvalDering ? "deringing on" : "deringing off");
+    }
+    return file;
+}
+
+// Shading-point deringing (kEvalDering), the CPU twin of shDeringShadingPoint in SHNonNegative.slang: for each channel
+// whose irradiance goes below zero somewhere on the sphere (minimum m < 0, mean e0), bands 1 and 2 are scaled by
+// a = e0 / (e0 - m), which lifts the minimum to exactly zero; the smallest a of the three channels is used for all of them.
+// Channels whose quick lower bound (Gershgorin) is already >= 0 are skipped, as in the shader.
+void deringShadingPoint(std::vector<float3>& c)
+{
+    if (!placement::kEvalDering || c.size() < 9) return;
+    static const double A[9] = { 3.141593, 2.094395, 2.094395, 2.094395, 0.785398, 0.785398, 0.785398, 0.785398, 0.785398 };
+    double a = 1.0;
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        SHNonNegative::Vec9 u;
+        for (int j = 0; j < 9; ++j) u[j] = A[j] * double(ch == 0 ? c[j].x : ch == 1 ? c[j].y : c[j].z);
+        double k0, b[3], Q[3][3];
+        SHNonNegative::quadratic(u, k0, b, Q);
+        double lmin = 1e300;
+        for (int i = 0; i < 3; ++i)
+            lmin = std::min(lmin, Q[i][i] - std::fabs(Q[i][(i + 1) % 3]) - std::fabs(Q[i][(i + 2) % 3]));
+        if (k0 - std::sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]) + std::min(lmin, 0.0) >= 0.0) continue;
+        double n[3];
+        const double m = SHNonNegative::globalMinimum(u, n);
+        if (m >= 0.0) continue;
+        const double e0 = 0.2820947917738781 * u[0];
+        a = std::min(a, e0 > 0.0 ? e0 / (e0 - m) : 0.0);
+    }
+    if (a >= 1.0) return;
+    for (int j = 1; j < 9; ++j) c[j] *= float(a);
 }
 } // namespace
 
@@ -643,8 +698,11 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         logError("[Placement eval] Reference file {} not found.", refIt->file);
         return;
     }
+    const std::string settingsStamp = evalSettingsStamp(scene);
     ref<UniformProbeVolume> reference = UniformProbeVolume::create(mpDevice);
     reference->loadFromFile(refIt->file);
+    if (kEvalDering)
+        logInfo("[Placement eval] Reference {}: SH deringing (Sloan 2017), {} probes windowed.", refIt->file, reference->deringProbes());
     const float3 bmin = reference->getMinPoint(), bmax = reference->getMaxPoint();
     const uint32_t R = kEvalResolution;
     const size_t pointCount = size_t(R) * R * R;
@@ -664,6 +722,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     {
         std::vector<float3> c;
         if (!reference->fetchHermiteSH_CPU(pointPos(i), c) || c.size() < 9) return;
+        deringShadingPoint(c);
         for (size_t k = 0; k < N; ++k) refLum[i * N + k] = lum709(evaluateIrradiance(normals[k], c));
         refValid[i] = 1;
     });
@@ -693,7 +752,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
     auto viewPending = [&](const std::string& method, const std::string& gridFile, size_t mi)
     {
         for (const ViewDump& v : views)
-            if (!viewOutputCurrent(viewOut(v, method, mi), { v.file, gridFile })) return true;
+            if (!viewOutputCurrent(viewOut(v, method, mi), { v.file, gridFile, settingsStamp })) return true;
         return false;
     };
     for (size_t mi = 0; mi < modes.size(); ++mi)
@@ -703,13 +762,16 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         for (const ViewDump& v : views)
         {
             const std::string out = viewOut(v, refIt->method, mi);
-            if (viewOutputCurrent(out, { v.file, refIt->file })) continue;
+            if (viewOutputCurrent(out, { v.file, refIt->file, settingsStamp })) continue;
             std::vector<float3> E(v.pos.size(), float3(std::numeric_limits<float>::quiet_NaN()));
             parallelFor(v.pos.size(), [&](size_t i)
             {
                 std::vector<float3> c;
                 if ((tri ? reference->fetchTrilinearSH_CPU(v.pos[i], c) : reference->fetchHermiteSH_CPU(v.pos[i], c, lim)) && c.size() >= 9)
+                {
+                    deringShadingPoint(c);
                     E[i] = evaluateIrradiance(v.normal[i], c);
+                }
             });
             if (writeViewIrradiance(out, E)) logInfo("[View eval] {} ({}).", out, modeName(modes[mi]));
             else logError("[View eval] Cannot write {}.", out);
@@ -792,6 +854,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             const auto summaryTime = fs::last_write_time(summaryCsv[mi], ec);
             if (ec) continue;
             if (fs::last_write_time(refIt->file, ec) > summaryTime) continue; // reference rebuilt: evaluate everything
+            if (fs::last_write_time(settingsStamp, ec) > summaryTime) continue; // evaluation settings changed: likewise
             std::ifstream in(summaryCsv[mi]);
             std::string line;
             if (!std::getline(in, line)) continue;
@@ -952,6 +1015,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         {
             adaptive = AdaptiveProbeVolume::create(mpDevice);
             adaptive->loadFromFile(e.file);
+            if (kEvalDering) logInfo("[Placement eval] {}: SH deringing (Sloan 2017), {} corners windowed.", e.method, adaptive->deringCorners());
             probes = adaptive->getCornerCount(); leaves = adaptive->getLeafCount();
             deepest = adaptive->getDeepestLeafLevel(); buildMs = adaptive->getBuildTimeMs();
             memoryBytes = adaptive->getRuntimeBytes();
@@ -960,6 +1024,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
         {
             uniform = UniformProbeVolume::create(mpDevice);
             uniform->loadFromFile(e.file);
+            if (kEvalDering) logInfo("[Placement eval] {}: SH deringing (Sloan 2017), {} probes windowed.", e.method, uniform->deringProbes());
             const uint3 d = uniform->getProbeCountDim();
             probes = uint64_t(d.x) * d.y * d.z; leaves = uint64_t(d.x - 1) * (d.y - 1) * (d.z - 1);
             buildMs = uniform->getBuildTimeMs();
@@ -1154,7 +1219,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
             for (const ViewDump& v : views)
             {
                 const std::string out = viewOut(v, e.method, mi);
-                if (viewOutputCurrent(out, { v.file, e.file })) continue;
+                if (viewOutputCurrent(out, { v.file, e.file, settingsStamp })) continue;
                 std::vector<float3> E(v.pos.size(), float3(std::numeric_limits<float>::quiet_NaN()));
                 parallelFor(v.pos.size(), [&](size_t i)
                 {
@@ -1167,7 +1232,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                         if (leaf >= 0) { interpAdaptive(leaf, p, c); ok = c.size() >= 9; }
                     }
                     else ok = (trilinear ? uniform->fetchTrilinearSH_CPU(p, c) : uniform->fetchHermiteSH_CPU(p, c, limited)) && c.size() >= 9;
-                    if (ok) E[i] = evaluateIrradiance(v.normal[i], c);
+                    if (ok) { deringShadingPoint(c); E[i] = evaluateIrradiance(v.normal[i], c); }
                 });
                 if (writeViewIrradiance(out, E)) logInfo("[View eval] {} ({}).", out, modeName(modes[mi]));
                 else logError("[View eval] Cannot write {}.", out);
@@ -1203,6 +1268,7 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                 pointLevel[i] = int8_t(uniformLevel);
             }
             if (!ok) return;
+            deringShadingPoint(c);
             double sum = 0.0, sumA = 0.0, sumS = 0.0, sumR = 0.0;
             for (size_t k = 0; k < N; ++k)
             {
@@ -1253,6 +1319,8 @@ void PrecomputeSHCoefficients::evaluatePlacementManifest(const std::string& scen
                                 interpAdaptive(int(li), inPt, cIn);
                                 interpAdaptive(nb, out, cOut);
                                 if (cIn.size() < 9 || cOut.size() < 9) continue;
+                                deringShadingPoint(cIn);
+                                deringShadingPoint(cOut);
                                 double jump = 0.0;
                                 for (size_t k = 0; k < N; ++k)
                                     jump += std::abs(lum709(evaluateIrradiance(normals[k], cIn)) - lum709(evaluateIrradiance(normals[k], cOut)));
@@ -1643,7 +1711,7 @@ void PrecomputeSHCoefficients::traceViewReferences(RenderContext* pRenderContext
         ViewDump v;
         if (!readViewDump(file, v)) { logError("[View eval] {} is not a view dump (SHVIEW1); skipped.", file); continue; }
         const std::string out = v.stem + "_Traced.irr";
-        if (viewOutputCurrent(out, { file })) { logInfo("[View eval] {} is up to date.", out); continue; }
+        if (viewOutputCurrent(out, { file, evalSettingsStamp(scene) })) { logInfo("[View eval] {} is up to date.", out); continue; }
         const auto t0 = Clock::now();
         mpProbePosBuffer = mpDevice->createStructuredBuffer(sizeof(float3), kMaxProbesPerDispatch, ResourceBindFlags::ShaderResource, MemoryType::DeviceLocal);
         mpProbeSamplingResultBuffer = mpDevice->createStructuredBuffer(sizeof(ProbeSampleData), size_t(stride) * kMaxProbesPerDispatch,
@@ -1669,7 +1737,11 @@ void PrecomputeSHCoefficients::traceViewReferences(RenderContext* pRenderContext
                 std::vector<float3> c;
                 calculateSHCoeffs(c, s, dirCount);
                 accumulateDirectLightSamples(c, nullptr, nullptr, xPolar, s + dirCount, lightCount);
-                if (c.size() >= 9) E[b + i] = evaluateIrradiance(v.normal[b + i], c);
+                if (c.size() < 9) return;
+                // The traced SH is a probe at this pixel: windowed like the grids' probes (kEvalDering).
+                double s1, s2;
+                if (placement::kEvalDering) SHNonNegative::deringProbe(c.data(), s1, s2);
+                E[b + i] = evaluateIrradiance(v.normal[b + i], c);
             });
         }
         if (writeViewIrradiance(out, E))

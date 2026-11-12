@@ -407,6 +407,11 @@ public:
     // restoreCorners.
     std::vector<std::pair<int, Corner>> constrainHangingCorners(int interp);
     void restoreCorners(const std::vector<std::pair<int, Corner>>& saved);
+    // SH deringing (Sloan 2017, ../AdaptiveSHDemo/SHNonNegative.h), as the demo applies it when a grid is loaded: every
+    // corner whose irradiance goes below zero in some direction gets the least window that removes it, the same for R,
+    // G and B, and its gradients the same band scales. Placement comparison (kEvalDering); call it before
+    // constrainHangingCorners, as the demo does. Returns the windowed corner count.
+    uint32_t deringCorners();
     // ----------------------------------------------------------------
     // Batch Processing Interface
     // ----------------------------------------------------------------
@@ -488,7 +493,7 @@ public:
     // Optional helper if you seed externally
     void setSeedGridMetadata(float3 minPoint, float3 cellSize, uint3 resolution, const std::vector<int>& seedProbeIndices)
     {
-        mUseSeedGrid = true;
+        mUseSeedGrid = true; 
         mSeedMinPoint = minPoint;
         mSeedCellSize = cellSize;
         mSeedResolution = resolution;

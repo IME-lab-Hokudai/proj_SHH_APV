@@ -1,6 +1,8 @@
 #include <map>
 #include <array>
 #include "AdaptiveProbeVolume.h"
+#include "SHNonNegative.h"
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -363,6 +365,30 @@ void AdaptiveProbeVolume::computeNeighbors()
 
 void AdaptiveProbeVolume::uploadToGPU()
 {
+    // 0. Deringing (setNonNegativeIrradiance; Sloan 2017, SHNonNegative.h): every corner whose irradiance goes below
+    // zero in some direction gets the least window that removes it, the same for R, G and B; its gradients get the
+    // same band scales. Before the hanging-node constraint, which then interpolates the windowed values.
+    mNonNegativeCorners = 0;
+    if (mNonNegative)
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        for (auto& c : mCorners)
+        {
+            double s1, s2;
+            if (c.shCoeffs.size() < 9 || c.shGradients.size() < 9 || !SHNonNegative::deringProbe(c.shCoeffs.data(), s1, s2)) continue;
+            for (int j = 1; j < 9; ++j)
+            {
+                const float s = float(j < 4 ? s1 : s2);
+                c.shGradients[j].r *= s;
+                c.shGradients[j].g *= s;
+                c.shGradients[j].b *= s;
+            }
+            ++mNonNegativeCorners;
+        }
+        logInfo("[AdaptiveProbeVolume] SH deringing (Sloan 2017): {} of {} corners windowed ({:.2f} s).", mNonNegativeCorners,
+                mCorners.size(), std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    }
+
     // Ensure neighbors are computed before uploading!
     //computeNeighbors();
     //constrainHangingNodes();

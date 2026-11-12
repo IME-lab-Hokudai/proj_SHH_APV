@@ -25,6 +25,8 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
+#include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <algorithm>
@@ -43,8 +45,8 @@
 #define PROBE_MODE_ADAPTIVE 0
 #define PROBE_MODE_UNIFORM  1
  // CHANGE THIS LINE TO SWITCH MODES:
-//#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
-#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
+#define CURRENT_PROBE_MODE PROBE_MODE_UNIFORM
+//#define CURRENT_PROBE_MODE PROBE_MODE_ADAPTIVE
 
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
 //const std::string loadFromFileName = "Seeded8DirectAbsErr5SubwayCorridorNoOpen.txt";
@@ -72,7 +74,8 @@
 //const std::string loadFromFileName = "DirectAbsErr2HessianMetricCornellThinSlabV2.txt";
 //const std::string loadFromFileName = "DirectAbsErr2N6HessianMetricDataScene4096spp.txt";
 
-const std::string loadFromFileName = "BistroInterior_Wine_BF_HessianRel_S8_memU32.txt";
+//const std::string loadFromFileName = "BistroInterior_Wine_BF_HessianRel_S8_memU32.txt";
+const std::string loadFromFileName = "SceneForData_BF_HessianRel_S8_memU32.txt";
 //const std::string loadFromFileName = "DirectAbsErr100HessianMetricBistroNew.txt";
 
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt";
@@ -95,7 +98,11 @@ const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/AdaptiveGridShaderXAtlas
 //const std::string loadFromFileName = "U64Bistro.txt";
 //const std::string loadFromFileName = "U64BistroCubeGrid.txt"; 
 //const std::string loadFromFileName = "U64Shadowboundary.txt"; 
-const std::string loadFromFileName = "BistroInterior_Wine_U32.txt"; 
+//const std::string loadFromFileName = "BistroInterior_Wine_U32.txt"; 
+//const std::string loadFromFileName = "BistroInterior_Wine_E10_U32.txt"; // emissive x10 test
+const std::string loadFromFileName = "SceneForData_U32.txt"; 
+//const std::string loadFromFileName = "BistroInterior_Wine_E10_U32.txt"; 
+//const std::string loadFromFileName = "BistroInterior_Wine_E100_U32.txt"; 
 //const std::string loadFromFileName = "U8DataScene.txt";
 //const std::string loadFromFileName = "U64BistroCubeGridKPathAllDiffuse.txt";
 const char kShaderFile[] = "RenderPasses/AdaptiveSHDemo/UniformGridShader.slang";
@@ -114,6 +121,7 @@ AdaptiveSHDemo::AdaptiveSHDemo(ref<Device> pDevice, const Properties& props) : R
     mEnableGlass = props.get<bool>("runtimeGlass", mEnableGlass);
     mShInterpolation = std::min(props.get<uint32_t>("shInterpolation", mShInterpolation), 2u);
     mShSeam = std::min(props.get<uint32_t>("shSeam", mShSeam), 2u);
+    mShNonNegative = props.get<bool>("shNonNegative", mShNonNegative);
     mGlassRefractionStrength = std::clamp(props.get<float>("glassRefraction", mGlassRefractionStrength), 0.f, 3.f);
     mLiquidOpticalDepth = std::clamp(props.get<float>("liquidOpticalDepth", mLiquidOpticalDepth), 0.f, 10.0f);
     mpFbo = Fbo::create(mpDevice);
@@ -126,15 +134,15 @@ namespace
 {
     constexpr float kPi = 3.14159265358979323846f;
 
-    constexpr const char* kBistroAtlasMappingFile =
-        "Bistro_AtlasMapping.bin";
-    constexpr const char* kBistroAtlasManifestFile =
-        "Bistro_AtlasManifest.txt";
-    
     //constexpr const char* kBistroAtlasMappingFile =
-    //    "Room_AtlasMapping.bin";
+    //    "Bistro_AtlasMapping.bin";
     //constexpr const char* kBistroAtlasManifestFile =
-    //    "Room_AtlasManifest.txt";
+    //    "Bistro_AtlasManifest.txt";
+    //
+    constexpr const char* kBistroAtlasMappingFile =
+        "Room_AtlasMapping.bin";
+    constexpr const char* kBistroAtlasManifestFile =
+        "Room_AtlasManifest.txt";
     
     
     //constexpr const char* kBistroAtlasMappingFile =
@@ -878,6 +886,7 @@ Properties AdaptiveSHDemo::getProperties() const
     props["runtimeGlass"] = mEnableGlass;
     props["shInterpolation"] = mShInterpolation;
     props["shSeam"] = mShSeam;
+    props["shNonNegative"] = mShNonNegative;
     props["glassRefraction"] = mGlassRefractionStrength;
     props["liquidOpticalDepth"] = mLiquidOpticalDepth;
     return props;
@@ -917,13 +926,6 @@ RenderPassReflection AdaptiveSHDemo::reflect(const CompileData& compileData)
 
 void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    static uint32_t frameIndex = 0;
-    static constexpr uint32_t kWarmupFrames = 100;
-    static constexpr uint32_t kMeasureFrames = 1000;
-
-    static auto lastTime = std::chrono::high_resolution_clock::now();
-    static std::vector<double> frameTimesMs;
-
     // STEP 1: Rasterize Scene into UV Space
     auto pTargetFbo = renderData.getTexture("output");
     const float4 clearColor(0, 0, 0, 1);
@@ -935,11 +937,47 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
     pRenderContext->clearFbo(mpFbo.get(), clearColor, 1.0f, 0, FboAttachmentType::Color);
     if (mpScene) {
         updateCameraOrbit();
+
+        // Runtime measurement: the timers of this ring slot were written kTimerRing frames ago; read them before reuse.
+        if (mFrameTimers.empty())
+        {
+            mFrameTimers.resize(kTimerRing);
+            for (FrameTimers& t : mFrameTimers)
+            {
+                t.total = GpuTimer::create(mpDevice);
+                t.shading = GpuTimer::create(mpDevice);
+                t.glass = GpuTimer::create(mpDevice);
+            }
+        }
+        FrameTimers& timers = mFrameTimers[mTimerFrame % kTimerRing];
+        if (timers.measured)
+        {
+            mMeasGpuTotalMs.push_back(timers.total->getElapsedTime());
+            mMeasGpuShadingMs.push_back(timers.shading->getElapsedTime());
+            mMeasGpuGlassMs.push_back(timers.glassUsed ? timers.glass->getElapsedTime() : 0.0);
+            timers.measured = false;
+            if (!mMeasureActive && mMeasGpuTotalMs.size() == mMeasCpuMs.size()) writeRuntimeMeasurement();
+        }
+        if (mMeasureRequested && !mMeasureActive && mMeasGpuTotalMs.size() == mMeasCpuMs.size())
+        {
+            mMeasureRequested = false;
+            mMeasureActive = true;
+            mMeasureFrame = 0;
+            mMeasCpuMs.clear(); mMeasGpuTotalMs.clear(); mMeasGpuShadingMs.clear(); mMeasGpuGlassMs.clear();
+            mLastMeasurement = "running...";
+        }
+        const bool measureThisFrame = mMeasureActive && mMeasureFrame >= kMeasureWarmupFrames;
+        timers.total->begin();
+        timers.shading->begin();
+
         // ------------------------------------------------------------------
         // PASS 1: STATIC GEOMETRY (lightmaps)
         // ------------------------------------------------------------------
         bindShadingVars(mpStaticVars->getRootVar());
         mpScene->rasterize(pRenderContext, mpGraphicsState.get(), mpStaticVars.get(), mpRasterState, mpRasterState);
+        timers.shading->end();
+        timers.glassUsed = mEnableGlass;
+        if (mEnableGlass) timers.glass->begin();
 
         if (mEnableGlass)
         {
@@ -977,59 +1015,24 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
             }
         }
 
-        auto now = std::chrono::high_resolution_clock::now();
-        double frameMs = std::chrono::duration<double, std::milli>(now - lastTime).count();
-        lastTime = now;
+        if (mEnableGlass) timers.glass->end();
+        timers.total->end();
+        timers.total->resolve();
+        timers.shading->resolve();
+        if (mEnableGlass) timers.glass->resolve();
+        timers.measured = measureThisFrame;
+        mTimerFrame++;
 
-        if (frameIndex >= kWarmupFrames && frameIndex < kWarmupFrames + kMeasureFrames)
+        // CPU frame time: from this point in the previous frame to this point now (the whole Mogwai frame).
+        const auto now = std::chrono::high_resolution_clock::now();
+        const double frameMs = mHasLastFrameTime ? std::chrono::duration<double, std::milli>(now - mLastFrameTime).count() : 0.0;
+        mLastFrameTime = now;
+        mHasLastFrameTime = true;
+        if (mMeasureActive)
         {
-            frameTimesMs.push_back(frameMs);
+            if (measureThisFrame) mMeasCpuMs.push_back(frameMs);
+            if (++mMeasureFrame >= kMeasureWarmupFrames + kMeasureFrames) mMeasureActive = false; // GPU samples follow
         }
-
-        if (frameIndex == kWarmupFrames + kMeasureFrames)
-        {
-            double sum = 0.0;
-            for (double v : frameTimesMs) sum += v;
-
-            double meanMs = sum / double(frameTimesMs.size());
-            double meanFps = 1000.0 / meanMs;
-
-            double variance = 0.0;
-            for (double v : frameTimesMs)
-            {
-                double d = v - meanMs;
-                variance += d * d;
-            }
-            variance /= double(frameTimesMs.size());
-            double stdMs = std::sqrt(variance);
-            uint64_t probeCount = 0;
-#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
-            std::string modeName = "Adaptive";
-            probeCount = mAdaptiveProbeVolume->getProbes().size();
-#else
-            std::string modeName = "Uniform";
-            const uint3 res = mUniformProbeVolume->getCellResolution();
-            probeCount = uint64_t(res.x) * uint64_t(res.y) * uint64_t(res.z);
-#endif
-
-            std::ofstream out("AdaptiveSHDemo_RuntimeFPS.csv", std::ios::app);
-            out << modeName << ","
-                << loadFromFileName << ","
-                << probeCount << ","
-                << kWarmupFrames << ","
-                << kMeasureFrames << ","
-                << std::fixed << std::setprecision(4)
-                << meanMs << ","
-                << stdMs << ","
-                << meanFps << "\n";
-
-            out.close();
-
-            logInfo("Runtime measurement finished: file={}, mean {:.4f} ms, std {:.4f} ms, FPS {:.2f}",
-                loadFromFileName, meanMs, stdMs, meanFps);
-        }
-
-        frameIndex++;
 
         // View dump (UI): after the frame, before the grid overlays, so the saved frame shows the scene only.
         if (mDumpViewRequested)
@@ -1053,6 +1056,75 @@ void AdaptiveSHDemo::execute(RenderContext* pRenderContext, const RenderData& re
         }
     }
 }
+namespace
+{
+void meanStd(const std::vector<double>& v, double& mean, double& sd)
+{
+    mean = 0.0; sd = 0.0;
+    if (v.empty()) return;
+    for (double x : v) mean += x;
+    mean /= double(v.size());
+    for (double x : v) sd += (x - mean) * (x - mean);
+    sd = std::sqrt(sd / double(v.size()));
+}
+} // namespace
+
+// One row per measurement in AdaptiveSHDemo_RuntimeTiming.csv (new file; the old AdaptiveSHDemo_RuntimeFPS.csv is left as is).
+void AdaptiveSHDemo::writeRuntimeMeasurement()
+{
+    double cpuMean, cpuSd, totMean, totSd, shMean, shSd, glMean, glSd;
+    meanStd(mMeasCpuMs, cpuMean, cpuSd);
+    meanStd(mMeasGpuTotalMs, totMean, totSd);
+    meanStd(mMeasGpuShadingMs, shMean, shSd);
+    meanStd(mMeasGpuGlassMs, glMean, glSd);
+
+    uint64_t probeCount = 0;
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+    const std::string modeName = "Adaptive";
+    if (mAdaptiveProbeVolume) probeCount = mAdaptiveProbeVolume->getProbes().size();
+    const std::string seamName = mShSeam == 1 ? "Oat" : (mShSeam == 2 ? "Constrained" : "None");
+#else
+    const std::string modeName = "Uniform";
+    if (mUniformProbeVolume)
+    {
+        const uint3 res = mUniformProbeVolume->getCellResolution();
+        probeCount = uint64_t(res.x + 1) * uint64_t(res.y + 1) * uint64_t(res.z + 1);
+    }
+    const std::string seamName = "-";
+#endif
+    const std::string interpName = mShInterpolation == 1 ? "Trilinear" : (mShInterpolation == 2 ? "LimitedHermite" : "Hermite");
+    std::string sceneName = "-";
+    if (mpScene)
+    {
+        const auto paths = mpScene->getImportPaths();
+        if (!paths.empty()) sceneName = paths.front().stem().string();
+    }
+    uint32_t width = 0, height = 0;
+    if (mpFbo && mpFbo->getColorTexture(0))
+    {
+        width = mpFbo->getColorTexture(0)->getWidth();
+        height = mpFbo->getColorTexture(0)->getHeight();
+    }
+
+    const char* kFile = "AdaptiveSHDemo_RuntimeTiming.csv";
+    const bool newFile = !std::ifstream(kFile).good();
+    std::ofstream out(kFile, std::ios::app);
+    if (newFile)
+        out << "Scene,Mode,ProbeFile,ProbeCount,Width,Height,Interpolation,Seam,Deringing,Glass,WarmupFrames,MeasuredFrames,"
+               "FrameMs,FrameStdMs,FPS,GpuTotalMs,GpuTotalStdMs,GpuShadingMs,GpuShadingStdMs,GpuGlassMs,GpuGlassStdMs\n";
+    out << sceneName << "," << modeName << "," << loadFromFileName << "," << probeCount << "," << width << "," << height << ","
+        << interpName << "," << seamName << "," << (mShNonNegative ? 1 : 0) << "," << (mEnableGlass ? 1 : 0) << ","
+        << kMeasureWarmupFrames << "," << mMeasCpuMs.size() << "," << std::fixed << std::setprecision(4)
+        << cpuMean << "," << cpuSd << "," << (cpuMean > 0.0 ? 1000.0 / cpuMean : 0.0) << ","
+        << totMean << "," << totSd << "," << shMean << "," << shSd << "," << glMean << "," << glSd << "\n";
+
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "frame %.3f ms (%.1f fps), GPU total %.3f ms, shading %.3f ms, glass %.3f ms",
+                  cpuMean, cpuMean > 0.0 ? 1000.0 / cpuMean : 0.0, totMean, shMean, glMean);
+    mLastMeasurement = buf;
+    logInfo("Runtime measurement ({}, {}, deringing {}): {}", sceneName, loadFromFileName, mShNonNegative ? "on" : "off", buf);
+}
+
 bool AdaptiveSHDemo::onKeyEvent(
     const KeyboardEvent& keyEvent
 )
@@ -1195,9 +1267,25 @@ void AdaptiveSHDemo::loadAdaptiveGrid()
     if (!std::ifstream(loadFromFileName))
         FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
     mAdaptiveProbeVolume->loadFromFile(loadFromFileName);
+    mAdaptiveProbeVolume->setNonNegativeIrradiance(mShNonNegative);
     mAdaptiveProbeVolume->setHangingConstraint(mShSeam == 2 ? int(mShInterpolation) : -1);
     mAdaptiveProbeVolume->uploadToGPU();
     if (mpProbeVisualizePass) mpProbeVisualizePass->setVolumeData(mAdaptiveProbeVolume->getProbes());
+#endif
+}
+
+void AdaptiveSHDemo::loadUniformGrid()
+{
+#if CURRENT_PROBE_MODE != PROBE_MODE_ADAPTIVE
+    mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
+    if (!std::ifstream(loadFromFileName))
+        FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
+    mUniformProbeVolume->loadFromFile(loadFromFileName);
+    mUniformProbeVolume->setNonNegativeIrradiance(mShNonNegative);
+    mUniformProbeVolume->uploadToGPU();
+    if (mpProbeVisualizePass)
+        mpProbeVisualizePass->setUniformVolumeData(
+            mUniformProbeVolume->getMinPoint(), mUniformProbeVolume->getCellSize(), mUniformProbeVolume->getCellResolution());
 #endif
 }
 
@@ -1206,6 +1294,7 @@ DefineList AdaptiveSHDemo::getShInterpolationDefines() const
     DefineList d;
     d.add("SH_INTERP", std::to_string(mShInterpolation));
     d.add("SH_SEAM_OAT", mShSeam == 1 ? "1" : "0");
+    d.add("SH_NONNEG", mShNonNegative ? "1" : "0");
     return d;
 }
 
@@ -1250,6 +1339,37 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
         // off, or when the interpolation changes while it is on.
         if ((mShSeam == 2) != (oldSeam == 2) || (mShSeam == 2 && mShInterpolation != oldInterp)) loadAdaptiveGrid();
 #endif
+        // Sloan deringing of the loaded probes (load the grid again) and of the interpolated SH at shading points, where
+        // Hermite can overshoot between windowed probes (shader define SH_NONNEG).
+        if (widget.checkbox("SH deringing (Sloan 2017)", mShNonNegative))
+        {
+            applyShInterpolationDefines();
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+            loadAdaptiveGrid();
+#else
+            loadUniformGrid();
+#endif
+        }
+        widget.tooltip("Order-2 SH irradiance goes below zero on normals facing away from a small, bright emitter close to "
+                       "the probe; the clamp to zero then removes only the bright channels (coloured patches). On: Sloan's "
+                       "deringing (SIGGRAPH Asia 2017): every such probe gets the least window that makes its irradiance "
+                       "non-negative, the same for R, G and B (when the grid is loaded), and so does the interpolated SH at "
+                       "each shading point.");
+#if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
+        if (mAdaptiveProbeVolume && mShNonNegative)
+            widget.text("Windowed corners: " + std::to_string(mAdaptiveProbeVolume->getNonNegativeCornerCount()));
+#else
+        if (mUniformProbeVolume && mShNonNegative)
+            widget.text("Windowed probes: " + std::to_string(mUniformProbeVolume->getNonNegativeProbeCount()));
+#endif
+    }
+    if (auto g = widget.group("Runtime measurement", true))
+    {
+        if (g.button("Measure (" + std::to_string(kMeasureFrames) + " frames)") && !mMeasureActive) mMeasureRequested = true;
+        g.tooltip("Times the next frames after a short warm-up and appends a row to AdaptiveSHDemo_RuntimeTiming.csv with the "
+                  "current settings. GPU times are this pass's own work and do not depend on v-sync; the frame time is the "
+                  "whole frame, so turn v-sync off for it. Keep the camera still.");
+        g.text("Last: " + (mLastMeasurement.empty() ? std::string("-") : mLastMeasurement));
     }
     if (auto g = widget.group("View dump (offline image evaluation)", false))
     {
@@ -1475,6 +1595,7 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
 void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
+    mMeasureRequested = true; // time the new scene once it has warmed up
     mpLiquidMaterialMask = nullptr;
     mHasLiquidMaterials = false;
     if (mpScene)
@@ -1524,16 +1645,7 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
 #if CURRENT_PROBE_MODE == PROBE_MODE_ADAPTIVE
         loadAdaptiveGrid();
 #else
-        mUniformProbeVolume = UniformProbeVolume::create(mpDevice);
-        if (!std::ifstream(loadFromFileName))
-            FALCOR_THROW("AdaptiveSHDemo: grid file '{}' not found in the working directory (loadFromFileName).", loadFromFileName);
-        mUniformProbeVolume->loadFromFile(loadFromFileName);
-        mUniformProbeVolume->uploadToGPU();
-        mpProbeVisualizePass->setUniformVolumeData(
-            mUniformProbeVolume->getMinPoint(),
-            mUniformProbeVolume->getCellSize(),
-            mUniformProbeVolume->getCellResolution()
-        );
+        loadUniformGrid();
 #endif
 
 
@@ -1582,11 +1694,18 @@ void AdaptiveSHDemo::setScene(RenderContext* pRenderContext, const ref<Scene>& p
         mpDumpState->setProgram(mpDumpProgram);
         mpDumpState->setRasterizerState(mpRasterState);
         mpDumpState->setDepthStencilState(pDsState);
-        // Default scene tag: the loaded scene's file name; change it to the precompute scene's name if they differ.
-        if (mViewDumpScene.empty())
+        // Scene tag of the view dumps: the precompute scene's name, i.e. the loaded scene's file name up to "_withdynamic"
+        // (SceneForData_withdynamic_light -> SceneForData, BistroInterior_Wine_withdynamic_lamp -> BistroInterior_Wine).
+        // Set on every scene load; edit it in the UI if the precompute scene is named differently.
         {
             const auto paths = mpScene->getImportPaths();
-            if (!paths.empty()) mViewDumpScene = paths.front().stem().string();
+            if (!paths.empty())
+            {
+                std::string tag = paths.front().stem().string();
+                const size_t cut = tag.find("_withdynamic");
+                if (cut != std::string::npos && cut > 0) tag = tag.substr(0, cut);
+                mViewDumpScene = tag;
+            }
         }
         mpGlassState = GraphicsState::create(mpDevice);
         mpGlassState->setProgram(mpGlassProgram);
