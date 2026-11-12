@@ -1365,7 +1365,8 @@ void AdaptiveSHDemo::renderUI(Gui::Widgets& widget) {
     }
     if (auto g = widget.group("Runtime measurement", true))
     {
-        if (g.button("Measure (" + std::to_string(kMeasureFrames) + " frames)") && !mMeasureActive) mMeasureRequested = true;
+        const std::string measureLabel = "Measure (" + std::to_string(kMeasureFrames) + " frames)";
+        if (g.button(measureLabel.c_str()) && !mMeasureActive) mMeasureRequested = true;
         g.tooltip("Times the next frames after a short warm-up and appends a row to AdaptiveSHDemo_RuntimeTiming.csv with the "
                   "current settings. GPU times are this pass's own work and do not depend on v-sync; the frame time is the "
                   "whole frame, so turn v-sync off for it. Keep the camera still.");
